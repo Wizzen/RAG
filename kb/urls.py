@@ -21,11 +21,19 @@ urlpatterns = [
     # 站点配置（仅 staff）
     path("settings/", views.site_settings, name="settings"),
     path("settings/test/", views.settings_test, name="settings_test"),
-    path("settings/presets/", views.settings_presets, name="settings_presets"),
 
     # 会话历史
     path("conv/<str:thread_id>/messages/", views.conversation_messages, name="conv_messages"),
     path("conv/<str:thread_id>/delete/", views.conversation_delete, name="conv_delete"),
+
+    # 综合搜索（结构化跨表关联 + 手册全文）
+    path("search/", views.search_view, name="search"),
+
+    # 旧图纸关联地址（跳转至综合搜索）
+    path("assets/", views.asset_lookup, name="asset_lookup"),
+
+    # 检查项提取
+    path("inspection/", views.inspection_list, name="inspection"),
 
     # 问答页面（所有登录用户）
     path("ask/", views.ask, name="ask"),

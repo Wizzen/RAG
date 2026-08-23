@@ -467,16 +467,14 @@ pd.DataFrame.to_excel = _patched_to_excel
   // 当前会话内【单次 LLM 调用】的最大输入/输出 token（取各轮最大值的最大）；
   // 用于估测本地部署模型需要开多大的上下文窗口
   let sessionMax = { in: 0, out: 0 };
-  // 页面加载即渲染 token 表格骨架（0/0），避免初始为空让人觉得功能缺失。
-  // token 用量仅在当前页面会话内累计、刷新即重置（未持久化）。
-  renderTokenUsage();
 
   function renderTokenUsage(){
     if (!convTitleEl) return;
-    // 即使累计为 0 也渲染表格骨架（0/0），避免刷新/切会话后表格「消失」让人以为坏了。
+    const t = sessionTokens.in + sessionTokens.out;
+    if (t === 0) { convTitleEl.innerHTML = ''; return; }
     // 精致小表格：累计(入/出) + 单次最大(入/出)
     convTitleEl.innerHTML =
-      '<table class="tok-tbl" title="token 用量统计（仅当前页面会话累计，刷新后重置）">' +
+      '<table class="tok-tbl" title="token 用量统计">' +
         '<thead><tr><th></th>' +
           '<th>累计</th>' +
           '<th title="本会话内单次 LLM 调用的最大值。本地部署模型时，上下文窗口建议 ≥ 单次最大入 × 1.5~2">单次最大</th>' +
@@ -499,7 +497,7 @@ pd.DataFrame.to_excel = _patched_to_excel
     currentThreadId = genThreadId();   // 预生成；服务端 get_or_create 时落地
     sessionTokens = { in: 0, out: 0 };
     sessionMax = { in: 0, out: 0 };
-    renderTokenUsage();
+    if (convTitleEl) convTitleEl.textContent = '新对话';
     messages.innerHTML = '<div class="msg ai"><div class="bubble"><div class="answer">新对话已开始，输入你的问题。</div></div></div>';
     // 取消侧边栏高亮
     document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));
@@ -514,17 +512,22 @@ pd.DataFrame.to_excel = _patched_to_excel
   }
 
   async function deleteConversation(btn){
+    if (btn.dataset.deleting) return;  // 防重复点击
     const thread = btn.dataset.thread;
     const title = (btn.dataset.title || '该会话');
     if (!confirm('确定删除「' + title + '」？此操作不可撤销。')) return;
+    btn.dataset.deleting = '1';
     btn.disabled = true;
     try {
       const resp = await fetch('/kb/conv/' + encodeURIComponent(thread) + '/delete/', {
         method: 'POST',
-        headers: { 'X-CSRFToken': getCSRFToken() },
+        headers: { 'X-CSRFToken': getCSRFToken(), 'X-Requested-With': 'XMLHttpRequest' },
       });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      // 从侧边栏移除该项
+      // 即使后端返回 404/500，也尝试读取 JSON message 做友好提示
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.message || ('HTTP ' + resp.status));
+      if (data.ok === false) throw new Error(data.message || '删除失败');
+      // 从侧边栏移除该项（幂等：会话已删时后端也返回 ok，前端照常移除）
       const item = btn.closest('.conv-item');
       if (item) item.remove();
       // 若删的是当前会话 → 进入新对话
@@ -537,6 +540,7 @@ pd.DataFrame.to_excel = _patched_to_excel
         list.appendChild(empty);
       }
     } catch(err) {
+      btn.dataset.deleting = '';
       btn.disabled = false;
       alert('删除失败：' + (err.message || err));
     }
@@ -564,13 +568,13 @@ pd.DataFrame.to_excel = _patched_to_excel
       sessionMax = { in: 0, out: 0 };
       document.querySelectorAll('.conv-item').forEach(x => x.classList.remove('active'));
       el.classList.add('active');
-      renderTokenUsage();
+      if (convTitleEl) convTitleEl.textContent = el.dataset.title || '';
       // 拉取历史消息
       try {
         const r = await fetch('/kb/conv/' + encodeURIComponent(thread) + '/messages/');
         const data = await r.json();
         if (data.kb_slug) { /* no dropdown anymore; agent picks KB automatically */ }
-        renderTokenUsage();
+        if (convTitleEl) convTitleEl.textContent = data.title || '';
         messages.innerHTML = '';
         (data.messages || []).forEach(m => {
           const div = document.createElement('div');

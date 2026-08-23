@@ -1,7 +1,7 @@
 """Django admin 注册。"""
 from django.contrib import admin
 
-from .models import Document, KnowledgeBase
+from .models import Document, KnowledgeBase, StructuredDataset, StructuredRecord
 
 
 @admin.register(KnowledgeBase)
@@ -18,3 +18,17 @@ class DocumentAdmin(admin.ModelAdmin):
     list_display = ("original_name", "kb", "status", "chunk_count", "created_at")
     list_filter = ("status", "kb")
     search_fields = ("original_name",)
+
+
+@admin.register(StructuredDataset)
+class StructuredDatasetAdmin(admin.ModelAdmin):
+    list_display = ("source_name", "kind", "row_count", "active", "imported_by", "created_at")
+    list_filter = ("kind", "active")
+    search_fields = ("name", "source_name")
+
+
+@admin.register(StructuredRecord)
+class StructuredRecordAdmin(admin.ModelAdmin):
+    list_display = ("drawing_no", "part_no", "part_name", "g_code", "scp_level", "dataset", "row_number")
+    list_filter = ("dataset__kind", "dataset")
+    search_fields = ("drawing_no", "part_no", "part_name", "g_code", "equipment", "apex_no")

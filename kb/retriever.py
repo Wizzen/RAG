@@ -35,6 +35,27 @@ def get_kb_vectorstore(kb_slug: str) -> Chroma:
         return vs
 
 
+def delete_doc_vectors(kb_slug: str, source: str) -> None:
+    """删除某文档在 Chroma 中的全部向量（按 source=文件名 过滤）。
+
+    刻意使用**原生 chromadb 客户端**而非 langchain Chroma：
+    - 删除只依赖 metadata 过滤，不需要 embedding 计算；
+    - embedding 配置（api_key 等）未就绪时，langchain 的 Chroma() 构造即抛
+      'Missing credentials'，导致文档已删但向量残留（检索仍能搜到已删内容）。
+    """
+    from chromadb import PersistentClient
+    from chromadb.config import Settings
+
+    persist_dir = str(_kb_persist_dir(kb_slug))
+    coll_name = _chroma_collection_name(kb_slug)
+    client = PersistentClient(path=persist_dir, settings=Settings(anonymized_telemetry=False))
+    try:
+        col = client.get_collection(coll_name)
+    except Exception:
+        return  # collection 不存在 → 无向量可删
+    col.delete(where={"source": source})
+
+
 def search(kb_slug: str, query: str, k: int | None = None) -> list[dict[str, Any]]:
     """在指定 KB 中语义检索。"""
     k = k or retrieval_settings()["top_k"]

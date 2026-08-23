@@ -1,0 +1,264 @@
+{% extends "kb/_base.html" %}
+{% block title %}检查项提取 · FOS_RAG{% endblock %}
+{% block content %}
+<h1>检查项提取</h1>
+<p class="fos-sub">自动提取文档中的检查内容：图纸号 · 部件名称 · 检查频率 · 检查要求 · 详细要求</p>
+
+<!-- 文档选择区 -->
+<div class="insp-doc-selector" style="margin-bottom:20px">
+  <div style="font-family:var(--fd);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;color:var(--dim)">选择文档</div>
+  <div class="doc-select-list" id="docSelectList" style="display:flex;gap:8px;flex-wrap:wrap">
+    {% for d in docs %}
+    <button class="doc-chip {% if doc and doc.id == d.id %}active{% endif %}"
+            data-doc-id="{{ d.id }}"
+            data-doc-name="{{ d.original_name }}">
+      {{ d.original_name|truncatechars:24 }}
+    </button>
+    {% endfor %}
+    {% if not docs %}
+    <div class="empty" style="grid-column:1/-1">暂无已完成的文档。请先上传并处理文档。</div>
+    {% endif %}
+  </div>
+</div>
+
+<div id="inspStatus" style="margin-bottom:12px"></div>
+
+<!-- 检查项结果区 -->
+<div id="inspResults">
+  {% if items %}
+  <div class="fos-tag" style="margin-bottom:16px">
+    <div class="th ok">✓ 检查项提取 OK<span class="stamp">{{ total }} 项</span></div>
+    <div class="tb">
+      <p style="font-size:13px"><strong>{{ doc.original_name }}</strong>
+        · 来源知识库：{{ doc.kb.name }}
+        · 提取到 <strong>{{ total }}</strong> 个检查项</p>
+    </div>
+  </div>
+
+  <div class="insp-toolbar" style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+    <input type="text" id="inspFilter" placeholder="过滤检查项…"
+           style="flex:1;min-width:200px;padding:8px 12px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:6px;font-size:13px;outline:none">
+    <button class="btn sm outline" id="exportBtn">导出 CSV</button>
+  </div>
+
+  <div class="insp-table-wrap">
+    <table class="insp-table" id="inspTable">
+      <thead>
+        <tr>
+          <th style="width:40px">#</th>
+          <th style="width:130px">图纸号</th>
+          <th style="width:130px">部件名称</th>
+          <th style="width:90px">检查频率</th>
+          <th style="width:180px">检查要求</th>
+          <th>详细要求</th>
+          <th style="width:100px">章节</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td class="ir-idx">{{ forloop.counter }}</td>
+          <td class="ir-dwg">{{ item.drawing_no|default:"—" }}</td>
+          <td class="ir-part">{{ item.part_name|default:"—" }}</td>
+          <td class="ir-freq">
+            {% if item.frequency %}
+            <span class="freq-badge">{{ item.frequency }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="ir-req">{{ item.requirement|default:"—" }}</td>
+          <td class="ir-detail">{{ item.detail|default:"—" }}</td>
+          <td class="ir-sec" title="{{ item.section }}">{{ item.section|truncatechars:12 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty" id="inspEmpty">
+    {% if doc %}该文档未提取到检查项。可能文档中不包含检查相关内容。{% else %}选择上方文档，自动提取检查项。{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.doc-chip{
+  font-family:var(--fd);font-weight:600;font-size:12px;padding:7px 14px;
+  border:2px solid var(--rule-soft);border-radius:6px;background:var(--surface);
+  cursor:pointer;transition:border-color .12s,background .12s;color:var(--text);
+}
+.doc-chip:hover{border-color:var(--danger)}
+.doc-chip.active{border-color:var(--danger);background:var(--accent-soft);color:var(--danger)}
+
+.insp-table-wrap{overflow-x:auto;border:2px solid var(--rule);border-radius:8px;background:var(--surface)}
+.insp-table{width:100%;border-collapse:collapse;font-size:12px}
+.insp-table th{background:var(--paper);font-family:var(--fd);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;text-align:left;border-bottom:2px solid var(--rule);white-space:nowrap}
+.insp-table td{padding:7px 10px;border-bottom:1px solid var(--rule-soft);vertical-align:top;line-height:1.5}
+.insp-table tr:hover td{background:var(--warn-soft)}
+.insp-table tr:last-child td{border-bottom:0}
+.ir-idx{font-family:var(--fm);font-size:10px;color:var(--mute);text-align:center}
+.ir-dwg{font-family:var(--fm);font-size:11px;font-weight:600;color:var(--danger)}
+.ir-part{font-size:12px;font-weight:500}
+.ir-freq{font-size:11px}
+.ir-req{font-size:12px;color:var(--dim)}
+.ir-detail{font-size:11px;color:var(--mute);max-width:300px;white-space:pre-wrap}
+.ir-sec{font-family:var(--fm);font-size:10px;color:var(--mute)}
+.freq-badge{font-family:var(--fm);font-size:10px;padding:2px 7px;border-radius:3px;background:var(--warn-soft);color:#8a6300;border:1px solid var(--warn);white-space:nowrap}
+.insp-toolbar input:focus{border-color:var(--danger)}
+#inspStatus .spinner{vertical-align:middle;margin-right:6px}
+.insp-table tr.hidden{display:none}
+</style>
+<script>
+const docChips = document.querySelectorAll('.doc-chip');
+const inspStatus = document.getElementById('inspStatus');
+const inspResults = document.getElementById('inspResults');
+
+function escapeHtml(s){
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+async function loadInspection(docId, docName){
+  inspStatus.innerHTML = '<span class="spinner"></span>正在提取检查项…';
+
+  try {
+    const url = '/kb/inspection/?doc=' + encodeURIComponent(docId);
+    const resp = await fetch(url, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+
+    inspStatus.innerHTML = '';
+
+    // 更新 chip 状态
+    docChips.forEach(c => c.classList.toggle('active', c.dataset.docId === docId));
+
+    if (!data.items || data.items.length === 0){
+      inspResults.innerHTML = '<div class="empty">该文档未提取到检查项。可能文档中不包含检查相关内容。</div>';
+      return;
+    }
+
+    let html = '<div class="fos-tag" style="margin-bottom:16px">'
+      + '<div class="th ok">✓ 检查项提取 OK<span class="stamp">' + data.total + ' 项</span></div>'
+      + '<div class="tb"><p style="font-size:13px"><strong>' + escapeHtml(data.doc_name) + '</strong>'
+      + ' · 来源知识库：' + escapeHtml(data.kb_name)
+      + ' · 提取到 <strong>' + data.total + '</strong> 个检查项</p></div></div>';
+
+    html += '<div class="insp-toolbar" style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">'
+      + '<input type="text" id="inspFilter" placeholder="过滤检查项…" style="flex:1;min-width:200px;padding:8px 12px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:6px;font-size:13px;outline:none">'
+      + '<button class="btn sm outline" id="exportBtn">导出 CSV</button></div>';
+
+    html += '<div class="insp-table-wrap"><table class="insp-table" id="inspTable"><thead><tr>'
+      + '<th style="width:40px">#</th>'
+      + '<th style="width:130px">图纸号</th>'
+      + '<th style="width:130px">部件名称</th>'
+      + '<th style="width:90px">检查频率</th>'
+      + '<th style="width:180px">检查要求</th>'
+      + '<th>详细要求</th>'
+      + '<th style="width:100px">章节</th>'
+      + '</tr></thead><tbody>';
+
+    data.items.forEach(function(item, i){
+      const dwg = item.drawing_no || '—';
+      const part = item.part_name || '—';
+      const freq = item.frequency ? '<span class="freq-badge">' + escapeHtml(item.frequency) + '</span>' : '—';
+      const req = item.requirement || '—';
+      const detail = item.detail || '—';
+      const sec = item.section || '';
+      html += '<tr>'
+        + '<td class="ir-idx">' + (i + 1) + '</td>'
+        + '<td class="ir-dwg">' + escapeHtml(dwg) + '</td>'
+        + '<td class="ir-part">' + escapeHtml(part) + '</td>'
+        + '<td class="ir-freq">' + freq + '</td>'
+        + '<td class="ir-req">' + escapeHtml(req) + '</td>'
+        + '<td class="ir-detail">' + escapeHtml(detail) + '</td>'
+        + '<td class="ir-sec" title="' + escapeHtml(sec) + '">' + escapeHtml(sec.slice(0,12)) + '</td>'
+        + '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    inspResults.innerHTML = html;
+
+    // 绑定过滤
+    const filterInput = document.getElementById('inspFilter');
+    if (filterInput){
+      filterInput.addEventListener('input', function(){
+        const q = filterInput.value.toLowerCase();
+        document.querySelectorAll('#inspTable tbody tr').forEach(function(tr){
+          const text = tr.textContent.toLowerCase();
+          tr.classList.toggle('hidden', q && text.indexOf(q) < 0);
+        });
+      });
+    }
+
+    // 绑定导出
+    const exportBtn = document.getElementById('exportBtn');
+    if (exportBtn){
+      exportBtn.addEventListener('click', function(){
+        exportCSV(data.items, data.doc_name);
+      });
+    }
+  } catch(e){
+    inspStatus.innerHTML = '';
+    inspResults.innerHTML = '<div class="empty">提取失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function exportCSV(items, docName){
+  const headers = ['图纸号','部件名称','检查频率','检查要求','详细要求','章节'];
+  const rows = items.map(function(it){
+    return [it.drawing_no, it.part_name, it.frequency, it.requirement, it.detail, it.section]
+      .map(function(v){ return '"' + (v||'').replace(/"/g,'""') + '"'; }).join(',');
+  });
+  const csv = '\uFEFF' + headers.join(',') + '\n' + rows.join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (docName || 'inspection') + '_检查项.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+docChips.forEach(chip => {
+  chip.addEventListener('click', function(){
+    loadInspection(chip.dataset.docId, chip.dataset.docName);
+  });
+});
+
+// 如果页面已有选中文档（服务端渲染），也绑定过滤和导出
+const filterInput = document.getElementById('inspFilter');
+if (filterInput){
+  filterInput.addEventListener('input', function(){
+    const q = filterInput.value.toLowerCase();
+    document.querySelectorAll('#inspTable tbody tr').forEach(function(tr){
+      const text = tr.textContent.toLowerCase();
+      tr.classList.toggle('hidden', q && text.indexOf(q) < 0);
+    });
+  });
+}
+
+const exportBtn = document.getElementById('exportBtn');
+if (exportBtn){
+  exportBtn.addEventListener('click', function(){
+    const items = [];
+    document.querySelectorAll('#inspTable tbody tr').forEach(function(tr){
+      if (tr.classList.contains('hidden')) return;
+      const tds = tr.querySelectorAll('td');
+      items.push({
+        drawing_no: tds[1] ? tds[1].textContent.trim() : '',
+        part_name: tds[2] ? tds[2].textContent.trim() : '',
+        frequency: tds[3] ? tds[3].textContent.trim() : '',
+        requirement: tds[4] ? tds[4].textContent.trim() : '',
+        detail: tds[5] ? tds[5].textContent.trim() : '',
+        section: tds[6] ? tds[6].textContent.trim() : '',
+      });
+    });
+    exportCSV(items, '{{ doc.original_name|default:"inspection" }}');
+  });
+}
+</script>
+{% endblock %}

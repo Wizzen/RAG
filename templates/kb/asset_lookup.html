@@ -1,0 +1,133 @@
+{% extends "kb/_base.html" %}
+{% block title %}综合关联搜索 · FOS_RAG{% endblock %}
+{% block content %}
+<div class="asset-head">
+  <div>
+    <h1>综合关联搜索</h1>
+    <p class="fos-sub">一次搜索同时查询业务数据与设备手册，并自动关联 Downtime、APEX、部件、图纸号、G-code 和 SCP。此功能不调用大模型。</p>
+  </div>
+  <span class="no-ai">RULE-BASED · NO AI</span>
+</div>
+
+{% if messages %}
+<div class="msgs">
+  {% for m in messages %}<div class="msg-{{ m.tags }}">{{ m }}</div>{% endfor %}
+</div>
+{% endif %}
+
+<form method="get" class="lookup-form">
+  <label for="drawingQuery">图纸号 / 部件 / G-code / 设备 / APEX / 手册关键词</label>
+  <div class="lookup-row">
+    <input id="drawingQuery" name="q" value="{{ q }}" placeholder="例如：DWG-1001 / P-77 / G-42 / 制动器" autofocus autocomplete="off">
+    <button class="btn primary" type="submit">综合搜索</button>
+    {% if q %}<a class="btn outline" href="{% url 'kb:search' %}">清除</a>{% endif %}
+  </div>
+  <p class="field-help">业务键查询忽略大小写、空格、横线和常见分隔符；命中任一业务键后，会沿图纸号、部件号、G-code、设备号和 APEX 编号继续关联，同时搜索手册正文。</p>
+</form>
+
+{% if q and lookup %}
+  <div class="result-summary {% if lookup.records or lookup.manual_matches %}has-result{% else %}no-result{% endif %}">
+    <strong>{% if lookup.records or lookup.manual_matches %}已找到「{{ q }}」的综合结果{% else %}未找到「{{ q }}」{% endif %}</strong>
+    <span>直接业务命中 {{ lookup.direct_count }} 条 · 关联后 {{ lookup.records|length }} 条 · 手册命中 {{ lookup.manual_matches|length }} 条</span>
+    {% if lookup.match_mode == "partial" and lookup.records %}<span class="warn-chip">使用了部分匹配</span>{% endif %}
+  </div>
+
+  {% if lookup.related_keys %}
+  <section class="key-chain">
+    <h2>关联路径</h2>
+    <div class="key-grid">
+      {% for label, values in lookup.related_keys.items %}
+      <div class="key-block"><span>{{ label }}</span><strong>{{ values|join:" · " }}</strong></div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% for group in lookup.groups %}
+  <section class="result-section kind-{{ group.kind }}">
+    <div class="section-title">
+      <h2>{{ group.label }}</h2>
+      <span>{{ group.total }} 条{% if group.truncated %}（仅显示前 100 条）{% endif %}</span>
+    </div>
+    <div class="record-list">
+      {% for record in group.records %}
+      <article class="record-card">
+        <div class="record-meta">
+          <strong>{{ record.dataset.source_name }}</strong>
+          <span>{% if record.sheet_name %}{{ record.sheet_name }} · {% endif %}第 {{ record.row_number }} 行</span>
+        </div>
+        <div class="record-keys">
+          {% if record.drawing_no %}<span><b>图纸号</b>{{ record.drawing_no }}</span>{% endif %}
+          {% if record.part_no %}<span><b>部件号</b>{{ record.part_no }}</span>{% endif %}
+          {% if record.part_name %}<span><b>部件</b>{{ record.part_name }}</span>{% endif %}
+          {% if record.g_code %}<span><b>G-code</b>{{ record.g_code }}</span>{% endif %}
+          {% if record.scp_level %}<span><b>SCP</b>{{ record.scp_level }}</span>{% endif %}
+          {% if record.equipment %}<span><b>设备</b>{{ record.equipment }}</span>{% endif %}
+          {% if record.apex_no %}<span><b>APEX</b>{{ record.apex_no }}</span>{% endif %}
+        </div>
+        <details>
+          <summary>查看原始行全部字段</summary>
+          <dl class="raw-grid">
+            {% for key, value in record.raw_data.items %}
+            <div><dt>{{ key }}</dt><dd>{{ value|default_if_none:"—" }}</dd></div>
+            {% endfor %}
+          </dl>
+        </details>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  {% if lookup.manual_matches %}
+  <section class="result-section kind-manual">
+    <div class="section-title"><h2>手册相关内容</h2><span>{{ lookup.manual_matches|length }} 条</span></div>
+    <div class="manual-list">
+      {% for match in lookup.manual_matches %}
+      <article class="manual-card">
+        <div><strong>{{ match.doc_name }}</strong><span>{{ match.kb_name }}{% if match.section %} · {{ match.section }}{% endif %}</span></div>
+        <p>{{ match.snippet }}</p>
+        <a class="btn sm outline" href="/kb/doc/{{ match.doc_id }}/html/" target="_blank">查看手册</a>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if not lookup.records and not lookup.manual_matches %}
+  <div class="empty">没有匹配记录。请检查关键词，或确认业务表已识别出图纸号、部件号、G-code、设备号、APEX 等关联列。</div>
+  {% endif %}
+{% endif %}
+
+<section class="import-panel">
+  <div class="section-title">
+    <div><h2>需要上传或更新资料？</h2><p>手册和所有 CSV/XLSX 业务数据现已统一到资料上传中心。</p></div>
+    {% if user.is_staff %}<a class="btn primary" href="{% url 'kb:manage_list' %}">前往资料上传中心</a>{% else %}<span class="warn-chip">请联系管理员上传</span>{% endif %}
+  </div>
+</section>
+
+<section class="dataset-panel">
+  <div class="section-title"><h2>当前数据集</h2><span>{{ datasets|length }} 个</span></div>
+  {% if datasets %}
+  <div class="dataset-grid">
+    {% for dataset in datasets %}
+    <article>
+      <span class="dataset-kind">{{ dataset.get_kind_display }}</span>
+      <strong title="{{ dataset.source_name }}">{{ dataset.source_name }}</strong>
+      <div>{{ dataset.row_count }} 行 · {{ dataset.created_at|date:"Y-m-d H:i" }}</div>
+      <small>识别：{% for key, columns in dataset.mapping.items %}{{ key }}{% if not forloop.last %}、{% endif %}{% empty %}无标准关联列{% endfor %}</small>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">尚未导入结构化数据。</div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.asset-head,.section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.asset-head h1{margin-bottom:5px}.no-ai{font-family:var(--fm);font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--ok);border:2px solid var(--ok);padding:7px 10px;border-radius:4px;white-space:nowrap}.lookup-form{margin:20px 0 18px;padding:20px;background:var(--surface);border:2px solid var(--rule);border-left:6px solid var(--danger);border-radius:8px}.lookup-form>label{display:block;font-family:var(--fd);font-size:12px;font-weight:700;text-transform:uppercase;margin-bottom:7px}.lookup-row{display:flex;gap:9px}.lookup-row input{flex:1;min-width:0;padding:12px 14px;border:2px solid var(--rule);border-radius:5px;font-family:var(--fm);font-size:16px;text-transform:uppercase}.lookup-row input:focus{outline:none;border-color:var(--danger)}.field-help{font-size:11px;color:var(--mute);margin:8px 0 0}.result-summary{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 15px;border:2px solid var(--rule);border-radius:6px;margin-bottom:16px}.result-summary.has-result{background:var(--ok-soft);border-color:var(--ok)}.result-summary.no-result{background:var(--warn-soft);border-color:var(--warn)}.result-summary span{font-size:12px;color:var(--dim)}.warn-chip{font-family:var(--fm);font-size:10px!important;font-weight:700;background:var(--warn);color:var(--text)!important;padding:4px 7px;border-radius:3px}.key-chain,.result-section,.import-panel,.dataset-panel{margin:18px 0;padding:16px;border:2px solid var(--rule);border-radius:8px;background:var(--surface)}.key-chain h2,.section-title h2{font:700 14px var(--fd);text-transform:uppercase;margin:0}.key-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}.key-block{display:flex;flex-direction:column;gap:3px;padding:8px 10px;background:var(--paper);border:1px solid var(--rule-soft);border-radius:4px}.key-block span{font-size:9px;font-family:var(--fm);color:var(--mute);text-transform:uppercase}.key-block strong{font:600 11px var(--fm)}.section-title>span,.section-title p{font-size:11px;color:var(--mute);margin:3px 0 0}.record-list,.manual-list{display:grid;gap:10px;margin-top:12px}.record-card,.manual-card{padding:12px;border:1px solid var(--rule-soft);border-left:4px solid var(--rule);border-radius:5px;background:var(--paper)}.kind-downtime .record-card{border-left-color:var(--danger)}.kind-apex .record-card{border-left-color:var(--warn)}.kind-parts .record-card{border-left-color:var(--ok)}.kind-drawing .record-card{border-left-color:#1f4fa8}.record-meta,.manual-card>div{display:flex;justify-content:space-between;gap:12px}.record-meta strong,.manual-card strong{font-size:12px}.record-meta span,.manual-card span{font:10px var(--fm);color:var(--mute)}.record-keys{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}.record-keys span{display:flex;gap:6px;font:11px var(--fm);padding:5px 7px;background:var(--surface);border:1px solid var(--rule-soft);border-radius:3px}.record-keys b{font-family:var(--fb);color:var(--mute)}details summary{cursor:pointer;font-size:11px;color:var(--dim)}.raw-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;margin:9px 0 0}.raw-grid div{padding:6px;background:var(--surface);border-radius:3px;min-width:0}.raw-grid dt{font-size:9px;color:var(--mute)}.raw-grid dd{font:11px var(--fm);margin:2px 0 0;overflow-wrap:anywhere}.manual-card p{font-size:12px;line-height:1.55;color:var(--dim);margin:8px 0}.import-form{display:grid;grid-template-columns:minmax(180px,240px) 1fr auto;gap:10px;align-items:end;margin-top:13px}.import-form select,.import-form input[type=file]{width:100%;min-height:40px;padding:8px;border:2px solid var(--rule);border-radius:5px;background:var(--paper)}.alias-note{display:flex;gap:6px;flex-wrap:wrap;margin-top:13px;padding-top:12px;border-top:1px solid var(--rule-soft)}.alias-note strong,.alias-note span{font-size:10px;padding:4px 6px;border-radius:3px}.alias-note span{background:var(--paper);font-family:var(--fm)}.dataset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px;margin-top:12px}.dataset-grid article{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--rule-soft);border-radius:5px;background:var(--paper)}.dataset-kind{font:700 9px var(--fm);color:var(--danger);text-transform:uppercase}.dataset-grid strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dataset-grid div,.dataset-grid small{font-size:10px;color:var(--mute)}
+@media(max-width:720px){.asset-head{display:block}.no-ai{display:inline-block;margin-top:9px}.lookup-row{flex-wrap:wrap}.lookup-row input{flex-basis:100%}.import-form{grid-template-columns:1fr}.record-meta,.manual-card>div{display:block}.record-meta span,.manual-card span{display:block;margin-top:4px}}
+</style>
+{% endblock %}

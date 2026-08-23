@@ -336,7 +336,9 @@ def _embeddings():
     e = embedding_settings()
     return OpenAIEmbeddings(
         model=e["model"],
-        api_key=e["api_key"],
+        # Ollama's OpenAI-compatible API does not need authentication, but the
+        # OpenAI SDK still requires a non-empty value when constructing it.
+        api_key=e["api_key"] or "local-no-key",
         base_url=e["base_url"],
         check_embedding_ctx_length=False,
     )

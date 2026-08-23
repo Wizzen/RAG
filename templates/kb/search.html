@@ -1,0 +1,191 @@
+{% extends "kb/_base.html" %}
+{% block title %}搜索 · FOS_RAG{% endblock %}
+{% block content %}
+<h1>模糊搜索</h1>
+<p class="fos-sub">输入图纸号或部件名称，搜索所有已完成的文档内容 · 共 {{ doc_count }} 份文档可搜索</p>
+
+<div class="search-bar" style="display:flex;gap:10px;margin-bottom:18px">
+  <input type="text" id="searchInput" placeholder="输入图纸号 / 部件名称 / 关键词…"
+         value="{{ q }}" autofocus
+         style="flex:1;padding:11px 14px;background:var(--surface);border:2px solid var(--rule);border-radius:6px;font-size:14px;font-family:var(--fb);outline:none">
+  <button class="btn primary" id="searchBtn">搜索</button>
+  <button class="btn outline" id="clearBtn" style="display:none">清除</button>
+</div>
+
+<div id="searchStatus" style="margin-bottom:12px"></div>
+
+<div id="resultsArea">
+  {% if results %}
+  <div class="fos-tag" style="margin-bottom:16px">
+    <div class="th ok">✓ 搜索结果 OK<span class="stamp" id="resultCount">{{ total }} 条</span></div>
+  </div>
+  <div class="search-table-wrap">
+    <table class="search-table">
+      <thead>
+        <tr>
+          <th style="width:40px">#</th>
+          <th style="width:160px">文件名</th>
+          <th style="width:100px">知识库</th>
+          <th style="width:120px">章节</th>
+          <th>匹配内容</th>
+          <th style="width:80px">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        <tr>
+          <td class="sr-idx">{{ forloop.counter }}</td>
+          <td class="sr-doc" title="{{ r.doc_name }}">{{ r.doc_name|truncatechars:20 }}</td>
+          <td class="sr-kb">{{ r.kb_name|truncatechars:12 }}</td>
+          <td class="sr-sec" title="{{ r.section }}">{{ r.section|truncatechars:14 }}</td>
+          <td class="sr-snip">{{ r.snippet }}</td>
+          <td>
+            {% if r.doc_id %}
+            <a class="btn sm outline" href="/kb/doc/{{ r.doc_id }}/html/" target="_blank">查看</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty" id="emptyHint">
+    {% if q %}未找到匹配结果，试试其他关键词。{% else %}输入关键词开始搜索。{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.search-table-wrap{overflow-x:auto;border:2px solid var(--rule);border-radius:8px;background:var(--surface)}
+.search-table{width:100%;border-collapse:collapse;font-size:13px}
+.search-table th{background:var(--paper);font-family:var(--fd);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:9px 12px;text-align:left;border-bottom:2px solid var(--rule);white-space:nowrap}
+.search-table td{padding:8px 12px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+.search-table tr:hover td{background:var(--warn-soft)}
+.search-table tr:last-child td{border-bottom:0}
+.sr-idx{font-family:var(--fm);font-size:11px;color:var(--mute);text-align:center}
+.sr-doc{font-weight:600;font-size:12px}
+.sr-kb{font-family:var(--fm);font-size:11px;color:var(--dim)}
+.sr-sec{font-family:var(--fm);font-size:11px;color:var(--mute)}
+.sr-snip{font-size:12px;line-height:1.5;color:var(--dim)}
+.sr-snip em{font-style:normal;background:var(--warn);color:var(--text);padding:0 2px;border-radius:2px}
+.search-bar input:focus{border-color:var(--danger)}
+#searchStatus .spinner{vertical-align:middle;margin-right:6px}
+</style>
+<script>
+function getCSRFToken(){
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+const searchInput = document.getElementById('searchInput');
+const searchBtn = document.getElementById('searchBtn');
+const clearBtn = document.getElementById('clearBtn');
+const resultsArea = document.getElementById('resultsArea');
+const searchStatus = document.getElementById('searchStatus');
+const emptyHint = document.getElementById('emptyHint');
+
+let debounceTimer = null;
+
+function escapeHtml(s){
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function highlight(text, query){
+  const esc = escapeHtml(text);
+  if (!query) return esc;
+  const re = new RegExp('(' + query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+  return esc.replace(re, '<em>$1</em>');
+}
+
+async function doSearch(query){
+  if (!query || !query.trim()){
+    resultsArea.innerHTML = '<div class="empty">输入关键词开始搜索。</div>';
+    clearBtn.style.display = 'none';
+    searchStatus.innerHTML = '';
+    return;
+  }
+
+  clearBtn.style.display = 'inline-flex';
+  searchStatus.innerHTML = '<span class="spinner"></span>搜索中…';
+
+  try {
+    const url = '/kb/search/?q=' + encodeURIComponent(query);
+    const resp = await fetch(url, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+
+    searchStatus.innerHTML = '';
+
+    if (!data.results || data.results.length === 0){
+      resultsArea.innerHTML = '<div class="empty">未找到匹配结果，试试其他关键词。</div>';
+      return;
+    }
+
+    let html = '<div class="fos-tag" style="margin-bottom:16px">'
+      + '<div class="th ok">✓ 搜索结果 OK<span class="stamp">' + data.total + ' 条</span></div></div>';
+    html += '<div class="search-table-wrap"><table class="search-table"><thead><tr>'
+      + '<th style="width:40px">#</th>'
+      + '<th style="width:160px">文件名</th>'
+      + '<th style="width:100px">知识库</th>'
+      + '<th style="width:120px">章节</th>'
+      + '<th>匹配内容</th>'
+      + '<th style="width:80px">操作</th>'
+      + '</tr></thead><tbody>';
+
+    data.results.forEach(function(r, i){
+      const viewLink = r.doc_id ? '<a class="btn sm outline" href="/kb/doc/' + r.doc_id + '/html/" target="_blank">查看</a>' : '';
+      html += '<tr>'
+        + '<td class="sr-idx">' + (i + 1) + '</td>'
+        + '<td class="sr-doc" title="' + escapeHtml(r.doc_name) + '">' + escapeHtml((r.doc_name||'').slice(0,20)) + '</td>'
+        + '<td class="sr-kb">' + escapeHtml((r.kb_name||'').slice(0,12)) + '</td>'
+        + '<td class="sr-sec" title="' + escapeHtml(r.section) + '">' + escapeHtml((r.section||'').slice(0,14)) + '</td>'
+        + '<td class="sr-snip">' + highlight(r.snippet || '', query) + '</td>'
+        + '<td>' + viewLink + '</td>'
+        + '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    resultsArea.innerHTML = html;
+  } catch(e){
+    searchStatus.innerHTML = '';
+    resultsArea.innerHTML = '<div class="empty">搜索失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+searchBtn.addEventListener('click', function(){
+  doSearch(searchInput.value);
+});
+
+searchInput.addEventListener('keydown', function(e){
+  if (e.key === 'Enter'){
+    e.preventDefault();
+    doSearch(searchInput.value);
+  }
+});
+
+// 输入防抖（停顿 500ms 自动搜索）
+searchInput.addEventListener('input', function(){
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(function(){
+    if (searchInput.value.trim().length >= 2){
+      doSearch(searchInput.value);
+    }
+  }, 500);
+});
+
+clearBtn.addEventListener('click', function(){
+  searchInput.value = '';
+  searchInput.focus();
+  resultsArea.innerHTML = '<div class="empty">输入关键词开始搜索。</div>';
+  clearBtn.style.display = 'none';
+  searchStatus.innerHTML = '';
+});
+</script>
+{% endblock %}

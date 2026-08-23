@@ -164,10 +164,13 @@ FOS_RAG/
 | `/accounts/logout/` | `LogoutView` | 登录 | 登出 |
 | `/kb/ask/` | `ask` | 登录 | 问答页（会话历史 + 聊天 + 沙箱） |
 | `/kb/stream/` | `chat_stream` | 登录 | SSE 流式问答端点（`@csrf_exempt`） |
-| `/kb/manage/` | `manage_list` | staff | 知识库管理 |
+| `/kb/manage/` | `manage_list` | staff | 统一资料上传中心（手册 + CSV/XLSX 业务数据） |
 | `/kb/manage/<slug>/` | `manage_detail` | staff | 文档上传 + 状态 |
 | `/kb/manage/<slug>/status/` | `doc_status_api` | staff | 文档处理状态 JSON |
 | `/kb/doc/<doc_id>/html/` | `document_html` | 登录 | 文档 HTML 查看（?h= 高亮片段） |
+| `/kb/search/` | `search_view` | 登录 | 综合关联搜索（业务数据跨表关联 + 手册全文搜索，无需大模型） |
+| `/kb/assets/` | `asset_lookup` | 登录 | 旧图纸关联地址，跳转至综合搜索 |
+| `/kb/inspection/` | `inspection_list` | 登录 | 从手册提取检查项 |
 | `/kb/settings/` | `site_settings` | staff | 站点配置 + 预设 |
 | `/kb/settings/test/` | `settings_test` | staff | 连接测试 |
 | `/kb/conv/<tid>/messages/` | `conversation_messages` | 登录 | 会话历史 JSON |

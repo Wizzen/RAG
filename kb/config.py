@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from urllib.parse import urlsplit, urlunsplit
+
 from django.conf import settings
 
 from .models import SiteConfig
@@ -25,10 +27,30 @@ def get_config() -> SiteConfig:
     return SiteConfig.get()
 
 
+def normalize_openai_base_url(value: str, *, ollama: bool = False) -> str:
+    """Return a usable OpenAI-compatible base URL.
+
+    Local services are commonly entered as ``127.0.0.1:11434``.  httpx does
+    not infer the scheme, and Ollama exposes its OpenAI-compatible endpoints
+    below ``/v1``.  Normalize both cases in one place so connection tests and
+    runtime clients always use the same URL.
+    """
+    value = (value or "").strip().replace("：//", "://")
+    if not value:
+        return ""
+    if "://" not in value:
+        value = "http://" + value
+    parts = urlsplit(value)
+    path = parts.path.rstrip("/")
+    if ollama and parts.port == 11434 and path in ("", "/"):
+        path = "/v1"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+
 def llm_settings() -> dict:
     c = get_config()
     return {
-        "base_url": _eff(c.llm_base_url, settings.LLM_BASE_URL),
+        "base_url": normalize_openai_base_url(_eff(c.llm_base_url, settings.LLM_BASE_URL)),
         "api_key": _eff(c.llm_api_key, settings.LLM_API_KEY),
         "model": _eff(c.llm_model, settings.LLM_MODEL),
         "temperature": c.llm_temperature if c.llm_temperature is not None else settings.LLM_TEMPERATURE,
@@ -38,7 +60,9 @@ def llm_settings() -> dict:
 def embedding_settings() -> dict:
     c = get_config()
     return {
-        "base_url": _eff(c.embedding_base_url, settings.EMBEDDING_BASE_URL),
+        "base_url": normalize_openai_base_url(
+            _eff(c.embedding_base_url, settings.EMBEDDING_BASE_URL), ollama=True,
+        ),
         "api_key": _eff(c.embedding_api_key, settings.EMBEDDING_API_KEY),
         "model": _eff(c.embedding_model, settings.EMBEDDING_MODEL),
         "dimensions": c.embedding_dimensions if c.embedding_dimensions is not None else settings.EMBEDDING_DIMENSIONS,

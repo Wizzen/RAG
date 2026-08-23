@@ -153,19 +153,11 @@ class SiteConfig(models.Model):
         return {f: getattr(self, f) for f in fl}
 
     def apply(self, data: dict, fields: list[str] | None = None) -> None:
-        """从 dict 批量写入指定字段（默认全部）（用于从预设加载）。
-
-        数值字段收到空串时规范化为 None，避免把 "" 写进 FloatField/IntegerField
-        导致保存时报 'expected a number but got ""'。
-        """
+        """从 dict 批量写入指定字段（默认全部）（用于从预设加载）。"""
         fl = fields or [f for f, _t in _SITECONFIG_FIELDS]
-        num_fields = {f for f, t in _SITECONFIG_FIELDS if t in ("int", "float")}
         for f in fl:
             if f in data:
-                val = data[f]
-                if f in num_fields and (val == "" or val is None):
-                    val = None
-                setattr(self, f, val)
+                setattr(self, f, data[f])
 
 
 # SiteConfig 的 (字段名, 类型) 列表，供 snapshot/apply 与预设共用
@@ -264,3 +256,73 @@ class Message(models.Model):
 
     def __str__(self):
         return f"[{self.role}] {self.content[:30]}"
+
+
+class StructuredDataset(models.Model):
+    """一次 CSV/XLSX 导入。
+
+    同一类型、同一文件名的新导入会把旧版本标为非活动，保留历史但只查询最新版。
+    """
+
+    class Kind(models.TextChoices):
+        DOWNTIME = "downtime", "Downtime 停机"
+        APEX = "apex", "APEX"
+        PARTS = "parts", "部件信息"
+        DRAWING = "drawing", "图纸 / G-code / SCP"
+        OTHER = "other", "其它关联表"
+
+    name = models.CharField("数据集名称", max_length=160)
+    kind = models.CharField("数据类型", max_length=20, choices=Kind.choices)
+    source_name = models.CharField("来源文件", max_length=255)
+    checksum = models.CharField("文件校验值", max_length=64, db_index=True)
+    row_count = models.PositiveIntegerField("数据行数", default=0)
+    mapping = models.JSONField("识别到的字段映射", default=dict, blank=True)
+    active = models.BooleanField("当前版本", default=True, db_index=True)
+    imported_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="structured_datasets",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["kind", "active"])]
+        verbose_name = "结构化数据集"
+        verbose_name_plural = "结构化数据集"
+
+    def __str__(self):
+        return f"{self.get_kind_display()} · {self.source_name}"
+
+
+class StructuredRecord(models.Model):
+    """结构化表格中的一行；常用关联键单独索引，其余原列完整保存在 raw_data。"""
+
+    dataset = models.ForeignKey(
+        StructuredDataset, on_delete=models.CASCADE, related_name="records",
+    )
+    sheet_name = models.CharField("工作表", max_length=120, blank=True, default="")
+    row_number = models.PositiveIntegerField("原始行号", default=0)
+    drawing_no = models.CharField("图纸号", max_length=160, blank=True, default="")
+    drawing_no_norm = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    part_no = models.CharField("部件号", max_length=160, blank=True, default="")
+    part_no_norm = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    part_name = models.CharField("部件名称", max_length=255, blank=True, default="")
+    part_name_norm = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    g_code = models.CharField("G-code", max_length=160, blank=True, default="")
+    g_code_norm = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    scp_level = models.CharField("SCP 等级", max_length=80, blank=True, default="")
+    equipment = models.CharField("设备/资产", max_length=200, blank=True, default="")
+    equipment_norm = models.CharField(max_length=200, blank=True, default="", db_index=True)
+    apex_no = models.CharField("APEX 编号", max_length=160, blank=True, default="")
+    apex_no_norm = models.CharField(max_length=160, blank=True, default="", db_index=True)
+    raw_data = models.JSONField("原始行数据", default=dict)
+
+    class Meta:
+        ordering = ["dataset_id", "sheet_name", "row_number"]
+        indexes = [models.Index(fields=["dataset", "row_number"])]
+        verbose_name = "结构化数据记录"
+        verbose_name_plural = "结构化数据记录"
+
+    def __str__(self):
+        key = self.drawing_no or self.part_no or self.g_code or self.equipment
+        return key or f"{self.dataset.source_name}:{self.row_number}"

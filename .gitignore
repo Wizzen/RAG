@@ -9,7 +9,10 @@ db.sqlite3-journal
 data/
 media/
 logs/
+staticfiles/
 *.sqlite3
+output/
+.workbuddy/
 
 # ── 真实文档（客户机密，不上传）──
 pdf files/

@@ -1,19 +1,12 @@
 {% extends "kb/_base.html" %}
-{% block title %}手册管理 · FOS_RAG{% endblock %}
+{% block title %}资料上传中心 · FOS_RAG{% endblock %}
 {% block content %}
-<h1>手册管理</h1>
-
-<div class="actions">
-  <button class="btn primary" onclick="document.getElementById('createForm').style.display='block'">＋ 新建手册库</button>
-  <a class="btn outline" href="/kb/ask/">去检索</a>
-</div>
-
-<div id="createForm" style="display:none;margin-bottom:20px;">
-  <form method="post" class="card">
-    {% csrf_token %}
-    <div class="field"><label>名称</label><input name="name" required placeholder="如：过山车维护手册" autofocus></div>
-    <button class="btn primary" type="submit">创建</button>
-  </form>
+<div class="upload-head">
+  <div>
+    <h1>资料上传中心</h1>
+    <p class="fos-sub">所有资料统一从这里上传：手册、Downtime、APEX、部件信息、图纸号、G-code 与 SCP 等级。</p>
+  </div>
+  <a class="btn outline" href="/kb/search/">去综合关联搜索</a>
 </div>
 
 {% if messages %}
@@ -21,6 +14,65 @@
   {% for m in messages %}<div class="msg-{{ m.tags }}">{{ m }}</div>{% endfor %}
 </div>
 {% endif %}
+
+<div class="upload-grid">
+  <section class="upload-card manual-upload">
+    <div class="upload-card-head"><span class="upload-no">01</span><div><h2>上传设备手册</h2><p>PDF、Markdown 或 TXT；上传后自动 OCR、解析并进入手册库。</p></div></div>
+    {% if kbs %}
+    <form method="post" enctype="multipart/form-data" class="upload-form">
+      {% csrf_token %}<input type="hidden" name="action" value="upload_manual">
+      <div class="field"><label for="manualKb">归入手册库</label>
+        <select id="manualKb" name="kb_slug" required>
+          <option value="">请选择…</option>
+          {% for kb in kbs %}<option value="{{ kb.slug }}">{{ kb.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field"><label for="manualFile">手册文件</label><input id="manualFile" type="file" name="file" accept=".pdf,.md,.markdown,.txt" required></div>
+      <button class="btn primary" type="submit">上传手册</button>
+    </form>
+    {% else %}
+    <div class="empty compact">请先在下方创建一个手册库，再上传手册。</div>
+    {% endif %}
+  </section>
+
+  <section class="upload-card data-upload">
+    <div class="upload-card-head"><span class="upload-no">02</span><div><h2>上传业务数据</h2><p>CSV、TSV、XLSX 或 XLSM；导入后可按图纸号直接跨表关联。</p></div></div>
+    <form method="post" enctype="multipart/form-data" class="upload-form">
+      {% csrf_token %}<input type="hidden" name="action" value="upload_structured">
+      <div class="field"><label for="dataKind">数据类型</label>
+        <select id="dataKind" name="kind" required>
+          <option value="">请选择…</option>
+          {% for value, label in dataset_kinds %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field"><label for="dataFile">业务数据文件</label><input id="dataFile" type="file" name="file" accept=".csv,.tsv,.xlsx,.xlsm" required></div>
+      <button class="btn primary" type="submit">导入业务数据</button>
+    </form>
+  </section>
+</div>
+
+<div class="upload-guidance">
+  <strong>业务表自动识别：</strong>
+  <span>图纸号 / Drawing No</span><span>部件号 / Part No</span><span>部件名称 / Part Name</span>
+  <span>G-code</span><span>SCP Level</span><span>Equipment / Asset</span><span>APEX No</span>
+</div>
+
+<div class="section-bar">
+  <div><h2>手册库</h2><p>用于归档和管理上传后的手册。</p></div>
+  <div class="section-actions">
+    <a class="btn outline" href="/kb/inspection/">检查项提取</a>
+    <button class="btn primary" type="button" onclick="document.getElementById('createForm').hidden=false">＋ 新建手册库</button>
+  </div>
+</div>
+
+<div id="createForm" hidden style="margin-bottom:16px;">
+  <form method="post" class="card create-kb-form">
+    {% csrf_token %}<input type="hidden" name="action" value="create_kb">
+    <div class="field"><label>手册库名称</label><input name="name" required placeholder="如：过山车维护手册"></div>
+    <button class="btn primary" type="submit">创建</button>
+    <button class="btn outline" type="button" onclick="document.getElementById('createForm').hidden=true">取消</button>
+  </form>
+</div>
 
 <div class="kb-grid">
   {% for kb in kbs %}
@@ -54,12 +106,34 @@
     </div>
   </div>
   {% empty %}
-  <div class="empty">还没有手册库，点击「新建手册库」创建第一个。</div>
+  <div class="empty">还没有手册库，点击“新建手册库”创建第一个。</div>
   {% endfor %}
 </div>
+
+<div class="section-bar dataset-bar">
+  <div><h2>已导入业务数据</h2><p>当前生效的数据文件；同类型同文件名重新上传会启用新版本。</p></div>
+  <span class="count-chip">{{ datasets|length }} 个</span>
+</div>
+{% if datasets %}
+<div class="dataset-grid">
+  {% for dataset in datasets %}
+  <article>
+    <span>{{ dataset.get_kind_display }}</span>
+    <strong title="{{ dataset.source_name }}">{{ dataset.source_name }}</strong>
+    <small>{{ dataset.row_count }} 行 · {{ dataset.created_at|date:"Y-m-d H:i" }}</small>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">尚未导入业务数据。</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
+<style>
+.upload-head,.section-bar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.upload-head h1{margin-bottom:5px}.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0 12px}.upload-card{padding:17px;border:2px solid var(--rule);border-top:6px solid var(--danger);border-radius:8px;background:var(--surface)}.data-upload{border-top-color:#1f4fa8}.upload-card-head{display:flex;gap:11px;align-items:flex-start}.upload-no{font:800 20px var(--fm);color:var(--danger)}.data-upload .upload-no{color:#1f4fa8}.upload-card h2,.section-bar h2{font:700 15px var(--fd);text-transform:uppercase;margin:0 0 4px}.upload-card p,.section-bar p{font-size:11px;color:var(--mute);margin:0}.upload-form{display:grid;grid-template-columns:minmax(140px,.8fr) minmax(180px,1.2fr);gap:9px;margin-top:15px}.upload-form .btn{grid-column:1/-1;justify-content:center}.upload-form select,.upload-form input[type=file]{width:100%;min-height:41px;padding:8px;border:2px solid var(--rule);border-radius:5px;background:var(--paper)}.empty.compact{padding:13px;margin-top:15px}.upload-guidance{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:10px 12px;margin-bottom:24px;border:1px solid var(--rule-soft);border-radius:5px;background:var(--surface)}.upload-guidance strong,.upload-guidance span{font-size:10px}.upload-guidance span{font-family:var(--fm);padding:3px 6px;background:var(--paper);border-radius:3px}.section-bar{align-items:center;margin:18px 0 12px;padding-bottom:9px;border-bottom:2px solid var(--rule)}.section-actions{display:flex;gap:8px;align-items:center}.create-kb-form{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end}.dataset-bar{margin-top:28px}.count-chip{font:700 11px var(--fm);padding:5px 8px;background:var(--text);color:var(--paper);border-radius:3px}.dataset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px}.dataset-grid article{display:flex;flex-direction:column;gap:5px;padding:11px;border:1px solid var(--rule-soft);border-left:4px solid #1f4fa8;border-radius:5px;background:var(--surface)}.dataset-grid span{font:700 9px var(--fm);color:#1f4fa8;text-transform:uppercase}.dataset-grid strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dataset-grid small{font-size:10px;color:var(--mute)}
+@media(max-width:780px){.upload-grid{grid-template-columns:1fr}.upload-head{display:block}.upload-head>a{margin-top:10px}.create-kb-form{grid-template-columns:1fr}.upload-form{grid-template-columns:1fr}.section-bar{align-items:flex-end}.section-actions{flex-wrap:wrap;justify-content:flex-end}}
+</style>
 <script>
 /* 就地改名（AJAX，无刷新） */
 function getCSRFToken(){

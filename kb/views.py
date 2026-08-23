@@ -69,6 +69,37 @@ def _recount(kb: KnowledgeBase) -> None:
     kb.doc_count = docs.count()
     kb.chunk_count = sum(d.chunk_count for d in docs)
     kb.save(update_fields=["doc_count", "chunk_count", "updated_at"])
+
+
+def _create_manual_document(kb: KnowledgeBase, upload, user) -> Document:
+    """把手册上传到指定顶层库；文件夹库自动创建隔离的子文档库。"""
+    from django.db import transaction
+
+    fname = Path(upload.name).name
+    ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+    file_types = {"pdf": "pdf", "md": "md", "markdown": "md", "txt": "txt"}
+    if ext not in file_types:
+        raise ValueError("手册仅支持 PDF、Markdown（.md）和 TXT 文件。")
+
+    with transaction.atomic():
+        if kb.is_folder:
+            target_kb = KnowledgeBase.objects.create(
+                name=fname[:80],
+                slug=_derive_unique_slug(fname),
+                description=f"自动创建：{fname}",
+                is_folder=False,
+                parent=kb,
+                created_by=user,
+            )
+        else:
+            target_kb = kb
+        return Document.objects.create(
+            kb=target_kb,
+            original_name=fname,
+            file=upload,
+            file_type=file_types[ext],
+            status=Document.Status.PENDING,
+        )
 _is_staff = user_passes_test(lambda u: u.is_staff)
 
 
@@ -78,26 +109,74 @@ _is_staff = user_passes_test(lambda u: u.is_staff)
 @_is_staff
 @login_required
 def manage_list(request):
-    """手册库列表 + 创建。
+    """统一资料上传中心 + 手册库管理。
 
-    用户只需填名称：slug 由系统从名称自动派生（技术细节，不暴露给用户）；
-    一律建为顶层库（is_folder=True，可挂多份文档、跨文档检索）。
+    手册上传进指定手册库；业务表按类型导入结构化数据层。
     """
     if request.method == "POST":
-        name = request.POST.get("name", "").strip()
-        if name:
-            slug = _derive_unique_slug(name)
-            KnowledgeBase.objects.create(
-                name=name, slug=slug,
-                description="", created_by=request.user,
-                is_folder=True, parent=None,
-            )
-            messages.success(request, f"手册库「{name}」已创建，可以往里上传文档了。")
+        action = (request.POST.get("action") or "create_kb").strip()
+
+        if action == "create_kb":
+            name = request.POST.get("name", "").strip()
+            if name:
+                slug = _derive_unique_slug(name)
+                KnowledgeBase.objects.create(
+                    name=name, slug=slug,
+                    description="", created_by=request.user,
+                    is_folder=True, parent=None,
+                )
+                messages.success(request, f"手册库「{name}」已创建，可以上传手册了。")
+            else:
+                messages.error(request, "请填写手册库名称。")
+
+        elif action == "upload_manual":
+            kb = KnowledgeBase.objects.filter(
+                slug=(request.POST.get("kb_slug") or "").strip(),
+                parent__isnull=True,
+            ).first()
+            upload = request.FILES.get("file")
+            if not kb:
+                messages.error(request, "请选择手册要归入的手册库。")
+            elif not upload:
+                messages.error(request, "请选择要上传的手册文件。")
+            else:
+                try:
+                    doc = _create_manual_document(kb, upload, request.user)
+                    from .pipeline import process_document_async
+                    process_document_async(doc.id)
+                    messages.success(request, f"已上传手册「{doc.original_name}」，正在后台处理。")
+                except ValueError as exc:
+                    messages.error(request, str(exc))
+
+        elif action == "upload_structured":
+            from .structured_data import FIELD_LABELS, StructuredDataError, import_structured_dataset
+            upload = request.FILES.get("file")
+            kind = (request.POST.get("kind") or "").strip()
+            if not upload:
+                messages.error(request, "请选择 CSV 或 XLSX 文件。")
+            else:
+                try:
+                    dataset = import_structured_dataset(upload, kind, request.user)
+                    mapped = "、".join(
+                        label for key, label in FIELD_LABELS.items() if key in dataset.mapping
+                    ) or "未识别到标准关联字段（原始列已保留）"
+                    messages.success(
+                        request,
+                        f"已导入 {dataset.source_name}：{dataset.row_count} 行；识别字段：{mapped}。",
+                    )
+                except StructuredDataError as exc:
+                    messages.error(request, str(exc))
         return redirect("kb:manage_list")
 
     # 顶层库（文件夹 + 独立文档库）扁平渲染；子库对用户透明，不单独展示
     kbs = KnowledgeBase.objects.filter(parent__isnull=True).order_by("name")
-    return render(request, "kb/manage_list.html", {"kbs": kbs})
+    from .models import StructuredDataset
+    datasets = StructuredDataset.objects.filter(active=True).order_by("kind", "-created_at")
+    return render(request, "kb/manage_list.html", {
+        "kbs": kbs,
+        "datasets": datasets,
+        "dataset_kinds": StructuredDataset.Kind.choices,
+    })
 
 
 @_is_staff
@@ -114,35 +193,13 @@ def manage_detail(request, slug):
 
     # ---------- 上传文档（文件夹 & 文档库 统一处理） ----------
     if request.method == "POST" and request.FILES.get("file"):
-        upload = request.FILES["file"]
-        fname = upload.name
-        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-        file_type = {"pdf": "pdf", "md": "md", "markdown": "md", "txt": "txt"}.get(ext, "pdf")
-
-        # 文件夹：背后自动建一个子文档库挂这份文档（检索隔离）
-        if kb.is_folder:
-            child = KnowledgeBase.objects.create(
-                name=fname[:80],
-                slug=_derive_unique_slug(fname),
-                description=f"自动创建：{fname}",
-                is_folder=False,
-                parent=kb,
-                created_by=request.user,
-            )
-            target_kb = child
-        else:
-            target_kb = kb
-
-        doc = Document.objects.create(
-            kb=target_kb,
-            original_name=fname,
-            file=upload,
-            file_type=file_type,
-            status=Document.Status.PENDING,
-        )
-        from .pipeline import process_document_async
-        process_document_async(doc.id)
-        messages.success(request, f"已上传「{fname}」，正在后台处理…")
+        try:
+            doc = _create_manual_document(kb, request.FILES["file"], request.user)
+            from .pipeline import process_document_async
+            process_document_async(doc.id)
+            messages.success(request, f"已上传「{doc.original_name}」，正在后台处理…")
+        except ValueError as exc:
+            messages.error(request, str(exc))
         return redirect("kb:manage_detail", slug=slug)
 
     # ---------- GET：渲染 ----------
@@ -162,8 +219,12 @@ def manage_delete(request, slug):
     """删除知识库（删 Chroma 目录 + DB 记录）。
 
     文件夹：级联删除所有子文档库（CASCADE）及其向量目录。
+    幂等：库已不存在时不再 404，直接回列表并提示。
     """
-    kb = get_object_or_404(KnowledgeBase, slug=slug)
+    kb = KnowledgeBase.objects.filter(slug=slug).first()
+    if kb is None:
+        messages.info(request, "该知识库不存在或已被删除。")
+        return redirect("kb:manage_list")
     if request.method == "POST":
         # 收集要清理向量目录的所有 slug：自身 + （文件夹的）所有子库
         slugs = [kb.slug]
@@ -211,20 +272,37 @@ def kb_rename(request, slug):
 def doc_delete(request, slug, doc_id):
     """删除某知识库下的一份文档（文件夹则跨其所有子库查找）。
 
-    清理：① Chroma 中该文档的向量（按 source=original_name 过滤）；
-         ② 上传的原始文件；③ DB 记录；④ 文件夹下自动建的空子库一并清理。
-    向量删除失败不阻断 DB 删除（避免垃圾数据残留）。
+    清理：① Chroma 中该文档的向量（按 source=original_name 过滤，原生客户端，
+          embedding 配置缺失也能删）；② 上传的原始文件；③ DB 记录；
+         ④ 文件夹下自动建的空子库一并清理。
+    幂等：知识库/文档已不存在时返回 JSON 成功（前端无需报错），避免
+         双击删除 / 轮询重建行后再次点击触发 404。
     """
-    kb = get_object_or_404(KnowledgeBase, slug=slug)
-    doc = get_object_or_404(Document, id=doc_id, kb__in=_scope_kb_ids(kb))
+    is_ajax = request.headers.get("x-requested-with") == "XMLHttpRequest"
+    kb = KnowledgeBase.objects.filter(slug=slug).first()
+    if kb is None:
+        if is_ajax:
+            return JsonResponse({"ok": True, "already_deleted": True,
+                                 "message": "知识库不存在或已被删除。"})
+        messages.info(request, "该知识库不存在或已被删除。")
+        return redirect("kb:manage_list")
+
+    doc = Document.objects.filter(id=doc_id, kb__in=_scope_kb_ids(kb)).first()
+    if doc is None:
+        # 已不存在 → 幂等：AJAX 返回成功（附带提示），表单则重定向回详情
+        if is_ajax:
+            return JsonResponse({"ok": True, "already_deleted": True,
+                                 "message": "文档不存在或已被删除。"})
+        messages.info(request, "该文档不存在或已被删除。")
+        return redirect("kb:manage_detail", slug=slug)
+
     name = doc.original_name
     doc_kb = doc.kb  # 文档实际所在的（子）库
 
-    # ① 删 Chroma 向量（按 source 过滤；用文档所在库的 slug）
+    # ① 删 Chroma 向量（按 source 过滤；原生客户端，不依赖 embedding 配置）
     try:
-        from .retriever import get_kb_vectorstore
-        vs = get_kb_vectorstore(doc_kb.slug)
-        vs._collection.delete(where={"source": name})  # noqa: SLF001
+        from .retriever import delete_doc_vectors
+        delete_doc_vectors(doc_kb.slug, name)
     except Exception as e:  # 向量库可能还没建/为空，忽略但记录日志
         import logging
         logging.getLogger(__name__).warning("删除文档「%s」向量失败: %s", name, e)
@@ -412,7 +490,15 @@ async def chat_stream(request):
         ai_chunks: list[str] = []
         turn_citations: list[dict] = []
         try:
-            async for event_type, payload in run_agent_stream(message, full_thread, kb_slug, agent_config):
+            # When the UI leaves kb_slug empty, _prepare() has already chosen
+            # the best available KB and stored it on the conversation.  Pass
+            # that effective slug to the agent instead of an empty string, or
+            # its default kb_search scope becomes invalid and a small local
+            # model may guess an unrelated library.
+            effective_kb_slug = kb_slug or conv.kb.slug
+            async for event_type, payload in run_agent_stream(
+                message, full_thread, effective_kb_slug, agent_config,
+            ):
                 if event_type == "token":
                     ai_chunks.append(payload.get("text", ""))
                 elif event_type == "citations":
@@ -446,11 +532,137 @@ def conversation_messages(request, thread_id):
 @login_required
 @require_http_methods(["POST"])
 def conversation_delete(request, thread_id):
-    """删除某会话（仅元数据 + 消息；checkpointer 数据保留无妨）。"""
-    conv = get_object_or_404(Conversation, thread_id=thread_id, user=request.user)
+    """删除某会话（仅元数据 + 消息；checkpointer 数据保留无妨）。
+
+    幂等：会话已不存在时返回 JSON 成功，前端无需报错。
+    """
+    conv = Conversation.objects.filter(thread_id=thread_id, user=request.user).first()
+    if conv is None:
+        if request.headers.get("x-requested-with") == "XMLHttpRequest":
+            return JsonResponse({"ok": True, "already_deleted": True,
+                                 "message": "会话不存在或已被删除。"})
+        messages.info(request, "该会话不存在或已被删除。")
+        return redirect("kb:ask")
     conv.delete()
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        return JsonResponse({"ok": True, "thread_id": thread_id})
     messages.success(request, "会话已删除。")
     return redirect("kb:ask")
+
+
+# ------------------------------------------------------------------
+# 搜索（模糊搜索：图纸号 / 部件名称 → 表格化展示）
+# ------------------------------------------------------------------
+@login_required
+def search_view(request):
+    """综合搜索：结构化跨表关联 + 手册全文搜索，均不依赖大模型。"""
+    q = (request.GET.get("q") or "").strip()
+    from .models import StructuredDataset
+    from .structured_data import lookup_related
+
+    lookup = lookup_related(q) if q else None
+    datasets = (
+        StructuredDataset.objects.filter(active=True)
+        .select_related("imported_by").order_by("kind", "-created_at")
+    )
+    return render(request, "kb/asset_lookup.html", {
+        "q": q,
+        "lookup": lookup,
+        "datasets": datasets,
+    })
+
+
+# ------------------------------------------------------------------
+# 图纸号结构化关联（CSV/XLSX；不调用大模型）
+# ------------------------------------------------------------------
+@login_required
+def asset_lookup(request):
+    """旧“图纸关联”地址：保留导入兼容，GET 统一跳转到综合搜索。"""
+    from .structured_data import (
+        FIELD_LABELS, StructuredDataError, import_structured_dataset,
+    )
+
+    if request.method == "POST":
+        if not request.user.is_staff:
+            return HttpResponse("只有管理员可以导入结构化数据。", status=403)
+        upload = request.FILES.get("file")
+        kind = (request.POST.get("kind") or "").strip()
+        if not upload:
+            messages.error(request, "请选择 CSV 或 XLSX 文件。")
+        else:
+            try:
+                dataset = import_structured_dataset(upload, kind, request.user)
+                mapped = "、".join(
+                    label for key, label in FIELD_LABELS.items() if key in dataset.mapping
+                ) or "未识别到关联键（仍已保留原始列）"
+                messages.success(
+                    request,
+                    f"已导入 {dataset.source_name}：{dataset.row_count} 行；识别字段：{mapped}。",
+                )
+            except StructuredDataError as exc:
+                messages.error(request, str(exc))
+        return redirect("kb:search")
+
+    from urllib.parse import urlencode
+    from django.urls import reverse
+    q = (request.GET.get("q") or "").strip()
+    target = reverse("kb:search")
+    if q:
+        target += "?" + urlencode({"q": q})
+    return redirect(target)
+
+
+# ------------------------------------------------------------------
+# 检查项提取（自动筛选文档中的检查内容）
+# ------------------------------------------------------------------
+@login_required
+def inspection_list(request):
+    """检查项总览页：列出所有已完成文档，可选择文档查看提取的检查项。
+
+    GET → 渲染文档列表。
+    GET ?doc=<uuid> → AJAX 返回该文档提取的检查项 JSON。
+    """
+    from .models import Document
+
+    doc_id = request.GET.get("doc", "").strip()
+    is_ajax = (request.headers.get("x-requested-with") == "XMLHttpRequest"
+               or "application/json" in (request.META.get("HTTP_ACCEPT") or ""))
+
+    # 指定文档 → 提取检查项并返回
+    if doc_id:
+        doc = get_object_or_404(Document, id=doc_id, status=Document.Status.COMPLETED)
+        from .inspection import extract_inspection_items
+        items = extract_inspection_items(doc.md_content or "", doc.original_name)
+        if is_ajax:
+            return JsonResponse({
+                "doc_id": str(doc.id),
+                "doc_name": doc.original_name,
+                "kb_name": doc.kb.name if doc.kb else "",
+                "items": items,
+                "total": len(items),
+            })
+        # 非 AJAX：渲染带数据的页面
+        return render(request, "kb/inspection.html", {
+            "doc": doc,
+            "items": items,
+            "total": len(items),
+            "docs": Document.objects.filter(status=Document.Status.COMPLETED).select_related("kb").only("id", "original_name", "kb__name"),
+        })
+
+    # 无指定文档：渲染文档选择页
+    docs = (
+        Document.objects
+        .filter(status=Document.Status.COMPLETED)
+        .select_related("kb")
+        .only("id", "original_name", "kb__name", "chunk_count")
+        .order_by("-updated_at")
+    )
+    return render(request, "kb/inspection.html", {
+        "docs": docs,
+        "doc": None,
+        "items": [],
+        "total": 0,
+    })
 
 
 # ------------------------------------------------------------------
@@ -482,44 +694,6 @@ _CONFIG_FIELDS = [
     ("mineru_backend", "mineru_backend", "text", "MINERU_BACKEND"),
     ("mineru_lang", "mineru_lang", "text", "MINERU_LANG"),
 ]
-
-
-def _active_preset_map(cfg):
-    """计算每个分类当前命中的预设（基于原始 DB 值的精确全字段匹配）。
-
-    返回 {category: {"id": preset_id, "name": preset_name} | None}。
-    匹配必须用 SiteConfig 原始 DB 值（snapshot 那层），不能用 config.py 解析后的
-    eff —— 预设存的是原始值（空串=回退 .env），混用 eff 会误判「空串」与「显式值」相等。
-
-    匹配规则：该分类全部字段逐一相等（含 API Key；None 与 "" 视为不相等）。
-    若多个预设同时命中（理论上是重复预设），取第一个。
-    """
-    from .models import ConfigPreset, PRESET_CATEGORIES
-    result = {}
-    presets = list(ConfigPreset.objects.all())
-    for cat, fields in PRESET_CATEGORIES.items():
-        cur = cfg.snapshot(fields)  # 原始 DB 值
-        hit = None
-        for p in presets:
-            if p.category != cat:
-                continue
-            data = p.data or {}
-            # 逐字段比对原始值：None/"" 视为同义（都表示「未设置/回退」），
-            # 其余按规范化字符串相等。
-            if all(_raw_eq(cur.get(f), data.get(f)) for f in fields):
-                hit = p
-                break
-        result[cat] = {"id": hit.id, "name": hit.name} if hit else None
-    return result
-
-
-def _raw_eq(a, b):
-    """原始 DB 值相等：None 与 "" 互为相等（均表「未设置」），其余按字符串规范化。"""
-    a_blank = a is None or a == ""
-    b_blank = b is None or b == ""
-    if a_blank or b_blank:
-        return a_blank and b_blank
-    return str(a).strip() == str(b).strip()
 
 
 @_is_staff
@@ -556,56 +730,6 @@ def site_settings(request):
     if request.method == "POST":
         action = request.POST.get("action", "save")
 
-        # ---- 新建空壳预设（只起名，不填值，不改动当前配置）----
-        if action == "preset_create":
-            name = (request.POST.get("preset_name") or "").strip()
-            category = request.POST.get("category", "")
-            if not name:
-                msg = "请填写预设名称。"
-                if is_ajax: return _json_response(False, msg)
-                messages.error(request, msg); return redirect("kb:settings")
-            if category not in PRESET_CATEGORIES:
-                msg = "分类无效。"
-                if is_ajax: return _json_response(False, msg)
-                messages.error(request, msg); return redirect("kb:settings")
-            fields = PRESET_CATEGORIES[category]
-            # 空壳：该分类字段全部为空（文本→""，数值→None），不改 SiteConfig。
-            # 必须按字段真实类型置空，否则 load 时把 "" 写进 FloatField/IntegerField 会报错。
-            ftypes = dict((f, t) for f, t in _SITECONFIG_FIELDS)
-            empty_snap = {f: ("" if ftypes.get(f, "text") in ("text", "password") else None)
-                          for f in fields}
-            preset = ConfigPreset.objects.create(name=name, category=category, data=empty_snap)
-            msg = f"已新建空预设「{name}」，请点「修改」填写参数。"
-            if is_ajax:
-                return _json_response(True, msg,
-                                      extra={"preset_id": preset.id, "preset_name": name,
-                                             "category": category, "updated_at": "刚刚",
-                                             "active_by_cat": _active_preset_map(cfg)})
-            messages.success(request, msg); return redirect("kb:settings")
-
-        # ---- 修改某个预设（按 id，只更新该预设的快照，不改动当前生效配置）----
-        if action == "preset_update":
-            pid = request.POST.get("preset_id")
-            preset = ConfigPreset.objects.filter(id=pid).first()
-            if not preset:
-                msg = "预设不存在。"
-                if is_ajax: return _json_response(False, msg)
-                messages.error(request, msg); return redirect("kb:settings")
-            fields = PRESET_CATEGORIES.get(preset.category, [])
-            # 用一个临时 cfg 接收表单值，再 snapshot 进预设（不动数据库里的 SiteConfig）
-            from .models import SiteConfig
-            tmp = SiteConfig()
-            _apply_form_to_cfg(tmp, request.POST)
-            preset.data = tmp.snapshot(fields)
-            preset.save()
-            msg = f"预设「{preset.name}」已更新。"
-            if is_ajax:
-                return _json_response(True, msg,
-                                      extra={"preset_id": preset.id, "preset_name": preset.name,
-                                             "category": preset.category, "updated_at": "刚刚",
-                                             "active_by_cat": _active_preset_map(cfg)})
-            messages.success(request, msg); return redirect("kb:settings")
-
         # ---- 保存为预设（按分类）：只存该分类的字段 ----
         if action == "preset_save":
             name = (request.POST.get("preset_name") or "").strip()
@@ -627,11 +751,9 @@ def site_settings(request):
             )
             msg = f"{dict(ConfigPreset.Category.choices)[category]} 预设「{name}」已{'创建' if created else '更新'}。"
             if is_ajax:
-                cfg.refresh_from_db()
                 return _json_response(True, msg, eff=_current_eff(),
                                       extra={"preset_id": preset.id, "preset_name": name,
-                                             "category": category, "updated_at": "刚刚",
-                                             "active_by_cat": _active_preset_map(cfg)})
+                                             "category": category, "updated_at": "刚刚"})
             messages.success(request, msg); return redirect("kb:settings")
 
         # ---- 加载预设：只覆盖该分类字段 ----
@@ -646,10 +768,7 @@ def site_settings(request):
             cfg.apply(preset.data, fields)
             cfg.save()
             msg = f"已加载预设「{preset.name}」（下一次请求即生效）。"
-            if is_ajax:
-                cfg.refresh_from_db()
-                return _json_response(True, msg, eff=_current_eff(),
-                                      extra={"active_by_cat": _active_preset_map(cfg)})
+            if is_ajax: return _json_response(True, msg, eff=_current_eff())
             messages.success(request, msg); return redirect("kb:settings")
 
         # ---- 删除预设 ----
@@ -661,9 +780,7 @@ def site_settings(request):
                 name = preset.name
                 preset.delete()
                 msg = f"预设「{name}」已删除。"
-            if is_ajax:
-                return _json_response(True, msg,
-                                      extra={"preset_id": pid, "active_by_cat": _active_preset_map(cfg)})
+            if is_ajax: return _json_response(True, msg, extra={"preset_id": pid})
             messages.success(request, msg); return redirect("kb:settings")
 
         # ---- 默认：保存当前配置 ----
@@ -671,10 +788,7 @@ def site_settings(request):
             _apply_form_to_cfg(cfg, request.POST)
             cfg.save()
             msg = "配置已保存（下一次请求即生效）。"
-            if is_ajax:
-                cfg.refresh_from_db()
-                return _json_response(True, msg, eff=_current_eff(),
-                                      extra={"active_by_cat": _active_preset_map(cfg)})
+            if is_ajax: return _json_response(True, msg, eff=_current_eff())
             messages.success(request, msg)
         except (ValueError, TypeError) as e:
             msg = f"保存失败：{e}"
@@ -682,7 +796,7 @@ def site_settings(request):
             messages.error(request, msg)
         return redirect("kb:settings")
 
-    # GET：渲染有效值 + .env 默认占位 + 按分类分组的预设 + 各分类当前命中预设
+    # GET：渲染有效值 + .env 默认占位 + 按分类分组的预设
     from . import config as cfg_mod
     eff = {
         "llm": cfg_mod.llm_settings(),
@@ -691,41 +805,23 @@ def site_settings(request):
         "mineru": cfg_mod.mineru_settings(),
     }
     placeholders = {env: getattr(dj_settings, env, "") for _f, _m, _t, env in _CONFIG_FIELDS}
-    # 预设序列化为纯 dict（供前端 json_script 序列化与编辑时预填）
+    # 按分类分组预设，传给模板
+    from collections import defaultdict
+    presets_by_cat = defaultdict(list)
+    for p in ConfigPreset.objects.all():
+        presets_by_cat[p.category].append(p)
     return render(request, "kb/settings.html", {
         "eff": eff,
         "placeholders": placeholders,
         "cfg": cfg,
-        "presets_by_cat": _presets_as_json(),
-        "active_by_cat": _active_preset_map(cfg),
+        "presets_by_cat": dict(presets_by_cat),
     })
-
-
-def _presets_as_json():
-    """把所有 ConfigPreset 序列化为按分类分组的纯 dict 列表。"""
-    from .models import ConfigPreset
-    from collections import defaultdict
-    out = defaultdict(list)
-    for p in ConfigPreset.objects.all().order_by("category", "name"):
-        out[p.category].append({
-            "id": p.id,
-            "name": p.name,
-            "category": p.category,
-            "data": p.data or {},
-            "updated_at": p.updated_at.strftime("%m-%d %H:%M"),
-        })
-    return dict(out)
-
-
-@_is_staff
-@require_http_methods(["GET"])
-def settings_presets(request):
-    """返回所有预设的 JSON（供前端 create/update/delete 后刷新列表）。"""
-    return JsonResponse({"ok": True, "presets_by_cat": _presets_as_json()})
 
 
 def _apply_form_to_cfg(cfg, post):
     """把 POST 表单值写入 SiteConfig（空值清空以回退 .env）。"""
+    from .config import normalize_openai_base_url
+
     for form_name, model_field, ftype, _env in _CONFIG_FIELDS:
         raw = (post.get(form_name) or "").strip()
         if raw == "":
@@ -736,12 +832,16 @@ def _apply_form_to_cfg(cfg, post):
         elif ftype == "int":
             setattr(cfg, model_field, int(raw))
         else:
+            if model_field == "llm_base_url":
+                raw = normalize_openai_base_url(raw)
+            elif model_field == "embedding_base_url":
+                raw = normalize_openai_base_url(raw, ollama=True)
             setattr(cfg, model_field, raw)
 
 
 @_is_staff
 def settings_test(request):
-    """测试 LLM / Embedding / MinerU 连接（仅 staff）。返回 JSON。"""
+    """使用页面当前值实际调用 LLM / Embedding / MinerU。"""
     import httpx
     from . import config as cfg_mod
 
@@ -751,25 +851,61 @@ def settings_test(request):
     target = (request.POST.get("target") or "").strip()
     results = {}
 
-    def _ping_openai(name, base_url, api_key):
-        """OpenAI 兼容服务：用 /models 验证连接 + 密钥。
+    def _headers(api_key):
+        # Local OpenAI-compatible servers generally ignore this placeholder;
+        # supplying it keeps their behaviour aligned with the runtime SDK.
+        return {"Authorization": f"Bearer {api_key or 'local-no-key'}"}
 
-        200 → 列出模型；401/403 → 密钥无效；404 → 可达但无 /models
-        （仍视为可达，只提示无列表端点）。
-        """
+    def _ping_llm(base_url, api_key, model):
+        """Run a minimal chat completion, not just a shallow /models probe."""
         try:
-            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-            r = httpx.get(base_url.rstrip("/") + "/models", headers=headers, timeout=10)
-            if r.status_code == 200:
-                return {"ok": True, "status": 200, "detail": "连接成功，密钥有效"}
-            if r.status_code in (401, 403):
-                return {"ok": False, "status": r.status_code, "detail": "密钥无效或无权限：" + r.text[:80]}
-            if r.status_code == 404:
-                # 可达但无 /models 端点 → 不一定是失败，单独标注
-                return {"ok": True, "status": 404, "detail": "可达，但该服务无 /models 列表端点（如自定义网关）；密钥状态未知。"}
-            return {"ok": False, "status": r.status_code, "detail": r.text[:120]}
+            if not base_url:
+                return {"ok": False, "status": None, "detail": "请填写 LLM Base URL。"}
+            if not model:
+                return {"ok": False, "status": None, "detail": "请填写 LLM 模型名称。"}
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "只回复 OK"}],
+                "temperature": 0,
+                "max_tokens": 8,
+                "stream": False,
+            }
+            r = httpx.post(
+                base_url.rstrip("/") + "/chat/completions",
+                headers=_headers(api_key), json=payload, timeout=60,
+            )
+            r.raise_for_status()
+            body = r.json()
+            if not body.get("choices"):
+                return {"ok": False, "status": r.status_code, "detail": "服务响应中没有 choices。"}
+            return {"ok": True, "status": r.status_code,
+                    "detail": f"真实对话成功（模型：{model}）"}
         except Exception as e:
-            return {"ok": False, "status": None, "detail": "连接失败：" + str(e)[:100]}
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            return {"ok": False, "status": status, "detail": "调用失败：" + str(e)[:160]}
+
+    def _ping_embedding(base_url, api_key, model):
+        """Create one real embedding so URL/model compatibility is verified."""
+        try:
+            if not base_url:
+                return {"ok": False, "status": None, "detail": "请填写向量模型 Base URL。"}
+            if not model:
+                return {"ok": False, "status": None, "detail": "请填写向量模型名称。"}
+            r = httpx.post(
+                base_url.rstrip("/") + "/embeddings",
+                headers=_headers(api_key),
+                json={"model": model, "input": ["连接测试"]}, timeout=60,
+            )
+            r.raise_for_status()
+            data = r.json().get("data") or []
+            vector = data[0].get("embedding") if data else None
+            if not vector:
+                return {"ok": False, "status": r.status_code, "detail": "服务没有返回向量。"}
+            return {"ok": True, "status": r.status_code,
+                    "detail": f"真实向量生成成功（模型：{model}，维度：{len(vector)}）"}
+        except Exception as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            return {"ok": False, "status": status, "detail": "调用失败：" + str(e)[:160]}
 
     def _ping_mineru(base_url, api_key):
         try:
@@ -783,10 +919,27 @@ def settings_test(request):
     emb = cfg_mod.embedding_settings()
     mineru = cfg_mod.mineru_settings()
 
+    # Connection tests use the values currently visible in the form.  This
+    # lets users test before saving and prevents stale DB values from being
+    # tested while the UI shows something else.
+    from .config import normalize_openai_base_url
+    llm["base_url"] = normalize_openai_base_url(
+        request.POST.get("llm_base_url", llm["base_url"]),
+    )
+    llm["api_key"] = request.POST.get("llm_api_key", llm["api_key"]).strip()
+    llm["model"] = request.POST.get("llm_model", llm["model"]).strip()
+    emb["base_url"] = normalize_openai_base_url(
+        request.POST.get("embedding_base_url", emb["base_url"]), ollama=True,
+    )
+    emb["api_key"] = request.POST.get("embedding_api_key", emb["api_key"]).strip()
+    emb["model"] = request.POST.get("embedding_model", emb["model"]).strip()
+
     if target in ("", "all", "llm"):
-        results["llm"] = _ping_openai("LLM", llm["base_url"], llm["api_key"])
+        results["llm"] = _ping_llm(llm["base_url"], llm["api_key"], llm["model"])
     if target in ("", "all", "embedding"):
-        results["embedding"] = _ping_openai("Embedding", emb["base_url"], emb["api_key"])
+        results["embedding"] = _ping_embedding(
+            emb["base_url"], emb["api_key"], emb["model"],
+        )
     if target in ("", "all", "mineru"):
         results["mineru"] = _ping_mineru(mineru["api_base"], mineru["api_key"])
     return JsonResponse({"results": results})
