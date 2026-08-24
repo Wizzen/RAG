@@ -530,6 +530,8 @@ def search_in_content(
                 "doc_id": doc_id,
                 "line_no": 0,
                 "snippet": f"文件名匹配: {doc_name}",
+                # 文件名命中：正文里未必含该词，用检索词做高亮锚点（命中与否由查看页提示）
+                "highlight": query,
                 "context": "",
                 "section": "",
                 "match_type": "filename",
@@ -572,6 +574,8 @@ def search_in_content(
                     "doc_id": doc_id,
                     "line_no": i + 1,
                     "snippet": snippet,
+                    # 文档查看页 ?h= 高亮锚点：去掉首尾省略号后是文档原文的连续子串
+                    "highlight": snippet.strip("…"),
                     "context": context,
                     "section": current_section,
                     "match_type": "content",

@@ -87,7 +87,7 @@
       <article class="manual-card">
         <div><strong>{{ match.doc_name }}</strong><span>{{ match.kb_name }}{% if match.section %} · {{ match.section }}{% endif %}</span></div>
         <p>{{ match.snippet }}</p>
-        <a class="btn sm outline" href="/kb/doc/{{ match.doc_id }}/html/" target="_blank">查看手册</a>
+        <a class="btn sm outline" href="/kb/doc/{{ match.doc_id }}/html/?h={{ match.highlight|urlencode }}" target="_blank">查看手册</a>
       </article>
       {% endfor %}
     </div>
