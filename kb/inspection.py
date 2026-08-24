@@ -532,6 +532,7 @@ def search_in_content(
                 "snippet": f"文件名匹配: {doc_name}",
                 # 文件名命中：正文里未必含该词，用检索词做高亮锚点（命中与否由查看页提示）
                 "highlight": query,
+                "highlight_short": query,
                 "context": "",
                 "section": "",
                 "match_type": "filename",
@@ -568,6 +569,13 @@ def search_in_content(
                 if end < len(clean_line):
                     snippet = snippet + "…"
 
+                # 短锚点：查询词 ±10 字。文档查看页的高亮只能在【单个文本节点】内匹配，
+                # 长锚点（±30 字）跨表格单元格/跨标签时匹配不上；短锚点几乎必落在
+                # 一个节点内，作为滚动定位的兜底（chip 传 h=长&h=短 两个参数）。
+                s2 = max(0, idx - 10)
+                e2 = min(len(clean_line), idx + len(query) + 10)
+                highlight_short = clean_line[s2:e2]
+
                 results.append({
                     "doc_name": doc_name,
                     "kb_name": kb_name,
@@ -576,6 +584,7 @@ def search_in_content(
                     "snippet": snippet,
                     # 文档查看页 ?h= 高亮锚点：去掉首尾省略号后是文档原文的连续子串
                     "highlight": snippet.strip("…"),
+                    "highlight_short": highlight_short,
                     "context": context,
                     "section": current_section,
                     "match_type": "content",

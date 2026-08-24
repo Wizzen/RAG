@@ -92,7 +92,7 @@
         <p>{{ first.snippet }}</p>
         <div class="hit-chips">
           {% for m in g.list %}
-          <a class="hit-chip" href="/kb/doc/{{ m.doc_id }}/html/?h={{ m.highlight|urlencode }}" target="_blank"
+          <a class="hit-chip" href="/kb/doc/{{ m.doc_id }}/html/?h={{ m.highlight|urlencode }}&h={{ m.highlight_short|urlencode }}" target="_blank"
              title="第 {{ forloop.counter }} 处{% if m.section %}（{{ m.section }}）{% endif %}：{{ m.snippet }}">
             {{ forloop.counter }}. {{ m.snippet|truncatechars:16 }}
           </a>
