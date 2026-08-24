@@ -35,7 +35,7 @@
   </nav>
   <span class="sp"></span>
   <span class="auth">
-    <span class="who">{{ user.username }}</span>
+    <span class="who">{{ user.username }}{% if user_department and user_department != '通用' %} <span class="topbar-dept" title="我的部门">{{ user_department }}</span>{% endif %}</span>
     {% if user.is_authenticated %}<a href="/accounts/logout/">退出</a>{% else %}<a href="/accounts/login/">登录</a>{% endif %}
   </span>
   <button class="fos-nav-toggle" id="navToggle" aria-label="菜单" aria-expanded="false">☰</button>

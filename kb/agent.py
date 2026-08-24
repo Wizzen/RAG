@@ -70,21 +70,37 @@ def _get_llm(llm_cfg: dict) -> ChatOpenAI:
 
 
 def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkpointer,
-                 citations: list | None = None):
+                 citations: list | None = None, department: str = ""):
     """为指定 KB + thread 构建一个 create_agent。
 
-    llm_cfg / top_k 由调用方在同步上下文中解析后传入，避免在 async
+    llm_cfg / top_k / department 由调用方在同步上下文中解析后传入，避免在 async
     上下文里访问数据库（Django 默认禁止）。
+
+    department: 当前用户部门。空 = 不过滤（兼容旧调用）；非空则
+    list_knowledge_bases 只列「通用 ∪ 该部门」的库，kb_search / kb_fetch_doc
+    对不可访问的库返回不存在（不泄露存在性）。
 
     citations: 可选的可变列表；kb_search 每次检索会把来源出处追加进去，
     供调用方在流结束后发出 citations 事件。每轮应传入一个全新的空列表。
     """
     from langchain.agents import create_agent
 
+    from .models import DEPARTMENT_GENERAL
     from .retriever import search
 
     kb_slug_default = kb_slug  # 避免在 kb_search 内部与参数名冲突
     cite_sink = citations if citations is not None else []
+
+    # 部门可见范围（空部门 = 不过滤，仅内部调试场景）
+    if department:
+        _dept_filter = {"department__in": [DEPARTMENT_GENERAL, department]}
+    else:
+        _dept_filter = {}
+
+    def _dept_allowed(kb_obj) -> bool:
+        if not department:
+            return True
+        return kb_obj.department in (DEPARTMENT_GENERAL, department)
 
     system_prompt = f"""你是一名专业的知识助手，帮助用户查询游乐设施维护手册等知识库。
 
@@ -93,6 +109,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 - 用户提到具体文档名（如「P8」「Dumbo」）时，先调 list_knowledge_bases 查看有哪些文档库及其 slug，再用对应 slug 检索该文档库——这样只返回该文档的内容，不会混杂其它文档。
 - 通用问题（不限定某份文档）时，可用文件夹 slug 检索，系统会跨该文件夹下所有文档库合并结果。
 - 当前默认搜索范围是「{kb_slug}」。
+- 当前用户所在部门为「{department or DEPARTMENT_GENERAL}」；你能看到的仅是该部门与「通用」的知识库，这是正常的权限范围，不是知识库缺失——不要向用户提及其它部门库的存在。
 
 工作准则：
 1. **选库**：不确定有哪些文档库时调一次 list_knowledge_bases 查看层级与 slug，之后按需用 kb_slug 定位到具体文档库。不要每次都调。
@@ -125,8 +142,9 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         """
         from .models import KnowledgeBase
         lines = []
-        # 文件夹 + 其子文档库
-        for folder in KnowledgeBase.objects.filter(is_folder=True).order_by("name"):
+        # 文件夹 + 其子文档库（部门过滤：子库部门与文件夹同步，故按文件夹过滤即可）
+        folders = KnowledgeBase.objects.filter(is_folder=True, **_dept_filter).order_by("name")
+        for folder in folders:
             docs, chunks = folder.aggregate_counts()
             lines.append(f"📁 {folder.name}（文件夹, slug={folder.slug}, {chunks} 向量块）")
             for child in folder.children.filter(is_folder=False).order_by("name"):
@@ -137,7 +155,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                     f"  📄 {child.name}（slug={child.slug}, {child.chunk_count} 向量块）— 文档: {doc_names or '（无）'}"
                 )
         # 独立文档库（无父库的顶层文档库）
-        standalone = KnowledgeBase.objects.filter(is_folder=False, parent__isnull=True).order_by("name")
+        standalone = KnowledgeBase.objects.filter(is_folder=False, parent__isnull=True, **_dept_filter).order_by("name")
         for kb in standalone:
             doc_names = ", ".join(d.original_name for d in kb.documents.all())[:60]
             lines.append(
@@ -170,6 +188,9 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         try:
             target_kb = KnowledgeBase.objects.get(slug=target)
         except KnowledgeBase.DoesNotExist:
+            return f"知识库「{target}」不存在，请用 list_knowledge_bases 查看可选项。"
+        if not _dept_allowed(target_kb):
+            # 部门不可访问：与不存在同样处理，不泄露存在性
             return f"知识库「{target}」不存在，请用 list_knowledge_bases 查看可选项。"
 
         try:
@@ -281,6 +302,8 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         try:
             target_kb = KnowledgeBase.objects.get(slug=target)
         except KnowledgeBase.DoesNotExist:
+            return f"知识库「{target}」不存在，请用 list_knowledge_bases 查看可选项。"
+        if not _dept_allowed(target_kb):
             return f"知识库「{target}」不存在，请用 list_knowledge_bases 查看可选项。"
         if target_kb.is_folder:
             return (f"「{target}」是文件夹，本工具只能提取单个文档库的片段。"
@@ -396,13 +419,16 @@ async def run_agent_stream(
         if config is None:
             cfg = llm_settings()
             top_k = retrieval_settings()["top_k"]
+            department = ""
         else:
             cfg = config["llm"]
             top_k = config["top_k"]
+            department = config.get("department") or ""
         checkpointer = await _get_checkpointer()
         # 本轮检索的来源出处累积器（kb_search 往里追加；流结束发出 citations 事件）
         citations: list[dict] = []
-        agent = _build_agent(kb_slug, thread_id, cfg, top_k, checkpointer, citations=citations)
+        agent = _build_agent(kb_slug, thread_id, cfg, top_k, checkpointer,
+                             citations=citations, department=department)
         # recursion_limit 是顶层 key（不在 configurable 内）。
         # 每次工具调用 ≈ 2 个节点（agent + tool）。取完整表格时可能用到
         # list_kb + kb_search×2 + kb_fetch_doc×4 + write_analysis ≈ 8 次调用，

@@ -69,6 +69,13 @@
   <form method="post" class="card create-kb-form">
     {% csrf_token %}<input type="hidden" name="action" value="create_kb">
     <div class="field"><label>手册库名称</label><input name="name" required placeholder="如：过山车维护手册"></div>
+    <div class="field"><label>部门（留空 = 通用，所有人可见）</label>
+      <input name="department" list="kbDeptList" placeholder="如：机械 / 电气 / 运营（可自由填写）">
+      <datalist id="kbDeptList">
+        {% for d in departments %}<option value="{{ d }}"></option>
+        {% endfor %}
+      </datalist>
+    </div>
     <button class="btn primary" type="submit">创建</button>
     <button class="btn outline" type="button" onclick="document.getElementById('createForm').hidden=true">取消</button>
   </form>
@@ -78,7 +85,7 @@
   {% for kb in kbs %}
   <div class="kb-card" data-slug="{{ kb.slug }}">
     <div class="pbody">
-      <div class="kb-name" data-name>{{ kb.name }}</div>
+      <div class="kb-name" data-name>{{ kb.name }} <span class="dept-badge" data-dept-badge title="部门：{{ kb.department }}（通用 = 所有部门可见）">{{ kb.department }}</span></div>
       {% with counts=kb.aggregate_counts %}
       <div class="kb-stats">
         <span class="stat"><span class="v">{{ counts.0 }}</span><span class="k">文档</span></span>
@@ -88,6 +95,8 @@
       <div class="kb-rename" data-rename hidden>
         <div class="field"><label>名称</label>
           <input type="text" data-rn-name value="{{ kb.name }}"></div>
+        <div class="field"><label>部门（通用 = 所有部门可见；文件夹会同步其下全部子库）</label>
+          <input type="text" data-rn-dept list="kbDeptList" value="{{ kb.department }}"></div>
         <div style="display:flex;gap:8px">
           <button class="btn sm primary" type="button" data-rn-save>保存</button>
           <button class="btn sm outline" type="button" data-rn-cancel>取消</button>
@@ -131,6 +140,8 @@
 
 {% block scripts %}
 <style>
+.dept-badge{display:inline-block;vertical-align:middle;font:600 10px var(--fm);color:var(--dim);background:var(--paper);border:1.5px solid var(--rule-soft);border-radius:999px;padding:2px 8px;margin-left:6px;letter-spacing:.02em}
+
 .upload-head,.section-bar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.upload-head h1{margin-bottom:5px}.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0 12px}.upload-card{padding:17px;border:2px solid var(--rule);border-top:6px solid var(--danger);border-radius:8px;background:var(--surface)}.data-upload{border-top-color:#1f4fa8}.upload-card-head{display:flex;gap:11px;align-items:flex-start}.upload-no{font:800 20px var(--fm);color:var(--danger)}.data-upload .upload-no{color:#1f4fa8}.upload-card h2,.section-bar h2{font:700 15px var(--fd);text-transform:uppercase;margin:0 0 4px}.upload-card p,.section-bar p{font-size:11px;color:var(--mute);margin:0}.upload-form{display:grid;grid-template-columns:minmax(140px,.8fr) minmax(180px,1.2fr);gap:9px;margin-top:15px}.upload-form .btn{grid-column:1/-1;justify-content:center}.upload-form select,.upload-form input[type=file]{width:100%;min-height:41px;padding:8px;border:2px solid var(--rule);border-radius:5px;background:var(--paper)}.empty.compact{padding:13px;margin-top:15px}.upload-guidance{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:10px 12px;margin-bottom:24px;border:1px solid var(--rule-soft);border-radius:5px;background:var(--surface)}.upload-guidance strong,.upload-guidance span{font-size:10px}.upload-guidance span{font-family:var(--fm);padding:3px 6px;background:var(--paper);border-radius:3px}.section-bar{align-items:center;margin:18px 0 12px;padding-bottom:9px;border-bottom:2px solid var(--rule)}.section-actions{display:flex;gap:8px;align-items:center}.create-kb-form{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end}.dataset-bar{margin-top:28px}.count-chip{font:700 11px var(--fm);padding:5px 8px;background:var(--text);color:var(--paper);border-radius:3px}.dataset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px}.dataset-grid article{display:flex;flex-direction:column;gap:5px;padding:11px;border:1px solid var(--rule-soft);border-left:4px solid #1f4fa8;border-radius:5px;background:var(--surface)}.dataset-grid span{font:700 9px var(--fm);color:#1f4fa8;text-transform:uppercase}.dataset-grid strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dataset-grid small{font-size:10px;color:var(--mute)}
 @media(max-width:780px){.upload-grid{grid-template-columns:1fr}.upload-head{display:block}.upload-head>a{margin-top:10px}.create-kb-form{grid-template-columns:1fr}.upload-form{grid-template-columns:1fr}.section-bar{align-items:flex-end}.section-actions{flex-wrap:wrap;justify-content:flex-end}}
 </style>
@@ -147,15 +158,18 @@ document.querySelectorAll('.kb-card').forEach(card => {
   const panel = card.querySelector('[data-rename]');
   const actions = card.querySelector('[data-actions]');
   const nameInput = card.querySelector('[data-rn-name]');
+  const deptInput = card.querySelector('[data-rn-dept]');
+  const deptBadge = card.querySelector('[data-dept-badge]');
+  const nameEl = card.querySelector('[data-name]');
   const saveBtn = card.querySelector('[data-rn-save]');
   const cancelBtn = card.querySelector('[data-rn-cancel]');
-  const nameEl = card.querySelector('[data-name]');
   if (!toggleBtn) return;
 
   let origName = nameInput.value;
+  let origDept = deptInput ? deptInput.value : '';
 
   toggleBtn.addEventListener('click', () => {
-    origName = nameInput.value;
+    origName = nameInput.value; origDept = deptInput ? deptInput.value : '';
     panel.hidden = false;
     actions.hidden = true;
     nameInput.focus();
@@ -163,16 +177,19 @@ document.querySelectorAll('.kb-card').forEach(card => {
 
   cancelBtn.addEventListener('click', () => {
     nameInput.value = origName;
+    if (deptInput) deptInput.value = origDept;
     panel.hidden = true; actions.hidden = false;
   });
 
   saveBtn.addEventListener('click', async () => {
     const name = nameInput.value.trim();
+    const dept = deptInput ? deptInput.value.trim() : '';
     if (!name) { alert('名称不能为空'); nameInput.focus(); return; }
     saveBtn.disabled = true; const old = saveBtn.textContent; saveBtn.textContent = '保存中…';
     try {
       const fd = new FormData();
       fd.set('name', name);
+      if (deptInput) fd.set('department', dept);
       fd.set('csrfmiddlewaretoken', getCSRFToken());
       const resp = await fetch('/kb/manage/' + encodeURIComponent(slug) + '/rename/', {
         method: 'POST',
@@ -182,11 +199,16 @@ document.querySelectorAll('.kb-card').forEach(card => {
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const data = await resp.json();
       if (!data.ok) throw new Error(data.message || '保存失败');
-      nameEl.textContent = data.name;
+      // 只替换文本节点，保留部门徽章元素
+      nameEl.childNodes[0].nodeValue = data.name + ' ';
       nameInput.value = data.name;
+      if (deptBadge && data.department) {
+        deptBadge.textContent = data.department;
+        deptBadge.title = '部门：' + data.department + '（通用 = 所有部门可见）';
+      }
       panel.hidden = true; actions.hidden = false;
     } catch (e) {
-      alert('改名失败：' + (e.message || e));
+      alert('保存失败：' + (e.message || e));
     } finally {
       saveBtn.disabled = false; saveBtn.textContent = old;
     }

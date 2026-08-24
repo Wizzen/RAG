@@ -9,6 +9,9 @@ import uuid
 from django.conf import settings
 from django.db import models
 
+# 「通用」部门 = 所有部门可见。部门为自由文本，其余部门名由用户自定。
+DEPARTMENT_GENERAL = "通用"
+
 
 class KnowledgeBase(models.Model):
     """知识库节点。分两种：
@@ -28,6 +31,11 @@ class KnowledgeBase(models.Model):
         related_name="children", verbose_name="父知识库",
     )
     is_folder = models.BooleanField("是否文件夹", default=False)
+    # 部门可见性：「通用」= 所有部门可见；其它值 = 仅该部门可见。
+    # 文件夹与其子库保持同值（改文件夹部门时级联更新子库，见 kb/access.py）。
+    department = models.CharField(
+        "部门", max_length=50, default=DEPARTMENT_GENERAL,
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="knowledge_bases",

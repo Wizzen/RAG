@@ -5,7 +5,7 @@
   <a class="btn sm outline" href="/kb/manage/">← 返回资料上传中心</a>
   <a class="btn sm outline" href="/kb/inspection/">检查项提取</a>
 </div>
-<h1>{{ kb.name }}</h1>
+<h1>{{ kb.name }} <span class="dept-badge" title="部门：{{ kb.department }}（通用 = 所有部门可见）">{{ kb.department }}</span></h1>
 <p class="fos-sub">{{ kb.description|default:"（无描述）" }}
   · 文档 <span id="kbDocCount">{{ docs_total }}</span>
   · 向量块 <span id="kbChunkCount">{{ chunks_total }}</span></p>

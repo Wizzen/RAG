@@ -11,7 +11,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
+from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import get_object_or_404, redirect, render
@@ -89,6 +89,7 @@ def _create_manual_document(kb: KnowledgeBase, upload, user) -> Document:
                 description=f"自动创建：{fname}",
                 is_folder=False,
                 parent=kb,
+                department=kb.department,  # 子库继承父库部门，保持检索可见性一致
                 created_by=user,
             )
         else:
@@ -118,14 +119,17 @@ def manage_list(request):
 
         if action == "create_kb":
             name = request.POST.get("name", "").strip()
+            department = (request.POST.get("department") or "").strip()
             if name:
+                from .models import DEPARTMENT_GENERAL
                 slug = _derive_unique_slug(name)
                 KnowledgeBase.objects.create(
                     name=name, slug=slug,
                     description="", created_by=request.user,
                     is_folder=True, parent=None,
+                    department=department or DEPARTMENT_GENERAL,
                 )
-                messages.success(request, f"手册库「{name}」已创建，可以上传手册了。")
+                messages.success(request, f"手册库「{name}」已创建（部门：{department or DEPARTMENT_GENERAL}），可以上传手册了。")
             else:
                 messages.error(request, "请填写手册库名称。")
 
@@ -172,10 +176,16 @@ def manage_list(request):
     kbs = KnowledgeBase.objects.filter(parent__isnull=True).order_by("name")
     from .models import StructuredDataset
     datasets = StructuredDataset.objects.filter(active=True).order_by("kind", "-created_at")
+    # 已有部门（去重）供 datalist 提示
+    departments = list(
+        KnowledgeBase.objects.exclude(department="")
+        .values_list("department", flat=True).distinct().order_by("department")
+    )
     return render(request, "kb/manage_list.html", {
         "kbs": kbs,
         "datasets": datasets,
         "dataset_kinds": StructuredDataset.Kind.choices,
+        "departments": departments,
     })
 
 
@@ -253,15 +263,21 @@ def kb_rename(request, slug):
     """
     kb = get_object_or_404(KnowledgeBase, slug=slug)
     name = (request.POST.get("name") or "").strip()
+    department = (request.POST.get("department") or "").strip()
     if not name:
         return JsonResponse({"ok": False, "message": "名称不能为空"}, status=400)
     kb.name = name
     kb.save(update_fields=["name", "updated_at"])
+    # 可选：一并改部门（文件夹级联更新所有子库）
+    if department:
+        from .access import set_kb_department
+        set_kb_department(kb, department)
 
     is_ajax = (request.headers.get("x-requested-with") == "XMLHttpRequest"
                or "application/json" in (request.META.get("HTTP_ACCEPT") or ""))
     if is_ajax:
-        return JsonResponse({"ok": True, "name": kb.name})
+        kb.refresh_from_db()
+        return JsonResponse({"ok": True, "name": kb.name, "department": kb.department})
     messages.success(request, f"已重命名为「{kb.name}」。")
     return redirect("kb:manage_list")
 
@@ -389,8 +405,12 @@ def document_html(request, doc_id):
 
     - 若 html_content 为空但 md_content 有值 → 懒构建（安全网）。
     - ?h=<文本片段>：前端据此高亮（来源出处点击后携带）。
+    - 部门过滤：所属库不可访问 → 404（不泄露存在性）。
     """
+    from . import access as kb_access
     doc = get_object_or_404(Document, id=doc_id)
+    if not kb_access.kb_accessible(request.user, doc.kb):
+        raise Http404("文档不存在")
     if not doc.html_content and doc.md_content:
         from .pipeline import build_doc_html
         build_doc_html(doc)
@@ -412,9 +432,12 @@ def ask(request):
     """问答主页：提问 + 历史会话列表。
 
     选库由 agent 自主完成（list_knowledge_bases + kb_search），无需前端手动选择。
+    侧边栏会话按部门过滤（KB 已不可访问的旧会话不再显示）。
     """
+    from . import access as kb_access
     conversations = (
         Conversation.objects.filter(user=request.user)
+        .filter(kb_access.kb_q(request.user))
         .select_related("kb").only("id", "title", "thread_id", "kb__name", "updated_at", "created_at")
     )
     return render(request, "kb/ask.html", {
@@ -444,17 +467,22 @@ async def chat_stream(request):
 
     # 在同步上下文里一次性解析配置 + 取/建会话（避免在 async 生成器中访问数据库）
     def _prepare():
+        from . import access as kb_access
+
+        user_dept = kb_access.user_department(request.user)
         # kb_slug 可选：未指定时优先选「有向量块的文档库」（文件夹自身无向量），
-        # 再退到任意文件夹（可扇出搜索），最后退到任意库。
-        # agent 仍可通过 list_knowledge_bases + kb_search(kb_slug=...) 自主跨库。
+        # 再退到任意文件夹（可扇出搜索），最后退到任意库——均在用户可见范围内。
+        # agent 仍可通过 list_knowledge_bases + kb_search(kb_slug=...) 自主跨库（同受部门过滤）。
         if kb_slug:
             kb = KnowledgeBase.objects.filter(slug=kb_slug).first()
-        else:
+            if kb and not kb_access.kb_accessible(request.user, kb):
+                kb = None  # 指定了不可访问的库 → 视为未指定，走自动挑选
+        if not kb:
             kb = (
-                KnowledgeBase.objects.filter(is_folder=False, chunk_count__gt=0).first()
-                or KnowledgeBase.objects.filter(is_folder=False).first()
-                or KnowledgeBase.objects.filter(is_folder=True).first()
-                or KnowledgeBase.objects.first()
+                KnowledgeBase.objects.filter(kb_access.kb_q(request.user), is_folder=False, chunk_count__gt=0).first()
+                or KnowledgeBase.objects.filter(kb_access.kb_q(request.user), is_folder=False).first()
+                or KnowledgeBase.objects.filter(kb_access.kb_q(request.user), is_folder=True).first()
+                or KnowledgeBase.objects.filter(kb_access.kb_q(request.user)).first()
             )
         if not kb:
             return None, None, False, "no knowledge base available"
@@ -470,10 +498,20 @@ async def chat_stream(request):
         # 安全：会话必须属于当前用户
         if conv.user_id != request.user.id:
             return None, None, False, "forbidden"
+        # 续聊旧会话：若其 KB 因部门调整已不可访问，回退到自动挑选
+        if not kb_access.kb_accessible(request.user, conv.kb):
+            conv.kb = kb
+            conv.save(update_fields=["kb", "updated_at"])
         # 记录用户消息
         Message.objects.create(conversation=conv, role=Message.Role.USER, content=message)
         conv.save(update_fields=["updated_at"])  # 刷新排序
-        cfg = {"llm": llm_settings(), "top_k": retrieval_settings()["top_k"]}
+        cfg = {
+            "llm": llm_settings(),
+            "top_k": retrieval_settings()["top_k"],
+            "department": user_dept,
+            # _prepare 已解析出的可访问默认库（async 流里不能查库，故在此带回）
+            "effective_kb_slug": kb.slug,
+        }
         return conv, cfg, created, None
 
     prepared = await sync_to_async(_prepare)()
@@ -491,11 +529,11 @@ async def chat_stream(request):
         turn_citations: list[dict] = []
         try:
             # When the UI leaves kb_slug empty, _prepare() has already chosen
-            # the best available KB and stored it on the conversation.  Pass
-            # that effective slug to the agent instead of an empty string, or
-            # its default kb_search scope becomes invalid and a small local
-            # model may guess an unrelated library.
-            effective_kb_slug = kb_slug or conv.kb.slug
+            # the best accessible KB (department-filtered) and stored it on the
+            # conversation.  Pass that effective slug to the agent instead of
+            # an empty string, or its default kb_search scope becomes invalid
+            # and a small local model may guess an unrelated library.
+            effective_kb_slug = agent_config.get("effective_kb_slug") or conv.kb.slug
             async for event_type, payload in run_agent_stream(
                 message, full_thread, effective_kb_slug, agent_config,
             ):
@@ -522,8 +560,14 @@ async def chat_stream(request):
 
 @login_required
 def conversation_messages(request, thread_id):
-    """返回某会话的历史消息（JSON），供前端打开会话时渲染。"""
+    """返回某会话的历史消息（JSON），供前端打开会话时渲染。
+
+    部门过滤：会话所属 KB 已不可访问时返回 404（与侧边栏不可见一致）。
+    """
+    from . import access as kb_access
     conv = get_object_or_404(Conversation, thread_id=thread_id, user=request.user)
+    if not kb_access.kb_accessible(request.user, conv.kb):
+        raise Http404("会话不存在")
     msgs = list(conv.messages.order_by("created_at").values("role", "content", "citations"))
     return JsonResponse({"thread_id": conv.thread_id, "title": conv.title,
                          "kb_slug": conv.kb.slug, "messages": msgs})
@@ -555,12 +599,17 @@ def conversation_delete(request, thread_id):
 # ------------------------------------------------------------------
 @login_required
 def search_view(request):
-    """综合搜索：结构化跨表关联 + 手册全文搜索，均不依赖大模型。"""
+    """综合搜索：结构化跨表关联 + 手册全文搜索，均不依赖大模型。
+
+    手册全文按用户部门过滤（通用 ∪ 本部门）。
+    """
     q = (request.GET.get("q") or "").strip()
+    from . import access as kb_access
     from .models import StructuredDataset
     from .structured_data import lookup_related
 
-    lookup = lookup_related(q) if q else None
+    user_dept = kb_access.user_department(request.user)
+    lookup = lookup_related(q, department=user_dept) if q else None
     datasets = (
         StructuredDataset.objects.filter(active=True)
         .select_related("imported_by").order_by("kind", "-created_at")
@@ -619,18 +668,20 @@ def asset_lookup(request):
 def inspection_list(request):
     """检查项总览页：列出所有已完成文档，可选择文档查看提取的检查项。
 
-    GET → 渲染文档列表。
-    GET ?doc=<uuid> → AJAX 返回该文档提取的检查项 JSON。
+    GET → 渲染文档列表（按用户部门过滤：通用 ∪ 本部门）。
+    GET ?doc=<uuid> → AJAX 返回该文档提取的检查项 JSON（同受部门过滤）。
     """
+    from . import access as kb_access
     from .models import Document
 
     doc_id = request.GET.get("doc", "").strip()
     is_ajax = (request.headers.get("x-requested-with") == "XMLHttpRequest"
                or "application/json" in (request.META.get("HTTP_ACCEPT") or ""))
+    docs_qs = kb_access.accessible_docs(request)
 
     # 指定文档 → 提取检查项并返回
     if doc_id:
-        doc = get_object_or_404(Document, id=doc_id, status=Document.Status.COMPLETED)
+        doc = get_object_or_404(docs_qs, id=doc_id)
         from .inspection import extract_inspection_items
         items = extract_inspection_items(doc.md_content or "", doc.original_name)
         if is_ajax:
@@ -646,14 +697,12 @@ def inspection_list(request):
             "doc": doc,
             "items": items,
             "total": len(items),
-            "docs": Document.objects.filter(status=Document.Status.COMPLETED).select_related("kb").only("id", "original_name", "kb__name"),
+            "docs": docs_qs.only("id", "original_name", "kb__name"),
         })
 
     # 无指定文档：渲染文档选择页
     docs = (
-        Document.objects
-        .filter(status=Document.Status.COMPLETED)
-        .select_related("kb")
+        docs_qs
         .only("id", "original_name", "kb__name", "chunk_count")
         .order_by("-updated_at")
     )

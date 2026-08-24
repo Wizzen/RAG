@@ -285,8 +285,12 @@ def _direct_lookup_query(normalized: str, partial: bool = False) -> Q:
     return query
 
 
-def lookup_related(query_text: str) -> dict[str, Any]:
-    """统一搜索业务键，并沿关联键进行最多三轮确定性跨表关联。"""
+def lookup_related(query_text: str, department: str = "") -> dict[str, Any]:
+    """统一搜索业务键，并沿关联键进行最多三轮确定性跨表关联。
+
+    department：手册全文搜索按部门过滤（空 = 不过滤，仅内部/兼容用途；
+    页面调用时传当前用户部门，可见 通用 ∪ 该部门 的文档）。
+    """
     normalized = normalize_key(query_text)
     if not normalized:
         return {
@@ -337,9 +341,12 @@ def lookup_related(query_text: str) -> dict[str, Any]:
         if (rows := groups_by_kind.get(kind))
     ]
 
+    doc_qs = Document.objects.filter(status=Document.Status.COMPLETED)
+    if department:
+        from .models import DEPARTMENT_GENERAL
+        doc_qs = doc_qs.filter(kb__department__in=[DEPARTMENT_GENERAL, department])
     docs = list(
-        Document.objects.filter(status=Document.Status.COMPLETED)
-        .select_related("kb").only("id", "original_name", "md_content", "kb__name")
+        doc_qs.select_related("kb").only("id", "original_name", "md_content", "kb__name")
     )
     from .inspection import search_in_content
     manual_matches = search_in_content(query_text, docs, limit=30)
