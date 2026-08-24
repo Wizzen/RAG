@@ -81,14 +81,25 @@
 
   {% if lookup.manual_matches %}
   <section class="result-section kind-manual">
-    <div class="section-title"><h2>手册相关内容</h2><span>{{ lookup.manual_matches|length }} 条</span></div>
+    {# 同一文档的多处命中合并为一张卡：首个命中做摘要，每处命中一个 chip（点击跳到该处并高亮）#}
+    {% regroup lookup.manual_matches by doc_id as doc_groups %}
+    <div class="section-title"><h2>手册相关内容</h2><span>{{ lookup.manual_matches|length }} 处命中 · {{ doc_groups|length }} 份文档</span></div>
     <div class="manual-list">
-      {% for match in lookup.manual_matches %}
+      {% for g in doc_groups %}
+      {% with first=g.list.0 %}
       <article class="manual-card">
-        <div><strong>{{ match.doc_name }}</strong><span>{{ match.kb_name }}{% if match.section %} · {{ match.section }}{% endif %}</span></div>
-        <p>{{ match.snippet }}</p>
-        <a class="btn sm outline" href="/kb/doc/{{ match.doc_id }}/html/?h={{ match.highlight|urlencode }}" target="_blank">查看手册</a>
+        <div><strong>{{ first.doc_name }}</strong><span>{{ first.kb_name }} · {{ g.list|length }} 处命中</span></div>
+        <p>{{ first.snippet }}</p>
+        <div class="hit-chips">
+          {% for m in g.list %}
+          <a class="hit-chip" href="/kb/doc/{{ m.doc_id }}/html/?h={{ m.highlight|urlencode }}" target="_blank"
+             title="第 {{ forloop.counter }} 处{% if m.section %}（{{ m.section }}）{% endif %}：{{ m.snippet }}">
+            {{ forloop.counter }}. {{ m.snippet|truncatechars:16 }}
+          </a>
+          {% endfor %}
+        </div>
       </article>
+      {% endwith %}
       {% endfor %}
     </div>
   </section>
@@ -128,6 +139,9 @@
 {% block scripts %}
 <style>
 .asset-head,.section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.asset-head h1{margin-bottom:5px}.no-ai{font-family:var(--fm);font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--ok);border:2px solid var(--ok);padding:7px 10px;border-radius:4px;white-space:nowrap}.lookup-form{margin:20px 0 18px;padding:20px;background:var(--surface);border:2px solid var(--rule);border-left:6px solid var(--danger);border-radius:8px}.lookup-form>label{display:block;font-family:var(--fd);font-size:12px;font-weight:700;text-transform:uppercase;margin-bottom:7px}.lookup-row{display:flex;gap:9px}.lookup-row input{flex:1;min-width:0;padding:12px 14px;border:2px solid var(--rule);border-radius:5px;font-family:var(--fm);font-size:16px;text-transform:uppercase}.lookup-row input:focus{outline:none;border-color:var(--danger)}.field-help{font-size:11px;color:var(--mute);margin:8px 0 0}.result-summary{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 15px;border:2px solid var(--rule);border-radius:6px;margin-bottom:16px}.result-summary.has-result{background:var(--ok-soft);border-color:var(--ok)}.result-summary.no-result{background:var(--warn-soft);border-color:var(--warn)}.result-summary span{font-size:12px;color:var(--dim)}.warn-chip{font-family:var(--fm);font-size:10px!important;font-weight:700;background:var(--warn);color:var(--text)!important;padding:4px 7px;border-radius:3px}.key-chain,.result-section,.import-panel,.dataset-panel{margin:18px 0;padding:16px;border:2px solid var(--rule);border-radius:8px;background:var(--surface)}.key-chain h2,.section-title h2{font:700 14px var(--fd);text-transform:uppercase;margin:0}.key-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}.key-block{display:flex;flex-direction:column;gap:3px;padding:8px 10px;background:var(--paper);border:1px solid var(--rule-soft);border-radius:4px}.key-block span{font-size:9px;font-family:var(--fm);color:var(--mute);text-transform:uppercase}.key-block strong{font:600 11px var(--fm)}.section-title>span,.section-title p{font-size:11px;color:var(--mute);margin:3px 0 0}.record-list,.manual-list{display:grid;gap:10px;margin-top:12px}.record-card,.manual-card{padding:12px;border:1px solid var(--rule-soft);border-left:4px solid var(--rule);border-radius:5px;background:var(--paper)}.kind-downtime .record-card{border-left-color:var(--danger)}.kind-apex .record-card{border-left-color:var(--warn)}.kind-parts .record-card{border-left-color:var(--ok)}.kind-drawing .record-card{border-left-color:#1f4fa8}.record-meta,.manual-card>div{display:flex;justify-content:space-between;gap:12px}.record-meta strong,.manual-card strong{font-size:12px}.record-meta span,.manual-card span{font:10px var(--fm);color:var(--mute)}.record-keys{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}.record-keys span{display:flex;gap:6px;font:11px var(--fm);padding:5px 7px;background:var(--surface);border:1px solid var(--rule-soft);border-radius:3px}.record-keys b{font-family:var(--fb);color:var(--mute)}details summary{cursor:pointer;font-size:11px;color:var(--dim)}.raw-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;margin:9px 0 0}.raw-grid div{padding:6px;background:var(--surface);border-radius:3px;min-width:0}.raw-grid dt{font-size:9px;color:var(--mute)}.raw-grid dd{font:11px var(--fm);margin:2px 0 0;overflow-wrap:anywhere}.manual-card p{font-size:12px;line-height:1.55;color:var(--dim);margin:8px 0}.import-form{display:grid;grid-template-columns:minmax(180px,240px) 1fr auto;gap:10px;align-items:end;margin-top:13px}.import-form select,.import-form input[type=file]{width:100%;min-height:40px;padding:8px;border:2px solid var(--rule);border-radius:5px;background:var(--paper)}.alias-note{display:flex;gap:6px;flex-wrap:wrap;margin-top:13px;padding-top:12px;border-top:1px solid var(--rule-soft)}.alias-note strong,.alias-note span{font-size:10px;padding:4px 6px;border-radius:3px}.alias-note span{background:var(--paper);font-family:var(--fm)}.dataset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px;margin-top:12px}.dataset-grid article{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--rule-soft);border-radius:5px;background:var(--paper)}.dataset-kind{font:700 9px var(--fm);color:var(--danger);text-transform:uppercase}.dataset-grid strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dataset-grid div,.dataset-grid small{font-size:10px;color:var(--mute)}
+.hit-chips{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0 0}
+.hit-chip{font:600 11px var(--fm);padding:4px 9px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:999px;color:var(--dim);text-decoration:none;cursor:pointer;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hit-chip:hover{border-color:var(--danger);color:var(--danger);background:var(--paper)}
 @media(max-width:720px){.asset-head{display:block}.no-ai{display:inline-block;margin-top:9px}.lookup-row{flex-wrap:wrap}.lookup-row input{flex-basis:100%}.import-form{grid-template-columns:1fr}.record-meta,.manual-card>div{display:block}.record-meta span,.manual-card span{display:block;margin-top:4px}}
 </style>
 {% endblock %}
