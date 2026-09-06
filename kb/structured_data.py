@@ -204,9 +204,21 @@ def _mapped_value(data: dict[str, Any], mapping: dict[str, str], canonical: str)
 
 
 @transaction.atomic
+def guess_kind(combined_mapping: dict[str, list[str]]) -> str:
+    """按识别到的标准字段猜数据类型（仅影响展示分组，不影响关联查询）。"""
+    keys = set(combined_mapping)
+    if "apex_no" in keys:
+        return StructuredDataset.Kind.APEX
+    if keys & {"drawing_no", "g_code", "scp_level"}:
+        return StructuredDataset.Kind.DRAWING
+    if keys & {"part_no", "part_name"}:
+        return StructuredDataset.Kind.PARTS
+    return StructuredDataset.Kind.OTHER
+
+
 def import_structured_dataset(upload, kind: str, user=None) -> StructuredDataset:
     valid_kinds = {value for value, _label in StructuredDataset.Kind.choices}
-    if kind not in valid_kinds:
+    if kind and kind not in valid_kinds:
         raise StructuredDataError("请选择正确的数据类型。")
 
     payload, rows = parse_upload(upload)
@@ -230,6 +242,9 @@ def import_structured_dataset(upload, kind: str, user=None) -> StructuredDataset
         for canonical, header in mapping.items():
             if header not in combined_mapping[canonical]:
                 combined_mapping[canonical].append(header)
+
+    if not kind:
+        kind = guess_kind(combined_mapping)
 
     dataset = StructuredDataset.objects.create(
         name=Path(source_name).stem[:160],

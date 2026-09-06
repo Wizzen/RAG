@@ -1,24 +1,35 @@
-"""用清洗后的文本重新向量化已处理文档（不重新 OCR）。
+"""重建已处理文档的向量索引（不重新 OCR）。
 
-背景：嵌入路径改造前，向量是直接拿 MinerU 原始 markdown（含大量 HTML 表格标签）
-做 embedding 的。现在 run_indexing 会先把 HTML 表格转成结构化纯文本再切块/向量化，
-本命令对已 completed 的文档重跑一遍 run_indexing，让清洗在新向量上生效。
+用途：
+1. 嵌入文本清洗规则变更后（HTML 表格 → 结构化文本）重灌向量；
+2. **更换 embedding 模型后重建**（如 Qwen3-Embedding → WeMM）。
 
-幂等、可重跑。需要联网调 embedding API。
+换模型必须整目录重建：Chroma collection 的向量维度在建库时固定
+（Qwen3-Embedding-4B=2560，WeMM-2B=2048），collection 内部 delete(where=)
+清空数据不改变维度，重灌不同维度的向量会直接报维度不匹配。因此本命令
+对每个文档库删除 data/chroma/<slug>/ 整个目录后从 md_content 重建。
+
+层级结构下每个文档库（slug）只承载一份文档，整目录删除不影响其它文档。
+
+注意：重建期间，长驻 Django 进程（开发服务器）缓存的 Chroma 句柄指向
+已删除的文件，重建完成后需重启 Django 恢复检索。
+
 用法：
     python manage.py reindex_clean             # 所有已完成的文档
     python manage.py reindex_clean --kb <slug> # 只重建某个文档库
     python manage.py reindex_clean --dry-run   # 只列出将处理的文档
 """
+import shutil
+
 from django.core.management.base import BaseCommand
 
-from kb.models import Document, KnowledgeBase
-from kb.pipeline import run_indexing
-from kb.retriever import get_kb_vectorstore, _VS_CACHE
+from kb.models import Document
+from kb.pipeline import _kb_persist_dir, run_indexing
+from kb.retriever import _VS_CACHE
 
 
 class Command(BaseCommand):
-    help = "用清洗后的文本重新向量化已处理文档（HTML 表格 → 结构化文本后再 embedding）"
+    help = "重建文档向量索引：整目录删除 data/chroma/<slug> 后从 md_content 重新切块+embedding（换 embedding 模型后必用）"
 
     def add_arguments(self, parser):
         parser.add_argument("--kb", default="", help="只重建指定 slug 的文档库")
@@ -53,14 +64,17 @@ class Command(BaseCommand):
         for kb_slug, lib_docs in by_kb.items():
             self.stdout.write(self.style.MIGRATE_HEADING(f"\n=== 文档库「{kb_slug}」({len(lib_docs)} 份) ==="))
             kb = lib_docs[0].kb
+
+            # 整目录删除：维度可能已随 embedding 模型变化，collection 不可复用。
+            # 先弹掉本进程的向量库缓存，避免持有已删除 sqlite 的句柄。
+            _VS_CACHE.pop(kb_slug, None)
+            shutil.rmtree(_kb_persist_dir(kb_slug), ignore_errors=True)
+            # 混合检索：关键词索引整库清空（随后 run_indexing 会重灌）
+            from kb import keyword_index
+            keyword_index.delete_kb(kb_slug)
+
             new_chunk_total = 0
             for doc in lib_docs:
-                # 先删该文档旧向量（清洗前 embedding 的），再重新索引
-                try:
-                    vs = get_kb_vectorstore(kb_slug)
-                    vs._collection.delete(where={"source": doc.original_name})  # noqa: SLF001
-                except Exception as e:
-                    self.stderr.write(self.style.WARNING(f"  删旧向量失败（{doc.original_name}）: {e}"))
                 try:
                     n = run_indexing(doc.md_content, kb_slug, doc.original_name)
                     doc.chunk_count = n
@@ -77,8 +91,7 @@ class Command(BaseCommand):
                 d.chunk_count for d in kb.documents.filter(status=Document.Status.COMPLETED)
             )
             kb.save(update_fields=["doc_count", "chunk_count", "updated_at"])
-            # 清掉该库的向量库缓存，让后续检索重新打开（向量已变）
-            _VS_CACHE.pop(kb_slug, None)
             self.stdout.write(f"  库统计刷新：{kb.doc_count} 文档 / {kb.chunk_count} 向量块")
 
-        self.stdout.write(self.style.SUCCESS(f"\n完成：{total_done}/{len(docs)} 份文档已用清洗后文本重建索引。"))
+        self.stdout.write(self.style.SUCCESS(f"\n完成：{total_done}/{len(docs)} 份文档已重建索引。"))
+        self.stdout.write(self.style.WARNING("提醒：长驻的 Django 服务进程持有旧向量库句柄，请重启后生效。"))

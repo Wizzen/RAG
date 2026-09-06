@@ -22,6 +22,32 @@ def user_department(user) -> str:
     return _user_dept(user)
 
 
+def is_global_admin(user) -> bool:
+    """全局管理员（is_staff / is_superuser）：不受部门限制，可管一切 + 站点设置。"""
+    return getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+
+
+def is_manager(user) -> bool:
+    """能否进入资料上传中心：全局管理员 或 部门管理员。"""
+    from accounts.models import user_role, UserProfile
+    return is_global_admin(user) or user_role(user) == UserProfile.Role.DEPT_ADMIN
+
+
+def can_manage_kb(user, kb: KnowledgeBase) -> bool:
+    """能否管理（改名/删库/上传/删文档）该知识库。
+
+    - 全局管理员：全部
+    - 部门管理员：仅本部门的库（通用库只有全局管理员能管）
+    - 普通用户：不能
+    """
+    if is_global_admin(user):
+        return True
+    from accounts.models import user_role, UserProfile
+    if user_role(user) != UserProfile.Role.DEPT_ADMIN:
+        return False
+    return kb.department == _user_dept(user)
+
+
 def kb_q(user) -> Q:
     """用户可见知识库的 Q 条件（通用 ∪ 本部门）。"""
     return Q(department=DEPARTMENT_GENERAL) | Q(department=_user_dept(user))
@@ -38,6 +64,24 @@ def kb_accessible(user, kb: KnowledgeBase) -> bool:
 def accessible_kbs(user) -> QuerySet[KnowledgeBase]:
     """用户可见的顶层知识库（parent__isnull；子库对用户透明）。"""
     return KnowledgeBase.objects.filter(parent__isnull=True).filter(kb_q(user))
+
+
+def all_departments() -> list[str]:
+    """已知部门池 = 显式登记的部门 ∪ 用户档案 ∪ 知识库 的部门去重，「通用」固定排第一。
+
+    新部门的创建入口：全局管理员在用户管理页添加/重命名（重命名级联所有用户和库）；
+    注册页和库表单只能从本池中选择（防止随意拼写出新部门）。
+    """
+    from accounts.models import Department, UserProfile
+    depts = set(Department.objects.values_list("name", flat=True))
+    depts.update(
+        UserProfile.objects.exclude(department="").values_list("department", flat=True)
+    )
+    depts.update(
+        KnowledgeBase.objects.exclude(department="").values_list("department", flat=True)
+    )
+    depts.discard(DEPARTMENT_GENERAL)
+    return [DEPARTMENT_GENERAL] + sorted(depts)
 
 
 def accessible_doc_slugs(user) -> set[str]:

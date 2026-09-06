@@ -1,8 +1,7 @@
 {% extends "kb/_base.html" %}
-{% block title %}检查项提取 · FOS_RAG{% endblock %}
+{% block title %}检查项提取 · SHDR RAG{% endblock %}
 {% block content %}
 <h1>检查项提取</h1>
-<p class="fos-sub">自动提取文档中的检查内容：图纸号 · 部件名称 · 检查频率 · 检查要求 · 详细要求</p>
 
 <!-- 文档选择区 -->
 <div class="insp-doc-selector" style="margin-bottom:20px">
@@ -36,7 +35,7 @@
   </div>
 
   <div class="insp-toolbar" style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
-    <input type="text" id="inspFilter" placeholder="过滤检查项…"
+    <input type="text" id="inspFilter"
            style="flex:1;min-width:200px;padding:8px 12px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:6px;font-size:13px;outline:none">
     <button class="btn sm outline" id="exportBtn">导出 CSV</button>
   </div>
@@ -104,7 +103,7 @@
 .ir-req{font-size:12px;color:var(--dim)}
 .ir-detail{font-size:11px;color:var(--mute);max-width:300px;white-space:pre-wrap}
 .ir-sec{font-family:var(--fm);font-size:10px;color:var(--mute)}
-.freq-badge{font-family:var(--fm);font-size:10px;padding:2px 7px;border-radius:3px;background:var(--warn-soft);color:#8a6300;border:1px solid var(--warn);white-space:nowrap}
+.freq-badge{font-family:var(--fm);font-size:10px;padding:2px 7px;border-radius:3px;background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn);white-space:nowrap}
 .insp-toolbar input:focus{border-color:var(--danger)}
 #inspStatus .spinner{vertical-align:middle;margin-right:6px}
 .insp-table tr.hidden{display:none}
@@ -148,7 +147,7 @@ async function loadInspection(docId, docName){
       + ' · 提取到 <strong>' + data.total + '</strong> 个检查项</p></div></div>';
 
     html += '<div class="insp-toolbar" style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">'
-      + '<input type="text" id="inspFilter" placeholder="过滤检查项…" style="flex:1;min-width:200px;padding:8px 12px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:6px;font-size:13px;outline:none">'
+      + '<input type="text" id="inspFilter" style="flex:1;min-width:200px;padding:8px 12px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:6px;font-size:13px;outline:none">'
       + '<button class="btn sm outline" id="exportBtn">导出 CSV</button></div>';
 
     html += '<div class="insp-table-wrap"><table class="insp-table" id="inspTable"><thead><tr>'

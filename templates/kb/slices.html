@@ -1,0 +1,55 @@
+{% extends "kb/_base.html" %}
+{% block title %}命中切片 · {{ doc.original_name }} · SHDR RAG{% endblock %}
+{% block content %}
+<div class="slice-layout">
+  <!-- 左侧：命中切片列表（点击滚动定位） -->
+  <aside class="slice-side">
+    <div class="slice-side-head">命中切片 <span class="slice-cnt">{{ slices|length }}</span></div>
+    <div class="slice-list" id="sliceList">
+      {% for s in slices %}
+      <a class="slice-item{% if forloop.first %} active{% endif %}" href="#slice-{{ s.no }}">
+        <span class="slice-item-top">
+          <span class="slice-no">#{{ s.no }}</span>
+          <span class="slice-sec">{{ s.section }}</span>
+          {% if s.hit_count > 1 %}<span class="slice-hitn">{{ s.hit_count }} 处</span>{% endif %}
+        </span>
+        <span class="slice-snip">{{ s.snippet|safe }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </aside>
+
+  <!-- 右侧：切片内容 -->
+  <div class="slice-main">
+    <div class="slice-head">
+      <div class="slice-doc" title="{{ doc.original_name }}">{{ doc.original_name }}</div>
+      <a class="btn sm slice-full" href="{{ full_doc_url }}">查看整个文档</a>
+    </div>
+    <div class="slice-body">
+      {% for s in slices %}
+      <div class="slice-card" id="slice-{{ s.no }}">
+        <div class="slice-card-head">
+          <span class="slice-no">#{{ s.no }}</span>
+          <span class="slice-sec">{{ s.section }}</span>
+        </div>
+        <div class="slice-text">{{ s.marked|safe }}</div>
+      </div>
+      {% endfor %}
+      <div class="slice-more">
+        以上为本次检索命中的 {{ slices|length }} 个切片 ·
+        <a href="{{ full_doc_url }}">查看整个文档（含高亮）</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* 侧栏点击定位 + 高亮当前项（锚点跳转由浏览器完成，这里只同步 active） */
+document.getElementById('sliceList').addEventListener('click', e => {
+  const item = e.target.closest('.slice-item');
+  if (!item) return;
+  document.querySelectorAll('.slice-item').forEach(el => el.classList.remove('active'));
+  item.classList.add('active');
+});
+</script>
+{% endblock %}

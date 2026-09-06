@@ -86,3 +86,24 @@ def mineru_settings() -> dict:
         "backend": _eff(c.mineru_backend, settings.MINERU_BACKEND),
         "lang": _eff(c.mineru_lang, settings.MINERU_LANG),
     }
+
+
+def rerank_settings() -> dict:
+    c = get_config()
+    base_url = normalize_openai_base_url(
+        _eff(c.rerank_base_url, getattr(settings, "RERANK_BASE_URL", "")))
+    api_key = _eff(c.rerank_api_key, getattr(settings, "RERANK_API_KEY", ""))
+    if not api_key and "siliconflow" in base_url.lower():
+        # 同供应商时空 key 复用 embedding 的 key——但要看 embedding 的【有效】端点：
+        # 若 embedding 指向本地服务（key 是占位符），复用它会 401，回退 .env 云端 key。
+        emb = embedding_settings()
+        if "siliconflow" in emb["base_url"].lower():
+            api_key = emb["api_key"] or ""  # _eff 已含 .env 回退
+        else:
+            api_key = settings.EMBEDDING_API_KEY or ""
+    return {
+        "enabled": bool(c.rerank_enabled),
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": _eff(c.rerank_model, getattr(settings, "RERANK_MODEL", "")),
+    }

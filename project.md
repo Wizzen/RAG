@@ -11,7 +11,7 @@
 | **Web 框架** | Django 6.0.6 + Daphne（ASGI，支持 SSE 流式） |
 | **Agent 框架** | LangChain 1.3.9 + LangGraph 1.2.5 |
 | **LLM** | DeepSeek（OpenAI 兼容接口，可配置切换） |
-| **Embedding** | SiliconFlow（OpenAI 兼容，可配置切换） |
+| **Embedding** | 本地 WeMM-Embedding-2B（llama.cpp llama-server，OpenAI 兼容，可配置切换；换模型流程见 `docs/switch-embedding.md`） |
 | **向量数据库** | ChromaDB 1.5.9（每个知识库一个 collection） |
 | **OCR** | MinerU 3.3.1（本地 API，PDF → Markdown） |
 | **Agent 记忆** | LangGraph AsyncSqliteSaver（`data/checkpoints.sqlite3`，跨重启持久化） |
@@ -101,7 +101,8 @@ FOS_RAG/
 - **向量化**：Embedding → Chroma（每个 KB 独立 collection + persist dir）
 - **异步执行**：后台 daemon 线程，前端每 2s 轮询状态
 - **回填**：`python manage.py build_doc_html` 可为已处理文档从 `md_content` 重建 HTML（无需重新 OCR）
-- **清洗重建**：`python manage.py reindex_clean [--kb SLUG]` 对已处理文档用清洗后文本重新向量化（不重新 OCR，需联网调 embedding）。用于让 `_md_for_embedding` 改造在旧向量上生效。
+- **清洗重建/换模型重建**：`python manage.py reindex_clean [--kb SLUG]` 整目录删除 `data/chroma/<slug>/` 后从 md_content 重新向量化（不重新 OCR）。**换 embedding 模型后必用**（Chroma collection 维度建库时固定，且不同模型向量空间不可比）；也用于让 `_md_for_embedding` 改造在旧向量上生效。
+- **改进路线**：见 `docs/rag-improvements-roadmap.md`——对标 GitHub 高星 RAG 项目的调研与实施记录。**已上线**：混合检索（`kb/keyword_index.py` 向量+关键词 RRF）、重排序（`kb/rerank.py`，SiliconFlow bge-reranker 云端精排，本地 llama.cpp 待上游修 #16407）、检索评估面板（`/kb/eval/` + `eval_retrieval` 命令，hit@1 100% 基线）、引用锚点增强（`_pick_anchor` + 滚动兜底）。
 
 **关键修复**：
 - `_mineru_safe_name()`：中文/特殊字符文件名转 ASCII（MinerU 要求 `[a-zA-Z0-9._-]`）

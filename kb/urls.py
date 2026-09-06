@@ -17,10 +17,12 @@ urlpatterns = [
 
     # 文档查看（所有登录用户）
     path("doc/<uuid:doc_id>/html/", views.document_html, name="document_html"),
+    path("doc/<uuid:doc_id>/slices/", views.document_slices, name="document_slices"),
 
     # 站点配置（仅 staff）
     path("settings/", views.site_settings, name="settings"),
     path("settings/test/", views.settings_test, name="settings_test"),
+    path("eval/", views.eval_panel, name="eval_panel"),
 
     # 会话历史
     path("conv/<str:thread_id>/messages/", views.conversation_messages, name="conv_messages"),

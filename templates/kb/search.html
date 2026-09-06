@@ -1,11 +1,11 @@
 {% extends "kb/_base.html" %}
-{% block title %}搜索 · FOS_RAG{% endblock %}
+{% block title %}搜索 · SHDR RAG{% endblock %}
 {% block content %}
 <h1>模糊搜索</h1>
-<p class="fos-sub">输入图纸号或部件名称，搜索所有已完成的文档内容 · 共 {{ doc_count }} 份文档可搜索</p>
+<p class="fos-sub">共 {{ doc_count }} 份文档</p>
 
 <div class="search-bar" style="display:flex;gap:10px;margin-bottom:18px">
-  <input type="text" id="searchInput" placeholder="输入图纸号 / 部件名称 / 关键词…"
+  <input type="text" id="searchInput"
          value="{{ q }}" autofocus
          style="flex:1;padding:11px 14px;background:var(--surface);border:2px solid var(--rule);border-radius:6px;font-size:14px;font-family:var(--fb);outline:none">
   <button class="btn primary" id="searchBtn">搜索</button>

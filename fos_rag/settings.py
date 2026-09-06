@@ -125,6 +125,12 @@ EMBEDDING_API_KEY = _env("EMBEDDING_API_KEY", "")
 EMBEDDING_MODEL = _env("EMBEDDING_MODEL", "")
 EMBEDDING_DIMENSIONS = int(_env("EMBEDDING_DIMENSIONS", "1024"))
 
+# Rerank（重排序，/v1/rerank 兼容端点；站点配置 DB 优先，空值回退这里）。
+# 注意：启用开关只在设置页（DB 布尔），.env 无法开启——避免"UI 关了又被 env 强开"的歧义。
+RERANK_BASE_URL = _env("RERANK_BASE_URL", "").rstrip("/")
+RERANK_API_KEY = _env("RERANK_API_KEY", "")
+RERANK_MODEL = _env("RERANK_MODEL", "")
+
 # LLM
 LLM_BASE_URL = _env("LLM_BASE_URL", "").rstrip("/")
 LLM_API_KEY = _env("LLM_API_KEY", "")

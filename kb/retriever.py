@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from typing import Any
 from django.conf import settings
 from langchain_chroma import Chroma
 
-from .config import retrieval_settings
+from .config import embedding_settings, retrieval_settings
 from .pipeline import _chroma_collection_name, _embeddings, _kb_persist_dir
 
 # 进程级缓存：kb_slug -> Chroma。Chroma 的 Rust 后端在多线程下重复创建
@@ -19,11 +20,25 @@ from .pipeline import _chroma_collection_name, _embeddings, _kb_persist_dir
 # 因此复用同一个客户端实例。
 _VS_CACHE: dict[str, Chroma] = {}
 _VS_LOCK = threading.Lock()
+# 缓存对应的 embedding 配置指纹（base_url + model）。设置页换了 embedding
+# 端点/模型后指纹变化，缓存全部失效——否则运行中的服务会继续拿【旧模型】
+# 编码查询向量去比【新模型】入库的向量，结果静默变成垃圾。
+_EMB_FINGERPRINT: str | None = None
 
 
 def get_kb_vectorstore(kb_slug: str) -> Chroma:
     """打开指定 KB 的 Chroma 向量库（缓存实例，线程安全）。"""
+    global _EMB_FINGERPRINT
     with _VS_LOCK:
+        e = embedding_settings()
+        # 指纹含 key 哈希：只换 key（同端点同模型）时缓存也要失效，
+        # 否则旧客户端持旧 key → 401 → 静默降级纯关键词
+        import hashlib
+        key_h = hashlib.sha256((e["api_key"] or "").encode()).hexdigest()[:8]
+        fp = f"{e['base_url']}|{e['model']}|{key_h}"
+        if fp != _EMB_FINGERPRINT:
+            _VS_CACHE.clear()
+            _EMB_FINGERPRINT = fp
         vs = _VS_CACHE.get(kb_slug)
         if vs is None:
             vs = Chroma(
@@ -45,25 +60,116 @@ def delete_doc_vectors(kb_slug: str, source: str) -> None:
     """
     from chromadb import PersistentClient
     from chromadb.config import Settings
+    from . import keyword_index
 
     persist_dir = str(_kb_persist_dir(kb_slug))
     coll_name = _chroma_collection_name(kb_slug)
-    client = PersistentClient(path=persist_dir, settings=Settings(anonymized_telemetry=False))
+    # 整体兜底：任何阶段失败（含 PersistentClient 构造期，如目录损坏）
+    # 都不放过关键词清理——否则已删文档在关键词路"复活"
     try:
+        client = PersistentClient(path=persist_dir, settings=Settings(anonymized_telemetry=False))
         col = client.get_collection(coll_name)
+        col.delete(where={"source": source})
     except Exception:
-        return  # collection 不存在 → 无向量可删
-    col.delete(where={"source": source})
+        logging.getLogger(__name__).exception(
+            "Chroma 向量删除失败（继续清理关键词索引）kb=%s source=%s", kb_slug, source)
+    # 两路清理互相独立：任一路失败不拖累另一路（否则残留孤儿行）
+    keyword_index.delete_doc(kb_slug, source)
+
+
+def _fuse_key(text: str) -> str:
+    """RRF 融合的 chunk 身份键：全文 md5（向量路与关键词路同源同文；
+    不能用前缀——表格类 chunk 常共享相同开头，会把不同块错误合并）。"""
+    import hashlib
+    return hashlib.md5((text or "").strip().encode("utf-8")).hexdigest()
+
+
+# RRF（倒数排名融合）常数：score = Σ 1/(K + rank)，与两路分数的量纲无关
+RRF_K = 60
 
 
 def search(kb_slug: str, query: str, k: int | None = None) -> list[dict[str, Any]]:
-    """在指定 KB 中语义检索。"""
+    """混合检索：向量（语义）+ 关键词（精确编号/术语）双路召回，RRF 融合。
+
+    - 向量路：Chroma 相似度（当前配置的 embedding 模型）
+    - 关键词路：keyword.db 文本匹配（与 embedding 模型无关，换模型不影响）
+    - 任一路失败自动降级为单路，不互相拖累
+    """
     k = k or retrieval_settings()["top_k"]
+    recall = max(k * 3, 15)
     vs = get_kb_vectorstore(kb_slug)
-    results = vs.similarity_search_with_relevance_scores(query, k=k)
+
+    # ---- 向量路 ----
+    vec_docs: list[tuple[Any, float]] = []
+    try:
+        vec_docs = vs.similarity_search_with_relevance_scores(query, k=recall)
+    except Exception as e:
+        # 降级为纯关键词检索，但必须留痕——embedding 端点挂掉时运维要能发现
+        logging.getLogger(__name__).warning("向量检索失败（降级纯关键词）kb=%s: %s", kb_slug, e)
+        vec_docs = []
+
+    # ---- 关键词路 ----
+    from . import keyword_index
+    kw_rows = keyword_index.search(kb_slug, query, limit=recall)
+
+    # ---- RRF 融合（同一路内重复文本只计首次——语料里存在内容相同的 chunk） ----
+    fused: dict[str, dict[str, Any]] = {}
+    seen_vec: set[str] = set()
+    for rank, (doc, _sim) in enumerate(vec_docs, start=1):
+        meta = doc.metadata or {}
+        key = _fuse_key(doc.page_content)
+        if key in seen_vec:
+            continue
+        seen_vec.add(key)
+        item = fused.setdefault(key, {
+            "text": doc.page_content, "source": meta.get("source", ""),
+            "section": meta.get("section") or meta.get("drug_name") or "",
+            "score": 0.0, "via": set(),
+        })
+        item["score"] += 1.0 / (RRF_K + rank)
+        item["via"].add("vec")
+    seen_kw: set[str] = set()
+    for rank, row in enumerate(kw_rows, start=1):
+        key = _fuse_key(row["text"])
+        if key in seen_kw:
+            continue
+        seen_kw.add(key)
+        item = fused.setdefault(key, {
+            "text": row["text"], "source": row["source"], "section": row["section"],
+            "score": 0.0, "via": set(),
+        })
+        item["score"] += 1.0 / (RRF_K + rank)
+        item["via"].add("kw")
+
+    results = sorted(fused.values(), key=lambda r: r["score"], reverse=True)[:k]
+
+    # ---- 重排序（可选）：RRF 融合序取前若干 → cross-encoder 精排 → 取 top_k。
+    # 失败/未启用自动降级用融合序，不阻断。----
+    from . import rerank as rerank_mod
+    rr_cfg = rerank_mod.rerank_settings()
+    if rr_cfg["enabled"] and len(results) > 1:
+        candidates = sorted(fused.values(), key=lambda r: r["score"], reverse=True)[:max(k * 2, 8)]
+        rr = rerank_mod.rerank(query, [c["text"] for c in candidates], top_n=k)
+        if rr:
+            reranked = []
+            for it in rr:
+                idx = it.get("index")
+                if idx is not None and 0 <= idx < len(candidates):
+                    item = dict(candidates[idx])
+                    via = item["via"]
+                    via = "+".join(sorted(via)) if isinstance(via, set) else str(via)
+                    item["via"] = via + "+rr"
+                    item["rerank_score"] = round(it.get("relevance_score", 0.0), 4)
+                    reranked.append(item)
+            if reranked:
+                results = reranked[:k]
+
+    # set 不能 JSON 序列化 → 转字符串（vec / kw / vec+kw）
+    for r in results:
+        if isinstance(r.get("via"), set):
+            r["via"] = "+".join(sorted(r["via"]))
 
     # 文件名 → doc_id 映射（来源出处链接需要 doc_id 指向查看页）。
-    # 向量只带 source=文件名，故按 KB 一次性解析；查询失败则 doc_id 留空。
     name_to_id: dict[str, str] = {}
     try:
         from .models import Document
@@ -72,20 +178,9 @@ def search(kb_slug: str, query: str, k: int | None = None) -> list[dict[str, Any
     except Exception:
         pass
 
-    out: list[dict[str, Any]] = []
-    for doc, score in results:
-        meta = doc.metadata or {}
-        src = meta.get("source", "")
-        # 优先读 section；旧向量（retriever 改造前索引的）带的是 drug_name，回退读取
-        section = meta.get("section") or meta.get("drug_name") or ""
-        out.append({
-            "text": doc.page_content,
-            "source": src,
-            "section": section,
-            "doc_id": name_to_id.get(src, ""),
-            "score": float(score) if score is not None else 0.0,
-        })
-    return out
+    for r in results:
+        r["doc_id"] = name_to_id.get(r["source"], "")
+    return results
 
 
 def is_kb_ready(kb_slug: str) -> bool:
@@ -108,7 +203,14 @@ def search_folder(child_slugs: list[str], query: str, k: int | None = None) -> l
             all_results.extend(search(slug, query, k=k))
         except Exception:
             continue  # 某个子库缺失/出错不阻断整体
-    all_results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    # 分桶排序：有精排分的（桶 0，按绝对相关度）永远排在无精排分的（桶 1，
+    # 按 RRF 分）之前——避免 0~1 的 rerank 分与 ~0.03 的 RRF 分跨量纲直接比较，
+    # 否则部分子库 rerank 瞬时失败时其结果会被系统性错位。
+    def _merge_key(r):
+        rs = r.get("rerank_score")
+        return (0, rs) if rs is not None else (1, r.get("score", 0))
+
+    all_results.sort(key=_merge_key, reverse=True)
     return all_results[:k]
 
 

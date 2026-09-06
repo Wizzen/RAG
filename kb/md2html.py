@@ -2,8 +2,13 @@
 
 MinerU 输出的「Markdown」其实是 HTML 超集：表格、图片、折叠块已经是
 原始 HTML（`<table>` / `<img>` / `<details>`）。因此本转换器只把 Markdown
-语法（标题、列表、段落、行内标记）转成 HTML，**原始 HTML 块原样透传**，
+语法（标题、列表、段落、行内标记）转成 HTML，**原始 HTML 块消毒后透传**，
 不引入任何第三方库。
+
+安全（XSS）：文档由用户上传、输出直接进模板 `|safe`，因此——
+- 普通文本先整体 html.escape 再套行内 markdown 规则（<script> 变 &lt;script&gt;）；
+- 透传的白名单 HTML 剥 on* 事件属性、href/src 危险 scheme（javascript: 等）置 '#'；
+- markdown 链接/图片的 URL 同样走 scheme 校验。
 
 输出是「正文片段」（无 <html>/<body> 包裹），由查看页模板负责整体布局。
 """
@@ -32,15 +37,58 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _OLIST_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
 _ULIST_RE = re.compile(r"^\s*[-*+]\s+(.*)$")
 
+# ---- 安全（XSS）：文档由用户上传，渲染进 |safe 前必须消毒 ----
+# 危险 scheme 一律替换为 '#'（javascript:/vbscript:/file:/data:text/）
+_DANGEROUS_SCHEME_RE = re.compile(r"^\s*(javascript|vbscript|file)\s*:", re.IGNORECASE)
+# 白名单原始 HTML 块里的事件属性（onerror=... / onclick=...）
+_ON_ATTR_RE = re.compile(r"""\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+# href/src 属性值（用于 scheme 复检）
+_URL_ATTR_RE = re.compile(r"""(\s(?:href|src)\s*=\s*)(["']?)([^"'>\s]+)""", re.IGNORECASE)
+
+
+def _safe_url(url: str) -> str:
+    """URL 进属性前的 scheme 校验：危险协议替换为 '#'，其余原样。"""
+    u = (url or "").strip()
+    if _DANGEROUS_SCHEME_RE.match(u) or u.lower().startswith("data:text/"):
+        return "#"
+    return u
+
+
+def _sanitize_raw_html(block: str) -> str:
+    """白名单原始 HTML 块（<table>/<img>/<details> 等）消毒：
+
+    - 剥掉全部 on* 事件属性（<img src=x onerror=alert(1)> 是真实攻击面）；
+    - href/src 的危险 scheme 替换为 '#'。
+    """
+    block = _ON_ATTR_RE.sub("", block)
+
+    def _fix_url(m):
+        val = _html.unescape(m.group(3))
+        return f'{m.group(1)}{m.group(2)}{_html.escape(_safe_url(val), quote=True)}'
+
+    return _URL_ATTR_RE.sub(_fix_url, block)
+
 
 def _inline(text: str) -> str:
     """行内标记转换：图片、链接、粗体、斜体、行内代码。
 
     在普通文本行上调用；原始 HTML 块不走这里。
+    先整体 HTML 转义再套 markdown 规则（escape 只动 & < > "，
+    不影响 * ` [ ] ( ) 标记语法），杜绝 <script> 直进 <p>。
     """
-    # 先处理图片（含 ! 前缀，避免被链接规则误吃）
-    text = _INLINE_IMG.sub(r'<img alt="\1" src="\2">', text)
-    text = _INLINE_LINK.sub(r'<a href="\2">\1</a>', text)
+    text = _html.escape(text, quote=False)
+
+    def _img_repl(m):
+        alt = _html.escape(_html.unescape(m.group(1)), quote=True)
+        src = _html.escape(_safe_url(_html.unescape(m.group(2))), quote=True)
+        return f'<img alt="{alt}" src="{src}">'
+
+    def _link_repl(m):
+        href = _html.escape(_safe_url(_html.unescape(m.group(2))), quote=True)
+        return f'<a href="{href}">{m.group(1)}</a>'  # 链接文字已随整体转义
+
+    text = _INLINE_IMG.sub(_img_repl, text)
+    text = _INLINE_LINK.sub(_link_repl, text)
     text = _INLINE_BOLD.sub(r"<strong>\1</strong>", text)
     text = _INLINE_CODE.sub(r"<code>\1</code>", text)
     text = _INLINE_ITALIC.sub(r"<em>\1</em>", text)
@@ -91,11 +139,11 @@ def md_to_html(md: str) -> str:
             code_buf.append(raw)
             continue
 
-        # ---- 原始 HTML 块：原样透传 ----
+        # ---- 原始 HTML 块：透传前消毒（剥 on* 事件属性 + URL scheme 校验） ----
         if _RAW_HTML_RE.match(raw):
             flush_para()
             close_list()
-            out.append(raw)
+            out.append(_sanitize_raw_html(raw))
             continue
 
         # ---- 空行：段落/列表边界 ----

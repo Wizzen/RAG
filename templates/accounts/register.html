@@ -4,31 +4,31 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>注册 · FOS_RAG</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Archivo:wght@500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{% static 'css/fos.css' %}">
+<title>注册 · SHDR RAG</title>
+<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20260906-7">
+<script>
+(function(){var t=null;try{t=localStorage.getItem('fos-theme');}catch(e){}
+if(t!=='dark'&&t!=='light'){t=(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+document.documentElement.dataset.theme=t;})();
+</script>
 </head>
 <body>
 <div class="auth-wrap">
   <div class="auth-card">
-    <div class="ah"><span class="lock">🔒</span>注册 · REGISTER</div>
+    <div class="ah">注册</div>
     <div class="ab">
-      <div class="at">创建维护手册检索账号</div>
-      {% if form.errors %}<div class="auth-error">注册信息有误，请检查（密码至少 6 位、不能为纯数字）。</div>{% endif %}
+      {% if form.errors %}<div class="auth-error">注册信息有误</div>{% endif %}
       <form method="post">
         {% csrf_token %}
         <div class="field"><label>用户名</label><input name="username" autofocus required></div>
         <div class="field"><label>密码</label><input name="password1" type="password" required></div>
         <div class="field"><label>确认密码</label><input name="password2" type="password" required></div>
         <div class="field">
-          <label>部门（决定可见的知识库；留空 = 通用，仅见通用库）</label>
-          <input name="department" list="deptList" value="{{ department }}" placeholder="如：机械 / 电气 / 运营（可自由填写）">
-          <datalist id="deptList">
-            {% for d in departments %}<option value="{{ d }}"></option>
-            {% endfor %}
-          </datalist>
+          <label>部门（决定可见的知识库；通用 = 仅见通用库）</label>
+          <select name="department">
+            <option value="通用">通用</option>
+            {% for d in departments %}{% if d != '通用' %}<option value="{{ d }}"{% if department == d %} selected{% endif %}>{{ d }}</option>{% endif %}{% endfor %}
+          </select>
         </div>
         <button class="btn primary" type="submit">注册</button>
       </form>

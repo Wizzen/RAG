@@ -5,23 +5,17 @@
   <a class="btn sm outline" href="/kb/manage/">← 返回资料上传中心</a>
   <a class="btn sm outline" href="/kb/inspection/">检查项提取</a>
 </div>
-<h1>{{ kb.name }} <span class="dept-badge" title="部门：{{ kb.department }}（通用 = 所有部门可见）">{{ kb.department }}</span></h1>
-<p class="fos-sub">{{ kb.description|default:"（无描述）" }}
-  · 文档 <span id="kbDocCount">{{ docs_total }}</span>
+<h1>{{ kb.name }} <span class="dept-badge">{{ kb.department }}</span>{% if kb.embedding_label %} <span class="emb-badge">🧬 {{ kb.embedding_label }}</span>{% endif %}</h1>
+<p class="fos-sub">{% if kb.description %}{{ kb.description }} · {% endif %}文档 <span id="kbDocCount">{{ docs_total }}</span>
   · 向量块 <span id="kbChunkCount">{{ chunks_total }}</span></p>
 
-{% if messages %}
-<div class="msgs">
-  {% for m in messages %}<div class="msg-{{ m.tags }}">{{ m }}</div>{% endfor %}
-</div>
-{% endif %}
 
-<h2 style="font-family:var(--fd);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">上传文档</h2>
+<h2 style="font-weight:700;font-size:14px;margin-bottom:10px">上传</h2>
 <div class="upload-area">
   <form method="post" enctype="multipart/form-data" id="uploadForm">
     {% csrf_token %}
-    <label class="upload-label" for="fileInput">点击选择文件（PDF / Markdown / TXT）</label>
-    <input type="file" name="file" id="fileInput" accept=".pdf,.md,.markdown,.txt">
+    <label class="upload-label" for="fileInput">点击选择文件（PDF / Markdown / TXT / CSV / XLSX，业务表自动识别）</label>
+    <input type="file" name="file" id="fileInput" accept=".pdf,.md,.markdown,.txt,.csv,.tsv,.xlsx,.xlsm">
     <div id="fileName" style="margin-top:8px;font-size:12px;color:var(--dim)"></div>
     <button class="btn primary" type="submit" id="uploadBtn" style="margin-top:10px;display:none">开始上传</button>
   </form>

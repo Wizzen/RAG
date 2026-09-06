@@ -1,0 +1,86 @@
+{% extends "kb/_base.html" %}
+{% block title %}检索评估 · SHDR RAG{% endblock %}
+{% block content %}
+<h1>检索评估</h1>
+
+
+<div class="fos-tag" style="margin-bottom:14px">
+  <div class="th">问题集<span class="stamp">{{ questions|length }} 题</span></div>
+  <div class="tb">
+    <form method="post" class="eval-add">
+      {% csrf_token %}<input type="hidden" name="action" value="add">
+      <input type="text" name="question" style="flex:2;min-width:220px" required>
+      <input type="text" name="expected_source" style="flex:1;min-width:140px">
+      <input type="text" name="expected_keyword" style="flex:1;min-width:120px">
+      <button class="btn sm primary" type="submit">＋ 添加</button>
+    </form>
+    {% for q in questions %}
+    <div class="eval-q">
+      <span class="eval-q-text">{{ q.question }}</span>
+      {% if q.expected_source or q.expected_keyword %}
+      <span class="fos-sub">期望：{{ q.expected_source|default:"—" }} / {{ q.expected_keyword|default:"—" }}</span>
+      {% endif %}
+      <form method="post" style="margin:0" onsubmit="return confirm('删除该评估问题？')">
+        {% csrf_token %}<input type="hidden" name="action" value="delete">
+        <input type="hidden" name="qid" value="{{ q.id }}">
+        <button class="btn sm danger" type="submit">删</button>
+      </form>
+    </div>
+    {% empty %}
+    <div class="empty">还没有评估问题。添加几个真实业务问法（含编号类和语义类）。</div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="actions" style="margin:16px 0">
+  <a class="btn primary" href="?run=1">▶ 运行评估</a>
+</div>
+
+{% if report %}
+<div class="fos-tag">
+  <div class="th ok">评估结果<span class="stamp">hit@1 {{ report.summary.hit1 }}/{{ report.summary.scored }} · hit@3 {{ report.summary.hit3 }}/{{ report.summary.scored }}</span></div>
+  <div class="tb">
+    {% for q in report.questions %}
+    <div class="eval-result">
+      <div class="eval-q-head">
+        {% if q.rank_hit %}<span class="dept-badge" style="border-color:var(--ok);color:var(--ok)">✓ 命中@{{ q.rank_hit }}</span>
+        {% elif q.expected != "（无期望，仅观察）" %}<span class="dept-badge" style="border-color:var(--danger);color:var(--danger)">✗ 未命中</span>
+        {% else %}<span class="dept-badge">观察</span>{% endif %}
+        <strong>{{ q.question }}</strong>
+        <span class="fos-sub">{{ q.expected }}</span>
+      </div>
+      {% for r in q.rows|slice:":5" %}
+      <div class="eval-row {% if r.hit %}is-hit{% endif %}">
+        <span class="eval-via {{ r.via }}">{{ r.via }}</span>
+        <span class="eval-kb">{{ r.kb|truncatechars:16 }}</span>
+        <span class="eval-score">{% if r.rr is not None %}{{ r.rr }}{% else %}{{ r.score }}{% endif %}</span>
+        <span class="eval-text">{{ r.text|truncatechars:72 }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+.eval-add{display:flex;gap:8px;flex-wrap:wrap}
+.eval-add input{padding:7px 10px;font:500 12px var(--fm);border:1.5px solid var(--rule-soft);border-radius:6px;background:var(--paper);color:var(--text)}
+.eval-q{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--rule-soft)}
+.eval-q:last-child{border-bottom:0}
+.eval-q-text{font:600 13px var(--fm);flex:1}
+.eval-result{padding:12px 0;border-bottom:1px solid var(--rule-soft)}
+.eval-result:last-child{border-bottom:0}
+.eval-q-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.eval-row{display:flex;gap:10px;align-items:baseline;padding:3px 0;font:500 11px var(--fm);color:var(--dim)}
+.eval-row.is-hit{color:var(--ok)}
+.eval-via{display:inline-block;min-width:52px;font-weight:700;padding:1px 6px;border-radius:3px;background:var(--paper);border:1px solid var(--rule-soft);text-align:center}
+.eval-via.kw{border-color:var(--warn);color:var(--warn)}
+.eval-via.vec{border-color:#1f4fa8;color:#1f4fa8}
+.eval-kb{min-width:110px;color:var(--mute)}
+.eval-score{min-width:48px;color:var(--mute)}
+.eval-text{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+{% endblock %}

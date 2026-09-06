@@ -19,12 +19,13 @@
 {% endblock %}
 
 {% block scripts %}
+{{ highlights|json_script:"hl-data" }}
 <script>
 /* 来源出处批量高亮：根据 ?h= 携带的多个文本片段，在正文里逐个做
    去空白后的子串匹配，命中的片段包一层 <mark class="cite-hit">，
    滚动到首个命中处。单个片段太长匹配不到时，渐进缩短再试。 */
 (function(){
-  var targets = {{ highlights_json|safe }} || [];
+  var targets = JSON.parse(document.getElementById('hl-data').textContent) || [];
   // 过滤太短的（避免误高亮）
   targets = targets.filter(function(t){ return t && t.length >= 3; });
   if (!targets.length) return;
@@ -104,6 +105,14 @@
 
   if (totalHits > 0 && firstHit){
     firstHit.scrollIntoView({behavior:'smooth', block:'center'});
+    // 兜底：部分 webview 的 smooth scrollIntoView 不生效，600ms 后校验并 instant 修正
+    setTimeout(function(){
+      var r = firstHit.getBoundingClientRect();
+      if (r.top < 0 || r.top > window.innerHeight * 0.9){
+        window.scrollTo({top: Math.max(0, window.scrollY + r.top - window.innerHeight / 2),
+                         behavior: 'instant'});
+      }
+    }, 600);
   }
   if (missed.length){
     // 部分片段未定位：非阻断提示

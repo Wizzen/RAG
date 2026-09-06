@@ -1,24 +1,18 @@
 {% extends "kb/_base.html" %}
-{% block title %}综合关联搜索 · FOS_RAG{% endblock %}
+{% block title %}综合关联搜索 · SHDR RAG{% endblock %}
 {% block content %}
 <div class="asset-head">
   <div>
     <h1>综合关联搜索</h1>
-    <p class="fos-sub">一次搜索同时查询业务数据与设备手册，并自动关联 Downtime、APEX、部件、图纸号、G-code 和 SCP。此功能不调用大模型。</p>
   </div>
   <span class="no-ai">RULE-BASED · NO AI</span>
 </div>
 
-{% if messages %}
-<div class="msgs">
-  {% for m in messages %}<div class="msg-{{ m.tags }}">{{ m }}</div>{% endfor %}
-</div>
-{% endif %}
 
 <form method="get" class="lookup-form">
   <label for="drawingQuery">图纸号 / 部件 / G-code / 设备 / APEX / 手册关键词</label>
   <div class="lookup-row">
-    <input id="drawingQuery" name="q" value="{{ q }}" placeholder="例如：DWG-1001 / P-77 / G-42 / 制动器" autofocus autocomplete="off">
+    <input id="drawingQuery" name="q" value="{{ q }}" autofocus autocomplete="off">
     <button class="btn primary" type="submit">综合搜索</button>
     {% if q %}<a class="btn outline" href="{% url 'kb:search' %}">清除</a>{% endif %}
   </div>

@@ -1,0 +1,232 @@
+{% extends "kb/_base.html" %}
+{% block title %}用户与部门 · SHDR RAG{% endblock %}
+{% block content %}
+<h1>用户管理</h1>
+
+
+<div class="user-add-bar">
+  <button class="btn primary" type="button" id="openUserAdd">＋ 添加账号</button>
+</div>
+<dialog id="userAddDialog" class="fos-dialog">
+  <div class="dialog-title">添加账号</div>
+  <form id="userAddForm">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="user_add">
+    <div class="field"><label>用户名</label><input type="text" name="username" required></div>
+    <div class="field"><label>初始密码</label><input type="text" name="password" value="disney123"></div>
+    {% if viewer_global %}
+    <div class="field"><label>部门</label>
+      <select name="department">
+        {% for d in departments %}<option value="{{ d }}">{{ d }}</option>{% endfor %}
+      </select>
+    </div>
+    {% else %}
+    <div class="field"><label>部门（固定为本部门）</label>
+      <span class="dept-badge">{{ viewer_department }}</span>
+    </div>
+    {% endif %}
+    <div class="field"><label>账号级别</label>
+      <select name="role">
+        {% for value, label in roles %}<option value="{{ value }}"{% if value == 'user' %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="dialog-err" id="userAddErr" hidden></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn outline" id="cancelUserAdd">取消</button>
+      <button type="submit" class="btn primary" id="userAddSubmit">创建账号</button>
+    </div>
+  </form>
+</dialog>
+
+{% if viewer_global %}
+<h2 class="dept-mgr-title">部门管理</h2>
+<form method="post" class="dept-add" action="{% url 'accounts:user_list' %}">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="dept_add">
+  <input type="text" name="name">
+  <button class="btn sm primary" type="submit">＋ 添加部门</button>
+</form>
+<div class="dept-mgr">
+  {% for d in dept_rows %}
+  <div class="dept-item">
+    {% if d.locked %}
+    <span class="dept-name">{{ d.name }}</span>
+    <span class="fos-sub">{{ d.users }} 人 · {{ d.kbs }} 库 · 固定</span>
+    {% else %}
+    <form method="post" class="dept-rename" action="{% url 'accounts:user_list' %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="dept_rename">
+      <input type="hidden" name="old" value="{{ d.name }}">
+      <input type="text" name="new" value="{{ d.name }}">
+      <button class="btn sm primary" type="submit">改名</button>
+    </form>
+    {% if d.users or d.kbs %}
+    <span class="fos-sub">{{ d.users }} 人 · {{ d.kbs }} 库</span>
+    {% else %}
+    <form method="post" action="{% url 'accounts:user_list' %}"
+          onsubmit="return confirm('确定删除部门「{{ d.name }}」？')">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="dept_delete">
+      <input type="hidden" name="name" value="{{ d.name }}">
+      <button class="btn sm danger" type="submit">删除</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="user-table-wrap">
+<table class="user-table">
+  <thead>
+    <tr>
+      <th>用户名</th>
+      <th>{% if viewer_global %}部门 / 级别（可编辑）{% else %}级别（可编辑）{% endif %}</th>
+      <th>角色</th>
+      <th>注册时间</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr class="{% if not r.is_active %}row-inactive{% endif %}">
+      <td class="uname">{{ r.username }}</td>
+      <td>
+        {% if r.can_edit %}
+        <form method="post" class="dept-edit" action="{% url 'accounts:user_list' %}">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="save">
+          <input type="hidden" name="user_id" value="{{ r.id }}">
+          {% if viewer_global %}
+          <select name="department">
+            {% for d in departments %}<option value="{{ d }}"{% if r.department == d %} selected{% endif %}>{{ d }}</option>{% endfor %}
+          </select>
+          {% else %}
+          <span class="dept-badge">{{ r.department }}</span>
+          {% endif %}
+          <select name="role">
+            {% for value, label in roles %}<option value="{{ value }}"{% if r.role == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+          <button class="btn sm primary" type="submit">保存</button>
+        </form>
+        {% else %}
+        <span class="dept-badge">{{ r.department }}</span>
+        <span class="fos-sub">{{ r.get_role_display|default:r.role }}</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if r.is_superuser %}<span class="dept-badge">全局管理员</span>
+        {% elif r.is_staff %}<span class="dept-badge">staff</span>
+        {% elif r.role == 'dept_admin' %}<span class="dept-badge">部门管理员</span>
+        {% else %}<span class="fos-sub">—</span>{% endif %}
+      </td>
+      <td class="fos-sub">{{ r.date_joined|date:"Y-m-d" }}</td>
+      <td class="fos-sub">{% if r.is_self %}（我）{% elif not r.is_active %}已停用{% endif %}</td>
+      <td>
+        {% if r.can_delete %}
+        <form method="post" action="{% url 'accounts:user_list' %}"
+              onsubmit="return confirm('确定删除用户「{{ r.username }}」？\n其全部会话记录将一并删除，不可恢复。')">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="user_id" value="{{ r.id }}">
+          <button class="btn sm danger" type="submit">删除</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<style>
+.user-table-wrap{background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;overflow-x:auto}
+.user-table{width:100%;border-collapse:collapse;font-size:13px}
+.user-table th{font-family:var(--fd);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);text-align:left;padding:10px 14px;border-bottom:1.5px solid var(--rule-soft)}
+.user-table td{padding:8px 14px;border-bottom:1px solid var(--rule-soft);vertical-align:middle}
+.user-table tr:last-child td{border-bottom:0}
+.user-table .uname{font:600 13px var(--fm)}
+.dept-edit{display:flex;gap:6px;align-items:center}
+.dept-edit select[name=department]{width:130px;flex-shrink:0}
+.dept-edit input{width:130px;padding:4px 8px;font:500 12px var(--fm);border:1.5px solid var(--rule-soft);border-radius:6px;background:var(--paper);color:var(--text)}
+.dept-edit select{padding:4px 6px;font:500 12px var(--fm);border:1.5px solid var(--rule-soft);border-radius:6px;background:var(--paper);color:var(--text)}
+.dept-mgr-title{font-family:var(--fd);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;margin:26px 0 10px}
+.dept-add{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.dept-add input{width:180px;padding:6px 10px;font:500 12px var(--fm);border:1.5px solid var(--rule-soft);border-radius:6px;background:var(--paper);color:var(--text)}
+.user-add-bar{margin:4px 0 6px}
+.dept-mgr{display:flex;flex-direction:column;gap:0;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;padding:4px 14px}
+.dept-item{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--rule-soft)}
+.dept-item:last-child{border-bottom:0}
+.dept-item .fos-sub{margin-bottom:0}  /* 覆盖 .fos-sub 全局的 margin-bottom:20px，否则 flex 居中会错位 */
+.dept-name{font:600 13px var(--fm)}
+.dept-rename{display:flex;gap:6px;align-items:center;flex:1}
+.dept-rename input{width:160px;padding:4px 8px;font:500 12px var(--fm);border:1.5px solid var(--rule-soft);border-radius:6px;background:var(--paper);color:var(--text)}
+.row-inactive{opacity:.5}
+</style>
+<script>
+/* 添加账号弹窗（事件委托绑定在 document 上，列表 AJAX 刷新后监听不丢） */
+function getCSRFToken(){
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#openUserAdd')) {
+    const dlg = document.getElementById('userAddDialog');
+    const err = document.getElementById('userAddErr');
+    if (err) err.hidden = true;
+    dlg.showModal();
+  }
+  if (e.target.closest('#cancelUserAdd')) {
+    document.getElementById('userAddDialog').close();
+  }
+});
+
+document.addEventListener('submit', async (e) => {
+  const form = e.target;
+  if (form.id !== 'userAddForm') return;
+  e.preventDefault();
+  const btn = document.getElementById('userAddSubmit');
+  const err = document.getElementById('userAddErr');
+  btn.disabled = true; btn.textContent = '创建中…';
+  try {
+    // 注意不能用 form.action：表单里有 name="action" 的隐藏输入会遮蔽它
+    const resp = await fetch(location.href, {
+      method: 'POST',
+      body: new FormData(form),
+      headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': getCSRFToken()},
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      err.textContent = data.message || '创建失败';
+      err.hidden = false;
+      return;
+    }
+    document.getElementById('userAddDialog').close();
+    // AJAX 刷新列表：重新拉当前页并替换内容区（用户表格 + 部门计数一起更新）
+    const page = await (await fetch(location.href)).text();
+    const doc = new DOMParser().parseFromString(page, 'text/html');
+    document.querySelector('.fos-container').innerHTML =
+      doc.querySelector('.fos-container').innerHTML;
+    const wrap = document.querySelector('.msgs');
+    const note = document.createElement('div');
+    note.className = 'msg-success';
+    note.textContent = data.message;
+    if (!wrap) {
+      const box = document.createElement('div');
+      box.className = 'msgs';
+      box.appendChild(note);
+      document.querySelector('.fos-container').prepend(box);
+    } else {
+      wrap.prepend(note);
+    }
+  } catch (err2) {
+    err.textContent = '请求失败：' + err2;
+    err.hidden = false;
+  } finally {
+    btn.disabled = false; btn.textContent = '创建账号';
+  }
+});
+</script>
+{% endblock %}

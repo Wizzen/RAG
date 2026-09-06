@@ -4,11 +4,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{% block title %}FOS_RAG{% endblock %}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Archivo:wght@500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{% static 'css/fos.css' %}">
+<script>
+/* 主题预置：在样式表加载前应用，避免暗色用户看到闪白（FOUC）。
+   localStorage 优先；未设置时跟随系统偏好。 */
+(function(){
+  var t = null;
+  try { t = localStorage.getItem('fos-theme'); } catch(e) {}
+  if (t !== 'dark' && t !== 'light') {
+    t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+<title>{% block title %}SHDR RAG{% endblock %}</title>
+<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20260906-7">
 <style>
   /* Back-compat aliases so existing child templates keep working.
      Child pages use the old variable names; we map them to the new tokens. */
@@ -16,24 +25,28 @@
     --bg:var(--paper);--panel:var(--paper);--card:var(--surface);--elev:var(--surface);
     --border:var(--rule-soft);--border-hi:var(--rule);
     --text:var(--text);--dim:var(--dim);--mute:var(--mute);
-    --accent:var(--danger);--accent2:var(--warn);--soft:var(--accent-soft);
+    --accent:var(--brand);--accent2:var(--warn);--soft:var(--brand-soft);
     --green:var(--ok);--red:var(--danger);--amber:var(--warn);
   }
-  h1{font-family:var(--fd);font-weight:800;font-size:22px;text-transform:uppercase;letter-spacing:-.01em;margin-bottom:16px}
+  h1{font-weight:700;font-size:22px;margin-bottom:16px}
 </style>
 </head>
 <body>
 <div class="fos-topbar" style="position:relative">
-  <span class="lock">🔒</span>
-  <a class="brand" href="/">FOS<span class="dot">·</span>RAG</a>
+  <a class="brand" href="/"><svg class="brand-mark" viewBox="0 0 460 352" aria-hidden="true"><circle cx="166" cy="146" r="46"/><circle cx="294" cy="146" r="46"/><circle cx="230" cy="214" r="74"/></svg>SHDR<span class="dot">·</span>RAG</a>
   <nav id="nav" aria-label="主导航">
-    <a href="/kb/manage/">资料上传</a>
+    {% if user_is_staff or user_is_manager %}<a href="/kb/manage/">资料上传</a>{% endif %}
     <a href="/kb/search/">综合搜索</a>
     <a href="/kb/ask/">检索</a>
     <a href="/dashboard/">日志</a>
-    {% if user.is_staff %}<a href="/kb/settings/">设置</a><a href="/admin/">后台</a>{% endif %}
+    {% if user_is_staff or user_is_manager %}<a href="/accounts/users/">用户</a>{% endif %}
+    {% if user_is_staff %}<a href="/kb/settings/">设置</a><a href="/kb/eval/">评估</a><a href="/admin/">后台</a>{% endif %}
   </nav>
   <span class="sp"></span>
+  <button class="theme-btn" id="themeBtn" type="button" aria-label="切换亮暗主题" title="切换亮暗主题">
+    <svg class="ico-sun" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M15.7 4.3l-1.4 1.4M5.7 14.3l-1.4 1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="10" r="3.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+    <svg class="ico-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.4A7 7 0 0 1 7.6 3.5a7 7 0 1 0 8.9 8.9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+  </button>
   <span class="auth">
     <span class="who">{{ user.username }}{% if user_department and user_department != '通用' %} <span class="topbar-dept" title="我的部门">{{ user_department }}</span>{% endif %}</span>
     {% if user.is_authenticated %}<a href="/accounts/logout/">退出</a>{% else %}<a href="/accounts/login/">登录</a>{% endif %}
@@ -44,9 +57,50 @@
   {% block content %}{% endblock %}
 </div>
 {% block scripts %}{% endblock %}
+<div id="toastHost" aria-live="polite"></div>
+{# Django messages → toast（escapejs 保证 </script> 等无法逃逸 JSON 字符串） #}
+<script id="dj-msgs" type="application/json">[{% for m in messages %}{"text":"{{ m|escapejs }}","tag":"{{ m.tags|escapejs }}"}{% if not forloop.last %},{% endif %}{% endfor %}]</script>
+<script>
+/* 全局 Toast：fosToast(text, type, opts)
+   type: ok | err | warn | info；opts.sticky=true 时不自动消失（点击关闭） */
+window.fosToast = function(text, type, opts){
+  type = type || 'ok'; opts = opts || {};
+  var host = document.getElementById('toastHost');
+  if (!host) return;
+  var t = document.createElement('div');
+  t.className = 'toast toast-' + type + (opts.sticky ? ' sticky' : '');
+  t.textContent = text;
+  host.appendChild(t);
+  requestAnimationFrame(function(){ t.classList.add('show'); });
+  var kill = function(){ t.classList.remove('show'); setTimeout(function(){ t.remove(); }, 300); };
+  t.addEventListener('click', kill);
+  if (!opts.sticky) setTimeout(kill, type === 'warn' ? 8000 : 4000);
+};
+(function(){
+  var raw = document.getElementById('dj-msgs');
+  if (!raw) return;
+  var map = {success:'ok', error:'err', warning:'warn', info:'info', debug:'info'};
+  try {
+    JSON.parse(raw.textContent).forEach(function(m){
+      var tag = (m.tag || '').split(' ')[0].toLowerCase();
+      window.fosToast(m.text, map[tag] || 'info',
+        {sticky: tag === 'warning' || tag === 'error'});
+    });
+  } catch(e) {}
+})();
+</script>
 <script>
 // mobile nav toggle
 (function(){var t=document.getElementById('navToggle'),n=document.getElementById('nav');if(!t||!n)return;t.addEventListener('click',function(){var o=n.classList.toggle('open');t.setAttribute('aria-expanded',o?'true':'false');});})();
+// theme toggle（亮暗互切，localStorage 持久化）
+(function(){
+  var b=document.getElementById('themeBtn');if(!b)return;
+  b.addEventListener('click',function(){
+    var cur=document.documentElement.dataset.theme==='dark'?'light':'dark';
+    document.documentElement.dataset.theme=cur;
+    try{localStorage.setItem('fos-theme',cur);}catch(e){}
+  });
+})();
 </script>
 </body>
 </html>

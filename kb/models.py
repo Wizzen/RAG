@@ -47,6 +47,11 @@ class KnowledgeBase(models.Model):
     doc_count = models.PositiveIntegerField("文档数", default=0)
     chunk_count = models.PositiveIntegerField("向量数", default=0)
 
+    # 向量来源标记：该库当前向量是用哪个 embedding 模型灌的（run_indexing 成功后自动盖章）。
+    # 换模型后未重建的库，检索质量会劣化——这个标签让管理员一眼看出哪个库需要 reindex_clean。
+    embedding_model = models.CharField("向量模型", max_length=200, blank=True, default="")
+    embedding_dimensions = models.PositiveIntegerField("向量维度", null=True, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
         verbose_name = "知识库"
@@ -63,6 +68,33 @@ class KnowledgeBase(models.Model):
         docs = sum(c.doc_count for c in children)
         chunks = sum(c.chunk_count for c in children)
         return docs, chunks
+
+    def effective_embedding_model(self) -> str:
+        """该节点向量的 embedding 模型名。文档库=自身；文件夹=子库一致时该模型，
+        不一致=「多个模型」，无向量=空串。用于判断哪些库与当前配置脱节。"""
+        if not self.is_folder:
+            return self.embedding_model
+        models = set(
+            self.children.filter(is_folder=False).exclude(embedding_model="")
+            .values_list("embedding_model", flat=True)
+        )
+        if len(models) == 1:
+            return models.pop()
+        return "多个模型" if models else ""
+
+    def embedding_label(self) -> str:
+        """管理页徽章文本：「模型名 · 维度」。"""
+        if not self.is_folder:
+            m, d = self.embedding_model, self.embedding_dimensions
+        else:
+            m = self.effective_embedding_model()
+            d = None
+            if m and m != "多个模型":
+                d = self.children.filter(is_folder=False, embedding_model=m).values_list(
+                    "embedding_dimensions", flat=True).first()
+        if not m:
+            return ""
+        return f"{m} · {d}维" if d else m
 
     def child_doc_slugs(self) -> list[str]:
         """文件夹下所有文档库的 slug（用于检索扇出）。文档库返回 [self.slug]。"""
@@ -136,6 +168,20 @@ class SiteConfig(models.Model):
     mineru_backend = models.CharField("MinerU Backend", max_length=60, blank=True, default="")
     mineru_lang = models.CharField("MinerU 语言", max_length=30, blank=True, default="")
 
+    # ---- 重排序（混合召回后的精排，OpenAI/Jina 兼容 /v1/rerank 端点）----
+    rerank_enabled = models.BooleanField("启用重排序", default=False)
+    rerank_base_url = models.CharField("Rerank Base URL", max_length=255, blank=True, default="")
+    rerank_api_key = models.CharField("Rerank API Key", max_length=255, blank=True, default="")
+    rerank_model = models.CharField("Rerank 模型", max_length=200, blank=True, default="")
+
+    # ---- 当前激活的预设名（展示用：配置页摘要卡显示「是哪个保存的配置」；
+    #      手动编辑后清空，表示「自定义」；不属于预设快照字段） ----
+    active_preset_llm = models.CharField(max_length=100, blank=True, default="")
+    active_preset_embedding = models.CharField(max_length=100, blank=True, default="")
+    active_preset_retrieval = models.CharField(max_length=100, blank=True, default="")
+    active_preset_mineru = models.CharField(max_length=100, blank=True, default="")
+    active_preset_rerank = models.CharField(max_length=100, blank=True, default="")
+
     updated_at = models.DateTimeField("更新时间", auto_now=True)
 
     class Meta:
@@ -182,7 +228,31 @@ PRESET_CATEGORIES = {
     "embedding": ["embedding_base_url", "embedding_api_key", "embedding_model", "embedding_dimensions"],
     "retrieval": ["kb_chunk_size", "kb_chunk_overlap", "kb_top_k"],
     "mineru": ["mineru_api_base", "mineru_api_key", "mineru_backend", "mineru_lang"],
+    "rerank": ["rerank_enabled", "rerank_base_url", "rerank_api_key", "rerank_model"],
 }
+
+
+class EvalQuestion(models.Model):
+    """检索质量回归问题集（评估面板用）。
+
+    换 embedding 模型 / 改分块 / 调检索参数前后各跑一次评估，对比命中情况，
+    防止「改了配置检索悄悄变差」（2026-09 换 WeMM 时只能手工抽查的教训）。
+    """
+
+    question = models.TextField("问题", help_text="模拟真实检索的问法")
+    # 期望命中的文档文件名（可选；命中 = 结果片段的 source 含此子串）
+    expected_source = models.CharField("期望文档", max_length=255, blank=True, default="")
+    # 期望命中片段正文需包含的关键词（可选）
+    expected_keyword = models.CharField("期望关键词", max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "评估问题"
+        verbose_name_plural = "评估问题"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.question[:40]
 
 
 class ConfigPreset(models.Model):
@@ -196,6 +266,7 @@ class ConfigPreset(models.Model):
         EMBEDDING = "embedding", "向量模型"
         RETRIEVAL = "retrieval", "检索参数"
         MINERU = "mineru", "MinerU OCR"
+        RERANK = "rerank", "重排序"
 
     name = models.CharField("名称", max_length=80)
     category = models.CharField("分类", max_length=20, choices=Category.choices, default=Category.LLM)

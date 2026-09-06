@@ -22,7 +22,23 @@ SSE_TOKEN = "token"
 SSE_ERROR = "error"
 SSE_CODE_RUN = "code_run"  # 浏览器 Pyodide 沙箱执行的代码
 SSE_USAGE = "usage"        # 本轮 token 用量统计
-SSE_CITATIONS = "citations"  # 本轮检索的来源出处（含 doc_id/text，供前端渲染链接）
+SSE_CITATIONS = "citations"
+def _pick_anchor(clean_text: str) -> str:
+    """从片段正文挑一个「查看页高亮锚点」。
+
+    优先部件名/材质/中文短语（独特、能定位到具体行）；排除报告号/日期型
+    「数字-字母-数字」串（如 25Y0457 全文出现几十次，落点会到首页而非目标处）。
+    """
+    import re as _re
+    first_line = clean_text.split("\n", 1)[0].strip()
+    cands = _re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{6,40}", first_line)
+    for c in cands:
+        if _re.fullmatch(r"\d+[A-Za-z]\d+[A-Za-z0-9]*", c):
+            continue  # 报告号/日期型，太泛
+        return c
+    # 全部候选都被排除（整行都是报告号类 token）→ 退而求其次取行首
+    return first_line[:30]
+  # 本轮检索的来源出处（含 doc_id/text，供前端渲染链接）
 
 # 进程级持久化 checkpointer（AsyncSqliteSaver，data/checkpoints.sqlite3）。
 # 同一 thread_id 跨请求/跨重启共享同一会话上下文。
@@ -102,7 +118,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             return True
         return kb_obj.department in (DEPARTMENT_GENERAL, department)
 
-    system_prompt = f"""你是一名专业的知识助手，帮助用户查询游乐设施维护手册等知识库。
+    system_prompt = f"""你是知识库问答助手。
 
 知识库结构（重要）：
 知识库分两层：**文件夹**（含若干文档库）和**文档库**（每份文档独占一个向量库）。
@@ -223,9 +239,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             clean = _re.sub(r"^\s*#{1,6}\s*", "", clean)
             clean = _re.sub(r"^\s*[-*+]\s*", "", clean)
             clean = _re.sub(r"<[^>]+>", "", clean).strip()
-            first_line = clean.split("\n", 1)[0].strip()
-            m = _re.search(r"[\u4e00-\u9fffA-Za-z0-9]{6,40}", first_line)
-            snippet = m.group(0) if m else first_line[:30]
+            snippet = _pick_anchor(clean)
             # 过滤掉 HTML 属性词（rowspan/colspan 等，是表格残片非正文）
             if snippet.lower() in ("rowspan", "colspan", "cellspacing", "cellpadding", "valign"):
                 snippet = ""
@@ -323,25 +337,25 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 
         # 记录来源出处（与 kb_search 同一 cite_sink 逻辑：按文档去重，合并 highlights）
         import re as _re
+        # 批量解析 文件名 → doc_id（循环外一次查询，避免每片段一次的 N+1）
+        try:
+            from .models import Document
+            name_to_id = {
+                d["original_name"]: str(d["id"])
+                for d in Document.objects.filter(kb__slug=target)
+                .values("original_name", "id")
+            }
+        except Exception:
+            name_to_id = {}
         by_doc: dict[str, dict] = {}
         for r in results:
-            doc_id = ""
-            # 文件名 → doc_id（与 retriever.search 一致的解析方式）
-            try:
-                from .models import Document
-                d = Document.objects.filter(kb__slug=target, original_name=r.get("source", "")).first()
-                if d:
-                    doc_id = str(d.id)
-            except Exception:
-                pass
+            doc_id = name_to_id.get(r.get("source", ""), "")
             if not doc_id:
                 continue
             txt = r.get("text") or ""
             clean = _re.sub(r"^【[^】]*】\s*\n?", "", txt)
             clean = _re.sub(r"<[^>]+>", "", clean).strip()
-            first_line = clean.split("\n", 1)[0].strip()
-            m = _re.search(r"[\u4e00-\u9fffA-Za-z0-9]{6,40}", first_line)
-            snippet = m.group(0) if m else first_line[:30]
+            snippet = _pick_anchor(clean)
             if snippet.lower() in ("rowspan", "colspan", "cellspacing", "cellpadding", "valign"):
                 snippet = ""
             entry = by_doc.get(doc_id)

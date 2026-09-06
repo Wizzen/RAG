@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from urllib.parse import urlsplit
 
 # 让 FOS_RAG 能复用父项目的切块逻辑
 _PARENT = Path(__file__).resolve().parent.parent.parent
@@ -330,10 +331,70 @@ def _section_aware_chunk(text: str, source_name: str) -> list[LCDocument]:
 # ------------------------------------------------------------------
 # Embedding（复用父项目客户端）
 # ------------------------------------------------------------------
+def is_wemm(model: str) -> bool:
+    """模型名含 wemm → 走自托管 WeMM 服务的 /embed 协议（非 OpenAI 兼容）。"""
+    return "wemm" in (model or "").lower()
+
+
+class WeMMEmbeddings:
+    """自托管 WeMM 向量化服务客户端（实现 langchain Embeddings 接口）。
+
+    协议：POST {base_url}/embed  {"inputs": [{"text": ...}], "dimension": n}
+          → {"embeddings": [[...], ...]}
+    服务空闲 10 分钟会自动卸载模型，下一个请求现场冷加载（20s+），
+    因此超时给足；批量压到 32 条/请求避免单次推理过久。
+    """
+
+    _BATCH = 32
+    _TIMEOUT = 180
+
+    def __init__(self, base_url: str, dimensions: int | None = None):
+        self.base_url = (base_url or "").rstrip("/")
+        self.dimensions = dimensions or None
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self._BATCH):
+            batch = texts[i:i + self._BATCH]
+            payload: dict[str, Any] = {"inputs": [{"text": t} for t in batch]}
+            if self.dimensions:
+                payload["dimension"] = self.dimensions
+            r = httpx.post(self.base_url + "/embed", json=payload, timeout=self._TIMEOUT)
+            r.raise_for_status()
+            vecs = (r.json() or {}).get("embeddings")
+            if not vecs or len(vecs) != len(batch):
+                raise ValueError(
+                    f"WeMM 返回向量数不匹配（{len(vecs or [])}/{len(batch)}），"
+                    f"端点：{self.base_url}")
+            out.extend(vecs)
+        return out
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._embed(list(texts))
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed([text])[0]
+
+
 def _embeddings():
+    e = embedding_settings()
+    if is_wemm(e["model"]):
+        if not e["base_url"]:
+            raise ValueError("WeMM 向量服务未配置 Base URL。")
+        return WeMMEmbeddings(base_url=e["base_url"], dimensions=e["dimensions"])
+
     from langchain_openai import OpenAIEmbeddings
 
-    e = embedding_settings()
+    # 云端 embedding API 普遍限制单请求条数（SiliconFlow 等），langchain 默认
+    # 一次发 1000 条会 4xx。本地/内网服务无此限制，用大批量省往返。
+    host = (urlsplit(e["base_url"]).hostname or "")
+    is_local = (
+        host in ("localhost", "::1")
+        or host.startswith("127.")
+        or host.startswith("192.168.")
+        or host.startswith("10.")
+        or re.match(r"^172\.(1[6-9]|2\d|3[01])\.", host or "") is not None
+    )
     return OpenAIEmbeddings(
         model=e["model"],
         # Ollama's OpenAI-compatible API does not need authentication, but the
@@ -341,6 +402,7 @@ def _embeddings():
         api_key=e["api_key"] or "local-no-key",
         base_url=e["base_url"],
         check_embedding_ctx_length=False,
+        chunk_size=1000 if is_local else 64,
     )
 
 
@@ -386,7 +448,22 @@ def run_indexing(md_content: str, kb_slug: str, source_name: str) -> int:
         persist_directory=str(_kb_persist_dir(kb_slug)),
     )
     vs.add_documents(chunks)
+    # 混合检索：向量入库成功后同步写关键词索引（失败只降级，不阻断）
+    from . import keyword_index
+    keyword_index.add_chunks(kb_slug, chunks)
+    _stamp_embedding_model(kb_slug)
     return len(chunks)
+
+
+def _stamp_embedding_model(kb_slug: str) -> None:
+    """向量化成功后在 KB 上记录所用 embedding 模型（管理页徽章 / 判断是否需重建）。"""
+    from .models import KnowledgeBase
+
+    e = embedding_settings()
+    KnowledgeBase.objects.filter(slug=kb_slug).update(
+        embedding_model=e["model"] or "",
+        embedding_dimensions=e["dimensions"],
+    )
 
 
 # ------------------------------------------------------------------
