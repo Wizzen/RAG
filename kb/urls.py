@@ -18,6 +18,7 @@ urlpatterns = [
     # 文档查看（所有登录用户）
     path("doc/<uuid:doc_id>/html/", views.document_html, name="document_html"),
     path("doc/<uuid:doc_id>/slices/", views.document_slices, name="document_slices"),
+    path("doc/<uuid:doc_id>/img/<str:name>", views.doc_image, name="doc_image"),
 
     # 站点配置（仅 staff）
     path("settings/", views.site_settings, name="settings"),

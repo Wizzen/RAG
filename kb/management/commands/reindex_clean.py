@@ -76,7 +76,7 @@ class Command(BaseCommand):
             new_chunk_total = 0
             for doc in lib_docs:
                 try:
-                    n = run_indexing(doc.md_content, kb_slug, doc.original_name)
+                    n = run_indexing(doc.md_content, kb_slug, doc.original_name, doc_id=doc.id)
                     doc.chunk_count = n
                     doc.save(update_fields=["chunk_count", "updated_at"])
                     new_chunk_total += n

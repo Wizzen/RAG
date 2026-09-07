@@ -131,6 +131,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 1. **选库**：不确定有哪些文档库时调一次 list_knowledge_bases 查看层级与 slug，之后按需用 kb_slug 定位到具体文档库。不要每次都调。
 2. **检索（两种工具，按需选择）**：
    - **kb_search**：按问题语义检索最相关的少数片段（指定 kb_slug 选库，不传则用默认范围）。适合「问某个点」「查某个指标」。单次问题内最多调 2 次。
+   - **多模态检索**：kb_search 的结果里可能混有 `[图片]` 条目——这是从 PDF 提取的图纸/示意图/表格截图，其文本是图片所在章节与图注（OCR 片段）。用户问「图纸/布置图/示意图/长什么样」这类视觉问题时，这些命中很有价值：依据其上下文文字回答，并提及「相关图纸见回答下方引用区的图片」。图片会**自动**附在引用区供用户查看——不要在回答里拼贴图片地址或「查看: /kb/...」链接。
    - **kb_fetch_doc**：按 文档/章节/关键词 提取**全部**匹配片段（非相似度排序，按文档原序）。适合用户要「完整表格/完整清单/全部条目」「导出整张表」，或当 kb_search 返回的表格/清单明显被切断（缺行缺列）时改用它补全。**取完整表格的正确策略**：一张大表常被切成很多块，且数据行往往不含表名关键词（如表名是「受力部件」但数据行是材料牌号/规格）。所以①先用表名关键词（contains=表名）取表头/说明性块；②看其中出现的材料牌号/编号/类别词（如 API 5L、CrNiMo、QT、序号等），再用这些作为 contains 各取一次，把数据行抓全；③最后把多批片段按文档原序拼回整表。单次问题内最多调 4 次（该工具不走向量、开销小）。
 3. **检索经济性**：已取到的内容直接用于回答，不要用相近关键词重复检索。若第一次结果不足，换一个实质不同的关键词再查一次。生成 write_analysis 前，确保已取到足够完整的数据。
 4. **如何描述你的依据（重要）**：你的知识来自 kb_search / kb_fetch_doc 取回的**知识库片段**，不是你「打开了 PDF」或「读取了整份文档」。回答时请如实表述为「根据从 XX 文档检索到的内容」「知识库中的相关片段显示」，并标注来源文档名。片段可能不完整或含 OCR 误差——不要假装你看到了完整的原文/整张表格；若已用 kb_fetch_doc 多次仍取不到某部分，明确说明「检索到的片段中未包含该部分」。
@@ -182,7 +183,11 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         return "可用知识库（📁=文件夹可跨文档检索，📄=文档库搜单份文档）：\n" + "\n".join(lines)
 
     def kb_search(query: str, k: int = 0, kb_slug: str = "") -> str:
-        """检索知识库，返回带来源标注的相关文本片段。
+        """检索知识库，返回带来源标注的相关片段（多模态：含文本与图片）。
+
+        结果里可能混有 [图片] 条目 = 文档里的图纸/示意图（其文本为章节与图注）。
+        图片命中会自动附到回答的引用区给用户看，按其上下文文字利用即可，
+        不要在回答里复述图片链接。
 
         参数:
             query: 要检索的问题或关键词。
@@ -232,6 +237,21 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             doc_id = r.get("doc_id", "")
             if not doc_id:
                 continue
+            # 图片命中：不做文本高亮锚点，挂到该文档引用条目的 images 列表
+            if r.get("type") == "image" and r.get("image"):
+                entry = by_doc.get(doc_id)
+                img_url = f"/kb/doc/{doc_id}/img/{r['image']}"
+                if entry is None:
+                    by_doc[doc_id] = {
+                        "doc_id": doc_id, "source": r.get("source", ""),
+                        "highlights": [], "images": [img_url],
+                        "best_score": r.get("score", 0),
+                    }
+                elif img_url not in entry.get("images", []):
+                    entry.setdefault("images", []).append(img_url)
+                    if r.get("score", 0) > entry["best_score"]:
+                        entry["best_score"] = r.get("score", 0)
+                continue
             # 清洗 chunk 文本为可匹配的纯文本（去切块器加的【section】前缀、
             # Markdown 标记、HTML 残片），再取一个连续字符锚点用于高亮定位。
             txt = r.get("text") or ""
@@ -268,18 +288,29 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                     "doc_id": entry["doc_id"],
                     "source": entry["source"],
                     "highlights": list(entry["highlights"]),
+                    "images": list(entry.get("images", [])),
                 })
             else:
-                # 合并 highlights（去重）
+                # 合并 highlights / images（去重）
                 for h in entry["highlights"]:
                     if h not in existing["highlights"]:
                         existing["highlights"].append(h)
+                for u in entry.get("images", []):
+                    existing.setdefault("images", [])
+                    if u not in existing["images"]:
+                        existing["images"].append(u)
         for i, r in enumerate(results, 1):
             # 来源是【文档文件名】；section（所属章节）作为补充上下文，不是来源本身。
             src = r.get("source") or "未知来源"
             section = r.get("section") or ""
             src_full = f"{src}（章节: {section}）" if section else src
-            blocks.append(f"[{i}] (来源文档: {src_full})\n{r['text']}")
+            if r.get("type") == "image" and r.get("doc_id") and r.get("image"):
+                # 不带图片 URL：图片命中已自动附到回答引用区，给 LLM 看 URL 只会被
+                # 原样抄进答案正文（实测如此）
+                body = f"[图片] {r.get('text', '')}"
+            else:
+                body = r["text"]
+            blocks.append(f"[{i}] (来源文档: {src_full})\n{body}")
         header = (
             f"已从知识库「{target}」检索到 {len(results)} 条相关片段"
             f"（向量相似度检索，非原文直读；片段可能不完整或含 OCR 噪声）。"

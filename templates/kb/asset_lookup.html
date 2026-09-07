@@ -5,24 +5,27 @@
   <div>
     <h1>综合关联搜索</h1>
   </div>
-  <span class="no-ai">RULE-BASED · NO AI</span>
+  <span class="no-ai">RULE-BASED + SEMANTIC</span>
 </div>
 
 
 <form method="get" class="lookup-form">
-  <label for="drawingQuery">图纸号 / 部件 / G-code / 设备 / APEX / 手册关键词</label>
   <div class="lookup-row">
-    <input id="drawingQuery" name="q" value="{{ q }}" autofocus autocomplete="off">
+    <input id="drawingQuery" name="q" value="{{ q }}" placeholder="图纸号 / 部件 / G-code / 设备 / APEX / 任意问题" autofocus autocomplete="off">
     <button class="btn primary" type="submit">综合搜索</button>
     {% if q %}<a class="btn outline" href="{% url 'kb:search' %}">清除</a>{% endif %}
   </div>
-  <p class="field-help">业务键查询忽略大小写、空格、横线和常见分隔符；命中任一业务键后，会沿图纸号、部件号、G-code、设备号和 APEX 编号继续关联，同时搜索手册正文。</p>
 </form>
 
 {% if q and lookup %}
-  <div class="result-summary {% if lookup.records or lookup.manual_matches %}has-result{% else %}no-result{% endif %}">
-    <strong>{% if lookup.records or lookup.manual_matches %}已找到「{{ q }}」的综合结果{% else %}未找到「{{ q }}」{% endif %}</strong>
-    <span>直接业务命中 {{ lookup.direct_count }} 条 · 关联后 {{ lookup.records|length }} 条 · 手册命中 {{ lookup.manual_matches|length }} 条</span>
+  <div class="result-summary {% if lookup.records or lookup.manual_matches or semantic_matches %}has-result{% else %}no-result{% endif %}">
+    <strong>{% if lookup.records or lookup.manual_matches or semantic_matches %}已找到「{{ q }}」的综合结果{% else %}未找到「{{ q }}」{% endif %}</strong>
+    <span class="sum-chips">
+      <span class="sum-chip{% if not lookup.direct_count %} zero{% endif %}" title="在导入的业务表格（图纸号 / 部件号 / G-code / 设备 / APEX）里，搜索词直接匹配到的行">业务表 {{ lookup.direct_count }}</span>
+      <span class="sum-chip{% if not lookup.records %} zero{% endif %}" title="沿 图纸号↔部件↔设备↔APEX↔停机记录 的关系链扩展出的相关行（含上面的直接命中）">含关联 {{ lookup.records|length }}</span>
+      <span class="sum-chip{% if not lookup.manual_matches %} zero{% endif %}" title="在手册 / PDF 正文里逐行查找你输入的原文（纯字面匹配，不懂同义词）">手册原文 {{ lookup.manual_matches|length }}</span>
+      <span class="sum-chip{% if not semantic_matches %} zero{% endif %}" title="按意思找（向量+重排）：懂自然语言描述，可命中文档里的图片">语义·含图 {{ semantic_matches|length }}</span>
+    </span>
     {% if lookup.match_mode == "partial" and lookup.records %}<span class="warn-chip">使用了部分匹配</span>{% endif %}
   </div>
 
@@ -77,7 +80,7 @@
   <section class="result-section kind-manual">
     {# 同一文档的多处命中合并为一张卡：首个命中做摘要，每处命中一个 chip（点击跳到该处并高亮）#}
     {% regroup lookup.manual_matches by doc_id as doc_groups %}
-    <div class="section-title"><h2>手册相关内容</h2><span>{{ lookup.manual_matches|length }} 处命中 · {{ doc_groups|length }} 份文档</span></div>
+    <div class="section-title"><h2>手册原文命中</h2><span>{{ lookup.manual_matches|length }} 处 · 逐行字面匹配，不认识同义说法</span></div>
     <div class="manual-list">
       {% for g in doc_groups %}
       {% with first=g.list.0 %}
@@ -99,7 +102,38 @@
   </section>
   {% endif %}
 
-  {% if not lookup.records and not lookup.manual_matches %}
+  {% if semantic_matches %}
+  <section class="result-section kind-semantic">
+    <div class="section-title"><h2>语义命中</h2><span>{{ semantic_matches|length }} 条 · 按意思找：懂自然语言，可命中图片</span></div>
+    <div class="manual-list">
+      {% for m in semantic_matches %}
+      <article class="manual-card">
+        <div><strong>{{ m.source }}</strong>
+          <span>{% if m.section %}{{ m.section }} · {% endif %}{% if m.is_image %}🖼 图片块{% else %}{{ m.via }}{% endif %}{% if m.score %} · 相关度 {{ m.score|floatformat:2 }}{% endif %}</span>
+        </div>
+        <p>{{ m.text|truncatechars:180 }}</p>
+        {% if m.is_image %}
+        <div class="sem-imgs">
+          {% for u in m.images %}
+          <a href="{{ u }}" target="_blank" rel="noopener" title="点击查看原图">
+            <img src="{{ u }}" alt="命中图片：{{ m.section }}" loading="lazy">
+          </a>
+          {% endfor %}
+        </div>
+        {% endif %}
+        <div class="hit-chips">
+          {% if m.is_image %}
+            {% for u in m.images %}<a class="hit-chip img-chip" href="{{ u }}" target="_blank" rel="noopener">🖼 原图</a>{% endfor %}
+          {% endif %}
+          <a class="hit-chip" href="/kb/doc/{{ m.doc_id }}/slices/?h={{ m.anchor|urlencode }}" target="_blank" rel="noopener">查看切片上下文</a>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if not lookup.records and not lookup.manual_matches and not semantic_matches %}
   <div class="empty">没有匹配记录。请检查关键词，或确认业务表已识别出图纸号、部件号、G-code、设备号、APEX 等关联列。</div>
   {% endif %}
 {% endif %}
@@ -132,8 +166,17 @@
 
 {% block scripts %}
 <style>
-.asset-head,.section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.asset-head h1{margin-bottom:5px}.no-ai{font-family:var(--fm);font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--ok);border:2px solid var(--ok);padding:7px 10px;border-radius:4px;white-space:nowrap}.lookup-form{margin:20px 0 18px;padding:20px;background:var(--surface);border:2px solid var(--rule);border-left:6px solid var(--danger);border-radius:8px}.lookup-form>label{display:block;font-family:var(--fd);font-size:12px;font-weight:700;text-transform:uppercase;margin-bottom:7px}.lookup-row{display:flex;gap:9px}.lookup-row input{flex:1;min-width:0;padding:12px 14px;border:2px solid var(--rule);border-radius:5px;font-family:var(--fm);font-size:16px;text-transform:uppercase}.lookup-row input:focus{outline:none;border-color:var(--danger)}.field-help{font-size:11px;color:var(--mute);margin:8px 0 0}.result-summary{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 15px;border:2px solid var(--rule);border-radius:6px;margin-bottom:16px}.result-summary.has-result{background:var(--ok-soft);border-color:var(--ok)}.result-summary.no-result{background:var(--warn-soft);border-color:var(--warn)}.result-summary span{font-size:12px;color:var(--dim)}.warn-chip{font-family:var(--fm);font-size:10px!important;font-weight:700;background:var(--warn);color:var(--text)!important;padding:4px 7px;border-radius:3px}.key-chain,.result-section,.import-panel,.dataset-panel{margin:18px 0;padding:16px;border:2px solid var(--rule);border-radius:8px;background:var(--surface)}.key-chain h2,.section-title h2{font:700 14px var(--fd);text-transform:uppercase;margin:0}.key-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}.key-block{display:flex;flex-direction:column;gap:3px;padding:8px 10px;background:var(--paper);border:1px solid var(--rule-soft);border-radius:4px}.key-block span{font-size:9px;font-family:var(--fm);color:var(--mute);text-transform:uppercase}.key-block strong{font:600 11px var(--fm)}.section-title>span,.section-title p{font-size:11px;color:var(--mute);margin:3px 0 0}.record-list,.manual-list{display:grid;gap:10px;margin-top:12px}.record-card,.manual-card{padding:12px;border:1px solid var(--rule-soft);border-left:4px solid var(--rule);border-radius:5px;background:var(--paper)}.kind-downtime .record-card{border-left-color:var(--danger)}.kind-apex .record-card{border-left-color:var(--warn)}.kind-parts .record-card{border-left-color:var(--ok)}.kind-drawing .record-card{border-left-color:#1f4fa8}.record-meta,.manual-card>div{display:flex;justify-content:space-between;gap:12px}.record-meta strong,.manual-card strong{font-size:12px}.record-meta span,.manual-card span{font:10px var(--fm);color:var(--mute)}.record-keys{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}.record-keys span{display:flex;gap:6px;font:11px var(--fm);padding:5px 7px;background:var(--surface);border:1px solid var(--rule-soft);border-radius:3px}.record-keys b{font-family:var(--fb);color:var(--mute)}details summary{cursor:pointer;font-size:11px;color:var(--dim)}.raw-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;margin:9px 0 0}.raw-grid div{padding:6px;background:var(--surface);border-radius:3px;min-width:0}.raw-grid dt{font-size:9px;color:var(--mute)}.raw-grid dd{font:11px var(--fm);margin:2px 0 0;overflow-wrap:anywhere}.manual-card p{font-size:12px;line-height:1.55;color:var(--dim);margin:8px 0}.import-form{display:grid;grid-template-columns:minmax(180px,240px) 1fr auto;gap:10px;align-items:end;margin-top:13px}.import-form select,.import-form input[type=file]{width:100%;min-height:40px;padding:8px;border:2px solid var(--rule);border-radius:5px;background:var(--paper)}.alias-note{display:flex;gap:6px;flex-wrap:wrap;margin-top:13px;padding-top:12px;border-top:1px solid var(--rule-soft)}.alias-note strong,.alias-note span{font-size:10px;padding:4px 6px;border-radius:3px}.alias-note span{background:var(--paper);font-family:var(--fm)}.dataset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px;margin-top:12px}.dataset-grid article{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--rule-soft);border-radius:5px;background:var(--paper)}.dataset-kind{font:700 9px var(--fm);color:var(--danger);text-transform:uppercase}.dataset-grid strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dataset-grid div,.dataset-grid small{font-size:10px;color:var(--mute)}
+.asset-head,.section-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.asset-head h1{margin-bottom:5px}.no-ai{font-family:var(--fm);font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--ok);border:2px solid var(--ok);padding:7px 10px;border-radius:4px;white-space:nowrap}.lookup-form{margin:20px 0 18px;padding:20px;background:var(--surface);border:2px solid var(--rule);border-left:6px solid var(--danger);border-radius:8px}.lookup-form>label{display:block;font-family:var(--fd);font-size:12px;font-weight:700;text-transform:uppercase;margin-bottom:7px}.lookup-row{display:flex;gap:9px}.lookup-row input{flex:1;min-width:0;padding:12px 14px;border:2px solid var(--rule);border-radius:5px;font-family:var(--fm);font-size:16px;text-transform:uppercase}.lookup-row input:focus{outline:none;border-color:var(--danger)}.field-help{font-size:11px;color:var(--mute);margin:8px 0 0}.result-summary{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 15px;border:2px solid var(--rule);border-radius:6px;margin-bottom:16px}.result-summary.has-result{background:var(--ok-soft);border-color:var(--ok)}.result-summary.no-result{background:var(--warn-soft);border-color:var(--warn)}.result-summary span{font-size:12px;color:var(--dim)}
+.sum-chips{display:flex;gap:6px;flex-wrap:wrap}
+.sum-chip{font:600 11px var(--fm);padding:4px 9px;background:var(--paper);border:1.5px solid var(--rule-soft);border-radius:999px;cursor:help}
+.sum-chip.zero{opacity:.4}.warn-chip{font-family:var(--fm);font-size:10px!important;font-weight:700;background:var(--warn);color:var(--text)!important;padding:4px 7px;border-radius:3px}.key-chain,.result-section,.import-panel,.dataset-panel{margin:18px 0;padding:16px;border:2px solid var(--rule);border-radius:8px;background:var(--surface)}.key-chain h2,.section-title h2{font:700 14px var(--fd);text-transform:uppercase;margin:0}.key-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:11px}.key-block{display:flex;flex-direction:column;gap:3px;padding:8px 10px;background:var(--paper);border:1px solid var(--rule-soft);border-radius:4px}.key-block span{font-size:9px;font-family:var(--fm);color:var(--mute);text-transform:uppercase}.key-block strong{font:600 11px var(--fm)}.section-title>span,.section-title p{font-size:11px;color:var(--mute);margin:3px 0 0}.record-list,.manual-list{display:grid;gap:10px;margin-top:12px}.record-card,.manual-card{padding:12px;border:1px solid var(--rule-soft);border-left:4px solid var(--rule);border-radius:5px;background:var(--paper)}.kind-downtime .record-card{border-left-color:var(--danger)}.kind-apex .record-card{border-left-color:var(--warn)}.kind-parts .record-card{border-left-color:var(--ok)}.kind-drawing .record-card{border-left-color:#1f4fa8}.record-meta,.manual-card>div{display:flex;justify-content:space-between;gap:12px}.record-meta strong,.manual-card strong{font-size:12px}.record-meta span,.manual-card span{font:10px var(--fm);color:var(--mute)}.record-keys{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}.record-keys span{display:flex;gap:6px;font:11px var(--fm);padding:5px 7px;background:var(--surface);border:1px solid var(--rule-soft);border-radius:3px}.record-keys b{font-family:var(--fb);color:var(--mute)}details summary{cursor:pointer;font-size:11px;color:var(--dim)}.raw-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;margin:9px 0 0}.raw-grid div{padding:6px;background:var(--surface);border-radius:3px;min-width:0}.raw-grid dt{font-size:9px;color:var(--mute)}.raw-grid dd{font:11px var(--fm);margin:2px 0 0;overflow-wrap:anywhere}.manual-card p{font-size:12px;line-height:1.55;color:var(--dim);margin:8px 0}.import-form{display:grid;grid-template-columns:minmax(180px,240px) 1fr auto;gap:10px;align-items:end;margin-top:13px}.import-form select,.import-form input[type=file]{width:100%;min-height:40px;padding:8px;border:2px solid var(--rule);border-radius:5px;background:var(--paper)}.alias-note{display:flex;gap:6px;flex-wrap:wrap;margin-top:13px;padding-top:12px;border-top:1px solid var(--rule-soft)}.alias-note strong,.alias-note span{font-size:10px;padding:4px 6px;border-radius:3px}.alias-note span{background:var(--paper);font-family:var(--fm)}.dataset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px;margin-top:12px}.dataset-grid article{display:flex;flex-direction:column;gap:5px;padding:10px;border:1px solid var(--rule-soft);border-radius:5px;background:var(--paper)}.dataset-kind{font:700 9px var(--fm);color:var(--danger);text-transform:uppercase}.dataset-grid strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dataset-grid div,.dataset-grid small{font-size:10px;color:var(--mute)}
 .hit-chips{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0 0}
+.kind-semantic .manual-card{border-left-color:#7c4dbe}
+.sem-imgs{display:flex;gap:8px;flex-wrap:wrap;margin:9px 0 0}
+.sem-imgs img{display:block;max-height:150px;max-width:min(340px,100%);border:1.5px solid var(--rule-soft);border-radius:5px;background:var(--paper)}
+.sem-imgs a:hover img{border-color:#7c4dbe}
+.img-chip{border-color:#7c4dbe;color:#7c4dbe}
+.img-chip:hover{border-color:#7c4dbe;color:#5a3591;background:var(--paper)}
 .hit-chip{font:600 11px var(--fm);padding:4px 9px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:999px;color:var(--dim);text-decoration:none;cursor:pointer;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hit-chip:hover{border-color:var(--danger);color:var(--danger);background:var(--paper)}
 @media(max-width:720px){.asset-head{display:block}.no-ai{display:inline-block;margin-top:9px}.lookup-row{flex-wrap:wrap}.lookup-row input{flex-basis:100%}.import-form{grid-template-columns:1fr}.record-meta,.manual-card>div{display:block}.record-meta span,.manual-card span{display:block;margin-top:4px}}

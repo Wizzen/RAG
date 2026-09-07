@@ -338,10 +338,12 @@
       Object.values(toolRows).forEach(markDone);
       if (!buf && !answerEl.textContent.trim()) answerEl.textContent = '（无返回）';
       render();
-      // 引用 chip → 切片页
+      // 引用 chip → 切片页；图片命中内联缩略图直接展示
       if (cites.length) {
         const row = document.createElement('div');
         row.className = 'cite-row';
+        const imgRow = document.createElement('div');
+        imgRow.className = 'cite-imgs';
         cites.forEach(c => {
           if (!c.doc_id) return;
           const a = document.createElement('a');
@@ -353,8 +355,20 @@
           let name = (c.source || '文档').replace(/\.[^.]+$/, '');
           a.textContent = name.slice(0, 22);
           row.appendChild(a);
+          (c.images || []).forEach((u, idx) => {
+            const ia = document.createElement('a');
+            ia.className = 'cite-img-link';
+            ia.target = '_blank'; ia.rel = 'noopener';
+            ia.title = '命中图片 ' + (idx + 1) + '（来自 ' + name + '）· 点击看原图';
+            const im = document.createElement('img');
+            im.src = u; im.loading = 'lazy'; im.alt = '命中图片';
+            ia.appendChild(im);
+            imgRow.appendChild(ia);
+          });
         });
-        if (row.children.length) am.querySelector('.cites').appendChild(row);
+        const citesEl = am.querySelector('.cites');
+        if (row.children.length) citesEl.appendChild(row);
+        if (imgRow.children.length) citesEl.appendChild(imgRow);
       }
     } catch (err) {
       answerEl.classList.remove('thinking');

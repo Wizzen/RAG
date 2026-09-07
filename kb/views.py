@@ -457,6 +457,35 @@ def doc_status_api(request, slug):
 
 
 @login_required
+def doc_image(request, doc_id, name):
+    """文档图片（MinerU 提取的插图）。
+
+    刻意不走 media/ 静态服务：这里做与查看页一致的部门级访问控制，
+    防止跨部门文档图片被直接 URL 枚举。文件名是内容哈希，可长缓存。
+    """
+    import re as _re
+    from django.http import FileResponse
+    from . import access as kb_access
+    from .pipeline import doc_image_dir
+
+    if not _re.fullmatch(r"[0-9a-f]{32}(?:[0-9a-f]{32})?\.(jpg|jpeg|png|webp)", name, _re.IGNORECASE):
+        raise Http404("图片不存在")
+    doc = get_object_or_404(Document, id=doc_id)
+    if not kb_access.kb_accessible(request.user, doc.kb):
+        raise Http404("图片不存在")
+    p = doc_image_dir(doc_id) / name
+    if not p.is_file():
+        raise Http404("图片不存在")
+    mime = {
+        ".png": "image/png", ".webp": "image/webp",
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    }.get(p.suffix.lower(), "application/octet-stream")
+    resp = FileResponse(p.open("rb"), content_type=mime)
+    resp["Cache-Control"] = "private, max-age=86400"
+    return resp
+
+
+@login_required
 def document_html(request, doc_id):
     """文档 HTML 查看页：渲染文档正文，支持 ?h= 高亮指定文本片段。
 
@@ -736,11 +765,61 @@ def conversation_delete(request, thread_id):
 # ------------------------------------------------------------------
 # 搜索（模糊搜索：图纸号 / 部件名称 → 表格化展示）
 # ------------------------------------------------------------------
+def _semantic_matches(user, query: str, k: int = 8) -> list[dict]:
+    """综合搜索的语义命中：与问答页同一条混合检索链路
+    （WeMM 向量 + 关键词双路 → RRF 融合 → rerank 精排），跨库用 search_folder 扇出。
+
+    部门过滤与手册路一致（通用 ∪ 本部门）；只检索已建向量的库（chunk_count>0，
+    也让测试库天然跳过）；任何失败降级为空列表，不影响页面其它区块。
+    """
+    import logging as _logging
+
+    from . import access as kb_access
+    from .models import DEPARTMENT_GENERAL
+    from .retriever import search_folder
+
+    user_dept = kb_access.user_department(user)
+    slugs = list(
+        KnowledgeBase.objects.filter(
+            is_folder=False, chunk_count__gt=0,
+            department__in=[DEPARTMENT_GENERAL, user_dept],
+        ).values_list("slug", flat=True)
+    )
+    if not slugs:
+        return []
+    try:
+        results = search_folder(slugs, query, k=k)
+    except Exception as e:
+        _logging.getLogger(__name__).warning(
+            "综合搜索语义检索失败（降级为空）q=%s: %s", query, str(e)[:120])
+        return []
+    out = []
+    for r in results:
+        if not r.get("doc_id"):
+            continue
+        text = (r.get("text") or "").strip()
+        anchor = re.sub(r"^【[^】]*】\s*", "", text)[:16]
+        out.append({
+            "doc_id": r["doc_id"],
+            "source": r.get("source") or "未知来源",
+            "section": r.get("section") or "",
+            "text": text,
+            "anchor": anchor,
+            "via": r.get("via", ""),
+            "score": r.get("rerank_score"),
+            "is_image": r.get("type") == "image",
+            "images": [f"/kb/doc/{r['doc_id']}/img/{r['image']}"]
+                       if r.get("image") else [],
+        })
+    return out
+
+
 @login_required
 def search_view(request):
-    """综合搜索：结构化跨表关联 + 手册全文搜索，均不依赖大模型。
+    """综合搜索：结构化跨表关联 + 手册全文搜索 + 语义混合检索（问答同款链路）。
 
-    手册全文按用户部门过滤（通用 ∪ 本部门）。
+    业务键/手册正文为确定性匹配；语义命中走向量+关键词+rerank（可搜到自然语言
+    问题和图片块）。手册与语义均按用户部门过滤（通用 ∪ 本部门）。
     """
     q = (request.GET.get("q") or "").strip()
     from . import access as kb_access
@@ -749,6 +828,7 @@ def search_view(request):
 
     user_dept = kb_access.user_department(request.user)
     lookup = lookup_related(q, department=user_dept) if q else None
+    semantic_matches = _semantic_matches(request.user, q) if q else []
     datasets = (
         StructuredDataset.objects.filter(active=True)
         .select_related("imported_by").order_by("kind", "-created_at")
@@ -756,6 +836,7 @@ def search_view(request):
     return render(request, "kb/asset_lookup.html", {
         "q": q,
         "lookup": lookup,
+        "semantic_matches": semantic_matches,
         "datasets": datasets,
     })
 

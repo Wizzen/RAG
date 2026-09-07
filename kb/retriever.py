@@ -117,7 +117,9 @@ def search(kb_slug: str, query: str, k: int | None = None) -> list[dict[str, Any
     seen_vec: set[str] = set()
     for rank, (doc, _sim) in enumerate(vec_docs, start=1):
         meta = doc.metadata or {}
-        key = _fuse_key(doc.page_content)
+        # 图片块以「图+上下文」独立身份参与融合（同名图的上下文与文本块不同，
+        # 但 page_content 可能与章节文本块相同 → 融合键必须带上图片名防撞）
+        key = _fuse_key(doc.page_content + (meta.get("image") or ""))
         if key in seen_vec:
             continue
         seen_vec.add(key)
@@ -126,6 +128,9 @@ def search(kb_slug: str, query: str, k: int | None = None) -> list[dict[str, Any
             "section": meta.get("section") or meta.get("drug_name") or "",
             "score": 0.0, "via": set(),
         })
+        if meta.get("type") == "image":
+            item["type"] = "image"
+            item["image"] = meta.get("image", "")
         item["score"] += 1.0 / (RRF_K + rank)
         item["via"].add("vec")
     seen_kw: set[str] = set()

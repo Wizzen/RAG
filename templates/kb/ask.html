@@ -653,6 +653,8 @@ pd.DataFrame.to_excel = _patched_to_excel
     const row = document.createElement('div');
     row.className = 'cite-row';
     row.innerHTML = '<span class="cite-label">📎 来源出处</span>';
+    const imgRow = document.createElement('div');
+    imgRow.className = 'cite-imgs';
     let shown = 0;
     citations.forEach((c) => {
       if (!c.doc_id) return;  // 无 doc_id 无法链接
@@ -674,9 +676,25 @@ pd.DataFrame.to_excel = _patched_to_excel
       a.title = '查看本次检索命中的切片（' + (hls.length || 0) + ' 个锚点）';
       row.appendChild(a);
       shown++;
+      // 图片命中：内联缩略图直接展示（点击新标签看原图）
+      (c.images || []).forEach((u, idx) => {
+        const ia = document.createElement('a');
+        ia.className = 'cite-img-link';
+        ia.target = '_blank'; ia.rel = 'noopener';
+        ia.title = '命中图片 ' + (idx + 1) + '（来自 ' + name + '）· 点击看原图';
+        const im = document.createElement('img');
+        im.src = u; im.loading = 'lazy'; im.alt = '命中图片';
+        ia.appendChild(im);
+        imgRow.appendChild(ia);
+        shown++;
+      });
     });
-    if (shown > 0) bubble.appendChild(row);
+    if (shown > 0) {
+      bubble.appendChild(row);
+      if (imgRow.children.length) bubble.appendChild(imgRow);
+    }
   }
+  window.renderCitations = renderCitations;  // 调试/测试出口
 
   /* ---------- 提交问答 ---------- */
   async function submit() {

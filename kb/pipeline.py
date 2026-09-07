@@ -12,6 +12,7 @@ OCR + 向量化流水线引擎。
 from __future__ import annotations
 
 import html
+import logging
 import os
 import re
 import sys
@@ -72,9 +73,12 @@ def _mineru_safe_name(raw: str) -> str:
     return f"{safe}{suffix}{ext}"
 
 
-def _ocr_pdf(pdf_path: Path, on_progress=None) -> str:
+def _ocr_pdf(pdf_path: Path, on_progress=None) -> tuple[str, dict[str, str]]:
     """调 MinerU API 把 PDF 转为 Markdown。
 
+    返回 (md, images)：images 是 {文件名: data:image/jpeg;base64,...}。
+    MinerU 的图片文件名按内容哈希生成 —— 同一张图重复 OCR 名字不变，
+    因此对已有文档重跑 OCR 可以无损补回图片。
     on_progress: 可选回调 fn(str) → None，在轮询时调用以更新进度描述。
     """
     api_base = mineru_settings()["api_base"]
@@ -95,6 +99,7 @@ def _ocr_pdf(pdf_path: Path, on_progress=None) -> str:
                 "backend": mineru_settings()["backend"],
                 "lang_list": mineru_settings()["lang"],
                 "return_md": "true",
+                "return_images": "true",
             }
             r = client.post(f"{api_base}/tasks", files=files, data=data, headers=_mineru_headers(), timeout=600)
         r.raise_for_status()
@@ -128,24 +133,89 @@ def _ocr_pdf(pdf_path: Path, on_progress=None) -> str:
         for _fname, payload in results.items():
             md = payload.get("md_content") or payload.get("markdown") or payload.get("md")
             if md:
-                return md
+                return md, payload.get("images") or {}
         raise RuntimeError("MinerU 结果中无 md_content")
 
 
 def run_ocr(file_path: Path, file_type: str, on_progress=None) -> str:
-    """提取文档的 Markdown 文本。
+    """提取文档的 Markdown 文本（兼容旧调用方，只要文本）。"""
+    return run_ocr_with_images(file_path, file_type, on_progress)[0]
 
-    MD/TXT → 直接读取；PDF → 调 MinerU。
+
+def run_ocr_with_images(file_path: Path, file_type: str, on_progress=None) -> tuple[str, dict[str, str]]:
+    """提取 Markdown + PDF 中的图片。
+
+    MD/TXT → 直接读取（无图片）；PDF → 调 MinerU（return_images）。
+    返回 (md, images)；images = {文件名: data:image/...;base64,...}。
     on_progress 仅对 PDF 有效（OCR 耗时较长）。
     """
     if file_type in ("md", "markdown", "txt"):
         if on_progress:
             on_progress("正在读取文本文件…")
-        return file_path.read_text(encoding="utf-8", errors="ignore")
+        return file_path.read_text(encoding="utf-8", errors="ignore"), {}
     elif file_type == "pdf":
         return _ocr_pdf(file_path, on_progress=on_progress)
     else:
         raise ValueError(f"不支持的文件类型: {file_type}")
+
+
+# ------------------------------------------------------------------
+# 文档图片落盘与 URL 重写
+# 图片存 data/doc_images/<doc_id>/<hash>.jpg（不进 media/：
+# media 由 Django 静态服务直接暴露，会绕过部门级访问控制；
+# 读取统一走 /kb/doc/<id>/img/<name> 视图做权限校验）。
+# ------------------------------------------------------------------
+import base64 as _base64
+
+# MinerU 图片名 = 内容哈希（sha256，64 位 hex）；兼容 32 位（md5）
+_DOC_IMG_NAME_RE = re.compile(r"^[0-9a-f]{32}(?:[0-9a-f]{32})?\.(jpg|jpeg|png|webp)$", re.IGNORECASE)
+
+
+def doc_image_dir(doc_id) -> Path:
+    d = Path(settings.DATA_DIR) / "doc_images" / str(doc_id)
+    return d
+
+
+def save_doc_images(doc_id, images: dict[str, str]) -> int:
+    """把 MinerU 返回的 base64 图片落盘。返回新写入的数量（已存在则跳过）。"""
+    if not images:
+        return 0
+    d = doc_image_dir(doc_id)
+    d.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for name, data_url in images.items():
+        if not _DOC_IMG_NAME_RE.fullmatch(name):
+            continue  # 文件名不是内容哈希格式，防路径注入
+        b64 = (data_url or "").split(",", 1)[-1]
+        try:
+            raw = _base64.b64decode(b64)
+        except Exception:
+            continue
+        out = d / name
+        if out.exists() and out.stat().st_size == len(raw):
+            continue
+        out.write_bytes(raw)
+        n += 1
+    return n
+
+
+def rewrite_img_srcs(html: str, doc_id) -> str:
+    """把 md 里的相对图片引用 images/x.jpg 重写为受权限保护的视图 URL。"""
+    if not html:
+        return html
+    prefix = f"/kb/doc/{doc_id}/img/"
+
+    def _md_repl(m):
+        return m.group(1) + prefix + m.group(2) + m.group(3)
+
+    html = re.sub(r"(!\[[^\]]*\]\()images/([0-9a-f]+\.(?:jpg|jpeg|png|webp))(\))",
+                  _md_repl, html, flags=re.IGNORECASE)
+
+    def _tag_repl(m):
+        return m.group(1) + prefix + m.group(2) + m.group(3)
+
+    return re.sub(r'(<img\s[^>]*?src=")images/([0-9a-f]+\.(?:jpg|jpeg|png|webp))(")',
+                  _tag_repl, html, flags=re.IGNORECASE)
 
 
 # ------------------------------------------------------------------
@@ -308,6 +378,7 @@ def _section_aware_chunk(text: str, source_name: str) -> list[LCDocument]:
         separators=["\n\n", "。", "；", "\n", " ", ""],
     )
     out: list[LCDocument] = []
+    input_version = _embed_input_version("text")
     sections = _SECTION_SPLIT.split(text)
     for sec in sections:
         if not sec.strip():
@@ -323,7 +394,10 @@ def _section_aware_chunk(text: str, source_name: str) -> list[LCDocument]:
                 ct = f"【{section}】\n{ct}"
             out.append(LCDocument(
                 page_content=ct,
-                metadata={"source": source_name, "section": section},
+                metadata={
+                    "source": source_name, "section": section,
+                    "embedding_input_version": input_version,
+                },
             ))
     return out
 
@@ -334,6 +408,25 @@ def _section_aware_chunk(text: str, source_name: str) -> list[LCDocument]:
 def is_wemm(model: str) -> bool:
     """模型名含 wemm → 走自托管 WeMM 服务的 /embed 协议（非 OpenAI 兼容）。"""
     return "wemm" in (model or "").lower()
+
+
+# WeMM 官方评测口径：查询侧加 Instruct 前缀。但 A/B 实测（2026-09-07，
+# 三个带图库 × 7 组中英查询）裸查询余弦距离全部更优（好 0.08~0.13），
+# 故默认裸查询；设 WEMM_QUERY_INSTRUCT=1 可启用前缀做后续实验
+# （如换中文 instruction 文案）。
+_WEMM_QUERY_INSTRUCT = (
+    "Given a user question, retrieve relevant passages and figures "
+    "from the internal knowledge base"
+)
+
+
+def _embed_input_version(modality: str) -> str:
+    """语料块嵌入时的输入格式版本，随 chunk metadata 入库（Indexed 同款做法）。
+    查询侧格式调整不作数；此版本变化才意味着旧语料向量需要重嵌。
+    modality: text=纯文本块，media=图文交错块（图片）。
+    """
+    model = embedding_settings()["model"]
+    return f"{'wemm' if is_wemm(model) else 'openai'}-{modality}-user-v1"
 
 
 class WeMMEmbeddings:
@@ -352,11 +445,12 @@ class WeMMEmbeddings:
         self.base_url = (base_url or "").rstrip("/")
         self.dimensions = dimensions or None
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:
+    def _embed_raw(self, items: list[dict]) -> list[list[float]]:
+        """按原生 EmbedItem 列表批量嵌入（text/image_b64/... 任选）。"""
         out: list[list[float]] = []
-        for i in range(0, len(texts), self._BATCH):
-            batch = texts[i:i + self._BATCH]
-            payload: dict[str, Any] = {"inputs": [{"text": t} for t in batch]}
+        for i in range(0, len(items), self._BATCH):
+            batch = items[i:i + self._BATCH]
+            payload: dict[str, Any] = {"inputs": batch}
             if self.dimensions:
                 payload["dimension"] = self.dimensions
             r = httpx.post(self.base_url + "/embed", json=payload, timeout=self._TIMEOUT)
@@ -369,11 +463,41 @@ class WeMMEmbeddings:
             out.extend(vecs)
         return out
 
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        return self._embed_raw([{"text": t} for t in texts])
+
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return self._embed(list(texts))
 
     def embed_query(self, text: str) -> list[float]:
-        return self._embed([text])[0]
+        prompt = text
+        if os.environ.get("WEMM_QUERY_INSTRUCT", "0").strip().lower() in ("1", "true", "on", "yes"):
+            prompt = f"Instruct: {_WEMM_QUERY_INSTRUCT}\nQuery: {text}"
+        return self._embed([prompt])[0]
+
+    def embed_contents(self, inputs: list[list[dict]]) -> list[list[float]]:
+        """多模态嵌入：每个 input 是原生 content 列表（图文交错）。
+
+        例: [{"type": "text", "text": "轨道布置图"},
+             {"type": "image", "image": "data:image/jpeg;base64,..."}]
+        与 embed_documents 同批量/超时策略；服务端 content 格式不兼容时抛错，
+        由调用方决定降级（image_b64 单图 或 跳过图片块）。
+        """
+        out: list[list[float]] = []
+        for i in range(0, len(inputs), self._BATCH):
+            batch = inputs[i:i + self._BATCH]
+            payload: dict[str, Any] = {"inputs": [{"content": c} for c in batch]}
+            if self.dimensions:
+                payload["dimension"] = self.dimensions
+            r = httpx.post(self.base_url + "/embed", json=payload, timeout=self._TIMEOUT)
+            r.raise_for_status()
+            vecs = (r.json() or {}).get("embeddings")
+            if not vecs or len(vecs) != len(batch):
+                raise ValueError(
+                    f"WeMM 返回向量数不匹配（{len(vecs or [])}/{len(batch)}），"
+                    f"端点：{self.base_url}")
+            out.extend(vecs)
+        return out
 
 
 def _embeddings():
@@ -432,27 +556,146 @@ def _chroma_collection_name(kb_slug: str) -> str:
     return safe[:512]
 
 
-def run_indexing(md_content: str, kb_slug: str, source_name: str) -> int:
+_IMG_MIN_BYTES = 3072  # 小于 3KB 的多为页眉 logo/装饰线，不入多模态索引
+
+
+def _image_chunks(md_content: str, source_name: str, doc_id) -> list[tuple[Any, Path]]:
+    """从原始 md 里提取图片引用 → (chunk, 图片文件路径) 列表。
+
+    chunk.page_content = 图片所在章节标题 + 附近 caption 文本（供 LLM 引用
+    描述与 rerank 打分）；metadata 携带 type=image 与图片文件名。
+    仅返回磁盘上确实存在且 ≥ _IMG_MIN_BYTES 的图片。
+    """
+    d = doc_image_dir(doc_id)
+    out: list[tuple[Any, Path]] = []
+    if not d.is_dir():
+        return out
+    section = ""
+    seen: set[str] = set()
+    input_version = _embed_input_version("media")
+    for line in (md_content or "").splitlines():
+        head = _SECTION_HEADING.match(line.lstrip())
+        if head:
+            section = _clean_section_name(head.group(1))
+        for m in re.finditer(r"images/([0-9a-f]+\.(?:jpg|jpeg|png|webp))", line, re.IGNORECASE):
+            name = m.group(1)
+            if name in seen:
+                continue
+            seen.add(name)
+            p = d / name
+            try:
+                if not p.is_file() or p.stat().st_size < _IMG_MIN_BYTES:
+                    continue
+            except OSError:
+                continue
+            caption = re.sub(
+                r"!\[[^\]]*\]\([^)]*\)|<img\s[^>]*/?>|images/[0-9a-f]+\.(?:jpg|jpeg|png|webp)",
+                "", line, flags=re.IGNORECASE,
+            )
+            caption = re.sub(r"[!*\[\]()<>#]", "", caption).strip()[:120]
+            ctx = f"【{section}】" if section else ""
+            ctx = (ctx + (caption or section or "文档插图")).strip()
+            chunk = LCDocument(page_content=ctx, metadata={
+                "source": source_name, "section": section,
+                "type": "image", "image": name,
+                "embedding_input_version": input_version,
+            })
+            out.append((chunk, p))
+    return out
+
+
+def _index_image_chunks(vs, img_items: list[tuple[Any, Path]], kb_slug: str,
+                        source_name: str, doc_id=None) -> int:
+    """把图片块用 WeMM 多模态嵌入（图 + 上下文）写入 Chroma。
+
+    优先 content 图文交错编码；服务端不认该格式则退回 image_b64 单图编码；
+    任何失败只记录告警并跳过图片块 —— 文本块已入库，检索不降级。
+    id 带 doc_id 前缀：独立库多文档共用同一张图（同 sha256）时避免撞 id
+    被 chromadb 静默丢弃、引用张冠李戴。
+    """
+    if not img_items:
+        return 0
+    log = logging.getLogger(__name__)
+    ef = _embeddings()
+    if not isinstance(ef, WeMMEmbeddings):
+        log.info("当前 embedding 非多模态（%s），跳过 %d 个图片块 kb=%s",
+                 type(ef).__name__, len(img_items), kb_slug)
+        return 0
+    import base64 as b64mod
+
+    def _data_url(p: Path) -> str:
+        mime = "image/png" if p.suffix.lower() == ".png" else "image/jpeg"
+        return f"data:{mime};base64," + b64mod.b64encode(p.read_bytes()).decode()
+
+    def _raw_b64(p: Path) -> str:
+        # image_b64 字段只收裸 base64（服务端拒绝 data URL：Only base64 data is allowed，
+        # 已对 192.168.1.10:8300 实测确认）
+        return b64mod.b64encode(p.read_bytes()).decode()
+
+    inputs: list[list[dict]] = []
+    for chunk, p in img_items:
+        inputs.append([
+            {"type": "text", "text": chunk.page_content},
+            {"type": "image", "image": _data_url(p)},
+        ])
+    try:
+        vecs = ef.embed_contents(inputs)
+    except Exception as e:
+        log.warning("WeMM 图文交错嵌入失败（%s），退回单图嵌入", str(e)[:120])
+        try:
+            vecs = ef._embed_raw([{"image_b64": _raw_b64(p)} for _c, p in img_items])
+        except Exception as e2:
+            log.warning("WeMM 图片嵌入不可用，跳过 %d 个图片块 kb=%s: %s",
+                        len(img_items), kb_slug, str(e2)[:120])
+            return 0
+    try:
+        col = vs._collection  # langchain_chroma 暴露的原生 collection
+        col.add(
+            ids=[f"img-{doc_id}-{m['image']}" for _c, m in
+                 ((c, c.metadata) for c, _p in img_items)],
+            embeddings=vecs,
+            documents=[c.page_content for c, _p in img_items],
+            metadatas=[c.metadata for c, _p in img_items],
+        )
+        return len(img_items)
+    except Exception:
+        log.exception("图片块写入 Chroma 失败 kb=%s source=%s", kb_slug, source_name)
+        return 0
+
+
+def run_indexing(md_content: str, kb_slug: str, source_name: str, doc_id=None) -> int:
     """切块 + 向量化 → 写入该 KB 的 Chroma。返回 chunk 数。
 
     嵌入前先清洗：把 MinerU 的原始 HTML 表格转成结构化纯文本（仅此路径清洗；
     查看页 md_to_html 仍用原始 md_content 渲染真表格）。
+    doc_id 提供时，PDF 图片作为独立多模态块入同一向量库（需 WeMM）。
     """
     clean_md = _md_for_embedding(md_content)
     chunks = _section_aware_chunk(clean_md, source_name)
-    if not chunks:
+    if not chunks and not doc_id:
         return 0
     vs = Chroma(
         collection_name=_chroma_collection_name(kb_slug),
         embedding_function=_embeddings(),
         persist_directory=str(_kb_persist_dir(kb_slug)),
     )
-    vs.add_documents(chunks)
+    if chunks:
+        vs.add_documents(chunks)
     # 混合检索：向量入库成功后同步写关键词索引（失败只降级，不阻断）
     from . import keyword_index
-    keyword_index.add_chunks(kb_slug, chunks)
+    if chunks:
+        keyword_index.add_chunks(kb_slug, chunks)
+    n_img = 0
+    if doc_id:
+        try:
+            n_img = _index_image_chunks(
+                vs, _image_chunks(md_content, source_name, doc_id),
+                kb_slug, source_name, doc_id=doc_id)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "图片块索引失败（不影响文本块）doc=%s", doc_id)
     _stamp_embedding_model(kb_slug)
-    return len(chunks)
+    return len(chunks) + n_img
 
 
 def _stamp_embedding_model(kb_slug: str) -> None:
@@ -477,7 +720,7 @@ def build_doc_html(doc) -> None:
     from django.utils import timezone
     from .md2html import md_to_html as _md_to_html
 
-    doc.html_content = _md_to_html(doc.md_content or "")
+    doc.html_content = rewrite_img_srcs(_md_to_html(doc.md_content or ""), doc.id)
     doc.html_built_at = timezone.now()
     doc.save(update_fields=["html_content", "html_built_at", "updated_at"])
 
@@ -501,22 +744,27 @@ def process_document(doc_id: str) -> None:
             doc.stage_detail = detail
             doc.save(update_fields=["stage_detail", "updated_at"])
 
-        # 阶段 1: OCR
+        # 阶段 1: OCR（PDF 同时取回图片并落盘）
         doc.status = Document.Status.OCR
         doc.stage_detail = "开始 OCR…"
         doc.save(update_fields=["status", "stage_detail", "updated_at"])
-        md = run_ocr(file_path, doc.file_type, on_progress=update_stage)
+        md, images = run_ocr_with_images(file_path, doc.file_type, on_progress=update_stage)
+        try:
+            n_img = save_doc_images(doc.id, images)
+        except Exception:
+            logging.getLogger(__name__).exception("图片落盘失败（不影响文本入库）doc=%s", doc_id)
+            n_img = 0
         doc.md_content = md
-        doc.html_content = md_to_html(md)
+        doc.html_content = rewrite_img_srcs(md_to_html(md), doc.id)
         from django.utils import timezone
         doc.html_built_at = timezone.now()
         doc.save(update_fields=["md_content", "html_content", "html_built_at", "updated_at"])
 
-        # 阶段 2: 向量化
+        # 阶段 2: 向量化（文本块 + WeMM 多模态图片块）
         doc.status = Document.Status.INDEXING
         doc.stage_detail = "正在切块 + 向量化…"
         doc.save(update_fields=["status", "stage_detail", "updated_at"])
-        n_chunks = run_indexing(md, doc.kb.slug, doc.original_name)
+        n_chunks = run_indexing(md, doc.kb.slug, doc.original_name, doc_id=doc.id)
         doc.chunk_count = n_chunks
 
         # 阶段 3: 完成

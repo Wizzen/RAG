@@ -26,7 +26,12 @@
   {% for doc in docs %}
   <div class="doc-item" data-doc-id="{{ doc.id }}" data-status="{{ doc.status }}">
     <div style="flex:1">
-      <div class="doc-name">{{ doc.original_name }}</div>
+      <div class="doc-name">
+        {% if doc.status == 'completed' %}
+        <a href="/kb/doc/{{ doc.id }}/html/" target="_blank" rel="noopener"
+           title="查看文档（含插图）">{{ doc.original_name }}</a>
+        {% else %}{{ doc.original_name }}{% endif %}
+      </div>
       <div class="doc-detail" data-detail>
         {% if doc.status == 'completed' %}
           <span class="doc-badge badge-completed">✓ 已完成</span> · {{ doc.chunk_count }} 个片段

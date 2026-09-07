@@ -149,6 +149,8 @@ a{color:inherit;text-decoration:none}
 .doc-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0}
 .doc-del-form{display:inline;margin-left:auto;flex-shrink:0}
 .doc-name{flex:1;font-size:13px;font-weight:500}
+.doc-name a{color:var(--text);text-decoration:none;border-bottom:1px dashed var(--rule)}
+.doc-name a:hover{color:var(--brand);border-bottom-color:var(--brand)}
 .doc-detail{font-family:var(--fm);font-size:12px;color:var(--dim);margin-top:3px;display:flex;align-items:center;gap:6px}
 .doc-badge{font-family:var(--fm);font-size:10px;padding:2px 8px;border-radius:3px;font-weight:600;border:1px solid}
 .badge-pending{background:var(--paper);color:var(--mute);border-color:var(--rule-soft)}
@@ -400,6 +402,9 @@ a{color:inherit;text-decoration:none}
 .cite-chip{font-family:var(--fm);font-size:11px;padding:4px 10px;border-radius:5px;background:var(--brand-soft);color:var(--brand);border:1px solid transparent;transition:background .12s,color .12s;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cite-chip:hover{background:var(--brand);color:#fff}
 .cite-cnt{display:inline-block;margin-left:4px;padding:0 5px;border-radius:8px;background:var(--brand);color:#fff;font-size:9px;font-weight:700;line-height:14px;vertical-align:middle}
+.cite-imgs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.cite-img-link img{display:block;max-height:140px;max-width:min(300px,100%);border:1.5px solid var(--rule-soft);border-radius:5px;background:var(--paper)}
+.cite-img-link:hover img{border-color:var(--brand)}
 
 /* ── 文档查看页 ── */
 .doc-viewer-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--rule)}
@@ -557,6 +562,7 @@ html[data-theme="dark"] .theme-btn .ico-sun{display:none}
 /* ── 原生 <dialog> 弹窗（TDesign Dialog 风格，全局统一） ── */
 .fos-dialog{
   border:0;border-radius:12px;padding:0;min-width:380px;max-width:92vw;
+  margin:auto; /* 全局 reset 清掉了 UA 的 dialog{margin:auto}，这里必须显式恢复居中 */
   background:var(--surface);color:var(--text);
   box-shadow:0 24px 64px -16px rgba(0,0,0,.32), 0 0 0 1px var(--rule-soft);
 }
@@ -578,7 +584,7 @@ html[data-theme="dark"] .fos-dialog{box-shadow:0 24px 64px -16px rgba(0,0,0,.6),
   border-radius:6px;padding:8px 10px;font-size:12px;margin-bottom:12px}
 .fos-dialog .dialog-actions{display:flex;gap:8px;justify-content:flex-end;padding:16px 0 20px}
 .fos-dialog .dialog-actions .btn{min-width:72px;justify-content:center}
-@media (max-width:520px){.fos-dialog{min-width:0;width:92vw;margin:auto}}
+@media (max-width:520px){.fos-dialog{min-width:0;width:92vw}}
 
 /* ── AI 消息助手标签（Toonflow 式 agent 标识） + 思考阶段光标 ── */
 .msg-who{display:flex;align-items:center;gap:6px;margin-bottom:5px}

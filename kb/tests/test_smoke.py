@@ -68,7 +68,7 @@ class ApplicationSmokeTests(TestCase):
         self.assertContains(response, "G-700")
         self.assertContains(response, "SCP-2")
         self.assertContains(response, "brake.md")
-        self.assertContains(response, "手册命中 1 条")
+        self.assertContains(response, "手册原文 1")
 
     def test_document_inspection_and_status_endpoints(self):
         document_page = self.client.get(

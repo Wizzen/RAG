@@ -99,27 +99,30 @@ class StructuredDataTests(TestCase):
         )
         self.client.force_login(user)
         upload_page = self.client.get(reverse("kb:manage_list"))
-        self.assertContains(upload_page, "上传设备手册")
-        self.assertContains(upload_page, "上传业务数据")
-        self.assertContains(upload_page, 'href="/kb/inspection/"', count=1)
+        self.assertContains(upload_page, "资料上传中心")
+        self.assertContains(upload_page, "业务数据")
 
-        response = self.client.post(reverse("kb:manage_list"), {
-            "action": "upload_structured",
-            "kind": "drawing",
-            "file": csv_upload(
+        # 统一上传：CSV 从手册库入口上传，按扩展名自动导入为业务数据
+        library = KnowledgeBase.objects.create(
+            name="业务库", slug="unified-lib", is_folder=True, created_by=user,
+        )
+        response = self.client.post(
+            reverse("kb:manage_detail", args=[library.slug]),
+            {"file": csv_upload(
                 "drawing-ui.csv",
                 "图纸号,部件名称,G-code,SCP等级\nUI-900,制动器,G-9,SCP-1\n",
-            ),
-        }, follow=True)
+            )},
+            follow=True,
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "已导入 drawing-ui.csv")
+        # 消息经 json_script 渲染，连字符会被转义成 \u002D → 断言不含连字符的前缀
+        self.assertContains(response, "已识别为业务数据并导入")
 
         response = self.client.get(reverse("kb:search"), {"q": "ui 900"})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "制动器")
         self.assertContains(response, "G-9")
         self.assertContains(response, "SCP-1")
-        self.assertContains(response, "不调用大模型")
 
         legacy = self.client.get(reverse("kb:asset_lookup"), {"q": "ui 900"})
         self.assertRedirects(
@@ -146,3 +149,66 @@ class StructuredDataTests(TestCase):
         document = Document.objects.get(original_name="brake-manual.txt")
         self.assertEqual(document.kb.parent, library)
         process_async.assert_called_once_with(document.id)
+
+
+class SemanticSearchSectionTests(TestCase):
+    """综合搜索的语义命中区：与问答同链路、部门过滤、失败降级。"""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.staff = get_user_model().objects.create_user(
+            username="semantic-admin", password=None, is_staff=True,
+        )
+        cls.gen_kb = KnowledgeBase.objects.create(  # 通用 + 有向量 → 入检索范围
+            name="通用手册", slug="sem-gen", is_folder=False, chunk_count=10,
+            created_by=cls.staff,
+        )
+        cls.mech_kb = KnowledgeBase.objects.create(  # 机械部门 → 通用用户不可见
+            name="机械手册", slug="sem-mech", is_folder=False, chunk_count=10,
+            department="机械", created_by=cls.staff,
+        )
+        KnowledgeBase.objects.create(  # 无向量 → 跳过
+            name="空库", slug="sem-empty", is_folder=False, chunk_count=0,
+            created_by=cls.staff,
+        )
+
+    def setUp(self):
+        self.client.force_login(self.staff)
+
+    def _hits(self):
+        return [
+            {"doc_id": "d1", "source": "DR报告.pdf", "section": "结构",
+             "text": "【结构】主要结构型式 1.立柱", "via": "vec+rr",
+             "rerank_score": 0.97, "type": "image", "image": "a" * 64 + ".jpg"},
+            {"doc_id": "d2", "source": "手册.pdf", "section": "",
+             "text": "轨道布置说明", "via": "vec"},
+        ]
+
+    def test_section_renders_image_and_text_hits_with_dept_filter(self):
+        with patch("kb.retriever.search_folder", return_value=self._hits()) as sf:
+            r = self.client.get(reverse("kb:search"), {"q": "结构图纸"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "语义命中")
+        self.assertContains(r, "🖼 图片块")
+        self.assertContains(r, "/kb/doc/d1/img/" + "a" * 64 + ".jpg")
+        # 图片命中内联显示缩略图（点击新标签看原图），不是只有占位链接
+        self.assertContains(r, '<img src="/kb/doc/d1/img/' + "a" * 64 + '.jpg"')
+        self.assertContains(r, 'loading="lazy"')
+        self.assertContains(r, "查看切片上下文")
+        self.assertContains(r, "相关度 0.97")
+        # 检索范围 = 有向量的可见库（通用用户的 通用 ∪ 本部门 → 只有 sem-gen）
+        self.assertEqual(sf.call_args.args[0], ["sem-gen"])
+
+    def test_retrieval_failure_degrades_to_empty_section(self):
+        with patch("kb.retriever.search_folder",
+                   side_effect=RuntimeError("WeMM 不可达")):
+            r = self.client.get(reverse("kb:search"), {"q": "结构图纸"})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "语义·含图 0")
+
+    def test_no_indexed_kb_skips_retrieval_entirely(self):
+        KnowledgeBase.objects.filter(slug__in=["sem-gen", "sem-mech"]).update(chunk_count=0)
+        with patch("kb.retriever.search_folder") as sf:
+            r = self.client.get(reverse("kb:search"), {"q": "任意"})
+        self.assertEqual(r.status_code, 200)
+        sf.assert_not_called()
