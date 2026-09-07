@@ -6,35 +6,69 @@
   <a class="btn sm outline" href="/kb/inspection/">检查项提取</a>
 </div>
 <h1>{{ kb.name }} <span class="dept-badge">{{ kb.department }}</span>{% if kb.embedding_label %} <span class="emb-badge">🧬 {{ kb.embedding_label }}</span>{% endif %}</h1>
-<p class="fos-sub">{% if kb.description %}{{ kb.description }} · {% endif %}文档 <span id="kbDocCount">{{ docs_total }}</span>
-  · 向量块 <span id="kbChunkCount">{{ chunks_total }}</span></p>
+<p class="fos-sub"><span id="kbDescText">{% if kb.description %}{{ kb.description }}{% else %}（无描述）{% endif %}</span>
+  · 文档 <span id="kbDocCount">{{ docs_total }}</span>
+  · 向量块 <span id="kbChunkCount">{{ chunks_total }}</span>
+  <button type="button" id="descEditBtn" class="btn sm outline" style="margin-left:6px">编辑名称/描述</button></p>
+<style>
+.doc-desc{margin-left:8px;color:var(--mute);font-size:11px}
+.desc-edit-btn{margin-left:6px;font-size:10px;padding:2px 8px;border:1px solid var(--rule-soft);border-radius:999px;background:var(--surface);color:var(--dim);cursor:pointer}
+.desc-edit-btn:hover{border-color:var(--brand);color:var(--brand)}
+</style>
+<dialog id="kbEditDialog" class="fos-dialog">
+  <form id="descForm">
+    {% csrf_token %}
+    <div class="dialog-title">编辑知识库</div>
+    <div class="field"><label>名称</label>
+      <input name="name" value="{{ kb.name }}" required></div>
+    <div class="field"><label>描述（可选，给 AI 选库用的内容说明）</label>
+      <textarea name="description" maxlength="200" rows="2"
+                placeholder="例如：过山车设备的维护手册与图纸">{{ kb.description }}</textarea></div>
+    <div class="dialog-hint">名称用于按名称自动定位知识库；留空描述即清除</div>
+    <div class="dialog-err" id="kbEditErr" hidden></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn outline" id="descCancelBtn">取消</button>
+      <button type="submit" class="btn primary" id="descSaveBtn">保存</button>
+    </div>
+  </form>
+</dialog>
 
 
 <h2 style="font-weight:700;font-size:14px;margin-bottom:10px">上传</h2>
 <div class="upload-area">
   <form method="post" enctype="multipart/form-data" id="uploadForm">
     {% csrf_token %}
-    <label class="upload-label" for="fileInput">点击选择文件（PDF / Markdown / TXT / CSV / XLSX，业务表自动识别）</label>
-    <input type="file" name="file" id="fileInput" accept=".pdf,.md,.markdown,.txt,.csv,.tsv,.xlsx,.xlsm">
+    <label class="upload-label" for="fileInput">点击选择文件（PDF / Markdown / TXT / CSV / XLSX / 图片 JPG·PNG·WebP，业务表自动识别）</label>
+    <input type="file" name="file" id="fileInput" accept=".pdf,.md,.markdown,.txt,.csv,.tsv,.xlsx,.xlsm,.jpg,.jpeg,.png,.webp">
     <div id="fileName" style="margin-top:8px;font-size:12px;color:var(--dim)"></div>
     <button class="btn primary" type="submit" id="uploadBtn" style="margin-top:10px;display:none">开始上传</button>
   </form>
 </div>
 
-<h2 style="font-family:var(--fd);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;margin:20px 0 10px">文档列表</h2>
+<h2 style="font-family:var(--fd);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;margin:20px 0 10px;display:flex;align-items:center;gap:10px">
+  文档列表
+  <span class="doc-view-toggle" role="group" aria-label="视图模式">
+    <button type="button" class="dvt-btn on" id="dvtList" title="列表视图">☰ 列表</button>
+    <button type="button" class="dvt-btn" id="dvtGrid" title="网格视图">▦ 网格</button>
+  </span>
+</h2>
 <div class="doc-list" id="docList">
   {% for doc in docs %}
   <div class="doc-item" data-doc-id="{{ doc.id }}" data-status="{{ doc.status }}">
-    <div style="flex:1">
+    <div class="doc-main">
       <div class="doc-name">
+        <span class="ftype ftype-{{ doc.badge_kind }}" title="文件类型">{{ doc.badge_label }}</span>
         {% if doc.status == 'completed' %}
-        <a href="/kb/doc/{{ doc.id }}/html/" target="_blank" rel="noopener"
-           title="查看文档（含插图）">{{ doc.original_name }}</a>
-        {% else %}{{ doc.original_name }}{% endif %}
+        <span class="doc-name-text"><a href="/kb/doc/{{ doc.id }}/html/" target="_blank" rel="noopener"
+           title="查看文档（含插图）">{{ doc.original_name }}</a></span>
+        {% else %}<span class="doc-name-text">{{ doc.original_name }}</span>{% endif %}
       </div>
       <div class="doc-detail" data-detail>
         {% if doc.status == 'completed' %}
           <span class="doc-badge badge-completed">✓ 已完成</span> · {{ doc.chunk_count }} 个片段
+          <span class="doc-desc" data-doc-desc>{{ doc.description }}</span>
+          <button type="button" class="desc-edit-btn" data-doc-id="{{ doc.id }}"
+                  title="编辑描述（会展示给 AI 帮其判断文档相关性）">描述</button>
         {% elif doc.status == 'failed' %}
           <span class="doc-badge badge-failed">✗ 失败</span> {{ doc.error_msg|truncatechars:80 }}
         {% elif doc.status == 'pending' %}
@@ -59,6 +93,106 @@
 
 {% block scripts %}
 <script>
+// ── 名称/描述 编辑弹窗（POST kb_rename，AJAX；与全站 fos-dialog 同款）──
+(function(){
+  const btn = document.getElementById('descEditBtn'), dlg = document.getElementById('kbEditDialog');
+  const form = document.getElementById('descForm'), txt = document.getElementById('kbDescText');
+  const err = document.getElementById('kbEditErr'), save = document.getElementById('descSaveBtn');
+  if (!btn || !dlg) return;
+  btn.addEventListener('click', () => {
+    err.hidden = true;
+    dlg.showModal();
+    form.name.focus();
+  });
+  document.getElementById('descCancelBtn').addEventListener('click', () => dlg.close());
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    save.disabled = true; save.textContent = '保存中…';
+    try {
+      const fd = new FormData(form);
+      fd.set('description', form.description.value);  // 留空即清空
+      const r = await fetch(`/kb/manage/${KB_SLUG}/rename/`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': getCSRFToken(), 'X-Requested-With': 'XMLHttpRequest' },
+        body: fd,
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!data.ok) { err.textContent = data.message || '保存失败'; err.hidden = false; return; }
+      document.querySelector('h1').childNodes[0].textContent = data.name + ' ';
+      txt.textContent = data.description || '（无描述）';
+      dlg.close();
+      if (window.fosToast) fosToast('已保存', 'ok');
+    } catch(ex) {
+      err.textContent = '请求失败：' + ex; err.hidden = false;
+    } finally {
+      save.disabled = false; save.textContent = '保存';
+    }
+  });
+})();
+
+// ── 文档描述编辑（事件委托：服务端渲染行 + 轮询重建行通用）──
+(function(){
+  const list = document.getElementById('docList');
+  if (!list) return;
+  list.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.desc-edit-btn');
+    if (!btn) return;
+    const item = btn.closest('.doc-item');
+    const span = item && item.querySelector('[data-doc-desc]');
+    const cur = span ? span.textContent : '';
+    const v = await fosPrompt({
+      title: '编辑文档描述',
+      label: '描述（可选）', value: cur, multiline: true, confirmText: '保存',
+      hint: '会展示给 AI 帮其判断文档相关性；留空即清除',
+    });
+    if (v === null) return;  // 取消
+    const r = await fetch(`/kb/manage/${KB_SLUG}/doc/${btn.dataset.docId}/desc/`, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': getCSRFToken(), 'X-Requested-With': 'XMLHttpRequest' },
+      body: new URLSearchParams({ description: v }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (data.ok) {
+      if (span) span.textContent = data.description || '';
+      if (window.fosToast) fosToast(data.description ? '描述已保存' : '描述已清除', 'ok');
+    } else if (window.fosToast) {
+      fosToast('保存失败', 'err');
+    }
+  });
+})();
+
+// ── 视图模式切换（列表/网格）：同一 DOM，CSS 切换；偏好存 localStorage ──
+(function(){
+  const list = document.getElementById('docList');
+  const bl = document.getElementById('dvtList'), bg = document.getElementById('dvtGrid');
+  if (!list || !bl || !bg) return;
+  const apply = (mode) => {
+    const grid = mode === 'grid';
+    list.classList.toggle('grid', grid);
+    bl.classList.toggle('on', !grid);
+    bg.classList.toggle('on', grid);
+    try { localStorage.setItem('docViewMode', mode); } catch (e) {}
+  };
+  bl.addEventListener('click', () => apply('list'));
+  bg.addEventListener('click', () => apply('grid'));
+  let saved = 'list';
+  try { saved = localStorage.getItem('docViewMode') || 'list'; } catch (e) {}
+  apply(saved);
+})();
+
+// 文件类型徽章（与服务端 Document.badge_kind 同规则）
+function ftypeBadge(name){
+  const ext = ((name || '').split('.').pop() || '').toLowerCase();
+  const m = {pdf:['pdf','PDF'], doc:['doc','DOC'], docx:['doc','DOC'],
+             xls:['xls','XLS'], xlsx:['xls','XLS'], xlsm:['xls','XLS'],
+             csv:['xls','XLS'], tsv:['xls','XLS'],
+             md:['txt','TXT'], markdown:['txt','TXT'], txt:['txt','TXT'],
+             jpg:['img','IMG'], jpeg:['img','IMG'], png:['img','IMG'], webp:['img','IMG']};
+  const [k, l] = m[ext] || ['file', 'FILE'];
+  return `<span class="ftype ftype-${k}" title="文件类型">${l}</span>`;
+}
+
 const KB_SLUG = '{{ kb.slug }}';
 const fileInput = document.getElementById('fileInput');
 const fileName = document.getElementById('fileName');
@@ -103,7 +237,10 @@ async function deleteDoc(btn){
   if (btn.dataset.deleting) return;  // 防重复点击（双击只发一次请求）
   const docId = btn.dataset.docId;
   const name = btn.dataset.name || '该文档';
-  if (!confirm('确定删除文档「' + name + '」？\n将同时删除其向量索引，且不可恢复。')) return;
+  if (!(await fosConfirm({
+    title: '删除文档', confirmText: '删除',
+    message: '确定删除文档「' + name + '」？\n将同时删除其向量索引，且不可恢复。',
+  }))) return;
   btn.dataset.deleting = '1';
   btn.disabled = true;
   const oldText = btn.textContent;
@@ -153,7 +290,7 @@ function renderDocRow(d) {
     row = document.createElement('div');
     row.className = 'doc-item';
     row.dataset.docId = d.id;
-    row.innerHTML = '<div style="flex:1"><div class="doc-name"></div><div class="doc-detail"></div></div>';
+    row.innerHTML = '<div class="doc-main"><div class="doc-name"></div><div class="doc-detail"></div></div>';
     // 新建行也带上删除按钮（与后端渲染行一致）
     const btn = document.createElement('button');
     btn.type = 'button'; btn.className = 'btn sm danger doc-del-btn'; btn.title = '删除此文档及其向量';
@@ -165,19 +302,19 @@ function renderDocRow(d) {
     else docList.appendChild(row);
   }
   row.dataset.status = d.status;
-  const nameEl = row.querySelector('.doc-name');
-  nameEl.textContent = '📄 ' + d.name;
   const detailEl = row.querySelector('[data-detail]') || row.querySelector('.doc-detail');
 
   // 清空并重建（与服务器端模板保持一致：完成态文档名带查看链接；名字/错误文本转义防注入）
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-  let inner = row.querySelector('div[style="flex:1"]');
+  let inner = row.querySelector('.doc-main');
   let html = d.status === 'completed'
-    ? `<div class="doc-name"><a href="/kb/doc/${d.id}/html/" target="_blank" rel="noopener" title="查看文档（含插图）">${esc(d.name)}</a></div>`
-    : `<div class="doc-name">${esc(d.name)}</div>`;
+    ? `<div class="doc-name">${ftypeBadge(d.name)}<span class="doc-name-text"><a href="/kb/doc/${d.id}/html/" target="_blank" rel="noopener" title="查看文档（含插图）">${esc(d.name)}</a></span></div>`
+    : `<div class="doc-name">${ftypeBadge(d.name)}<span class="doc-name-text">${esc(d.name)}</span></div>`;
 
   if (d.status === 'completed') {
-    html += `<div class="doc-detail"><span class="doc-badge badge-completed">✓ 已完成</span> · ${d.chunk_count} 个片段</div>`;
+    html += `<div class="doc-detail"><span class="doc-badge badge-completed">✓ 已完成</span> · ${d.chunk_count} 个片段`
+      + `<span class="doc-desc" data-doc-desc>${esc(d.desc || '')}</span>`
+      + `<button type="button" class="desc-edit-btn" data-doc-id="${d.id}" title="编辑描述（会展示给 AI 帮其判断文档相关性）">描述</button></div>`;
   } else if (d.status === 'failed') {
     html += `<div class="doc-detail"><span class="doc-badge badge-failed">✗ 失败</span> ${esc(d.error) || '处理失败'}</div>`;
     html += `<div class="progress-bar"><div class="progress-fill err" style="width:100%"></div></div>`;

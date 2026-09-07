@@ -20,7 +20,8 @@
       {% if q.expected_source or q.expected_keyword %}
       <span class="fos-sub">期望：{{ q.expected_source|default:"—" }} / {{ q.expected_keyword|default:"—" }}</span>
       {% endif %}
-      <form method="post" style="margin:0" onsubmit="return confirm('删除该评估问题？')">
+      <form method="post" style="margin:0" data-confirm-title="删除评估问题"
+            data-confirm="删除该评估问题？">
         {% csrf_token %}<input type="hidden" name="action" value="delete">
         <input type="hidden" name="qid" value="{{ q.id }}">
         <button class="btn sm danger" type="submit">删</button>

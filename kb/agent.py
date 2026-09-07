@@ -85,6 +85,52 @@ def _get_llm(llm_cfg: dict) -> ChatOpenAI:
     )
 
 
+def _kb_tree_text(dept_filter: dict) -> str:
+    """list_knowledge_bases 工具的正文（提炼为模块函数便于测试）。
+
+    「说明」= 管理员可选填写的描述：库级说明写库的主题，文档级说明写
+    单份文档的内容——帮助 LLM 判断该检索哪个库/引用哪份文档。
+    """
+    from .models import KnowledgeBase
+    lines = []
+
+    def _desc(obj) -> str:
+        d = (getattr(obj, "description", "") or "").strip()
+        return f"｜说明: {d[:80]}" if d else ""
+
+    def _doc_lines(kb, indent: str) -> list[str]:
+        """文档级说明：每份文档一行（上限 4 份，超出提示）。"""
+        docs = list(kb.documents.all())
+        if not docs:
+            return [f"{indent}（无文档）"]
+        out = []
+        for d in docs[:4]:
+            desc = (d.description or "").strip()
+            tag = f"｜{desc[:60]}" if desc else ""
+            out.append(f"{indent}· {d.original_name[:48]}{tag}")
+        if len(docs) > 4:
+            out.append(f"{indent}…另有 {len(docs) - 4} 份文档")
+        return out
+
+    # 文件夹 + 其子文档库（部门过滤：子库部门与文件夹同步，故按文件夹过滤即可）
+    folders = KnowledgeBase.objects.filter(is_folder=True, **dept_filter).order_by("name")
+    for folder in folders:
+        docs, chunks = folder.aggregate_counts()
+        lines.append(f"📁 {folder.name}（文件夹, slug={folder.slug}, {chunks} 向量块）{_desc(folder)}")
+        for child in folder.children.filter(is_folder=False).order_by("name"):
+            lines.append(f"  📄 {child.name}（slug={child.slug}, {child.chunk_count} 向量块）{_desc(child)}")
+            lines.extend(_doc_lines(child, "     "))
+    # 独立文档库（无父库的顶层文档库）
+    standalone = KnowledgeBase.objects.filter(is_folder=False, parent__isnull=True, **dept_filter).order_by("name")
+    for kb in standalone:
+        lines.append(f"📄 {kb.name}（slug={kb.slug}, {kb.chunk_count} 向量块）{_desc(kb)}")
+        lines.extend(_doc_lines(kb, "   "))
+    if not lines:
+        return "（暂无知识库）"
+    return ("可用知识库（📁=文件夹可跨文档检索，📄=文档库搜单份文档；"
+            "「说明」为库/文档的内容描述，选库与引用来源时参考它判断相关性）：\n" + "\n".join(lines))
+
+
 def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkpointer,
                  citations: list | None = None, department: str = ""):
     """为指定 KB + thread 构建一个 create_agent。
@@ -124,7 +170,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 知识库分两层：**文件夹**（含若干文档库）和**文档库**（每份文档独占一个向量库）。
 - 用户提到具体文档名（如「P8」「Dumbo」）时，先调 list_knowledge_bases 查看有哪些文档库及其 slug，再用对应 slug 检索该文档库——这样只返回该文档的内容，不会混杂其它文档。
 - 通用问题（不限定某份文档）时，可用文件夹 slug 检索，系统会跨该文件夹下所有文档库合并结果。
-- 当前默认搜索范围是「{kb_slug}」。
+- 当前默认搜索范围是「{kb_slug}」（系统已按用户问题自动定位到名称最相关的文档库；问题明确指向某文档时不要再去明显无关的库检索）。
 - 当前用户所在部门为「{department or DEPARTMENT_GENERAL}」；你能看到的仅是该部门与「通用」的知识库，这是正常的权限范围，不是知识库缺失——不要向用户提及其它部门库的存在。
 
 工作准则：
@@ -153,34 +199,11 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
     def list_knowledge_bases() -> str:
         """列出所有可用的知识库（层级结构），供判断该检索哪个文档库。
 
-        返回文件夹→文档库的树形结构，含每个文档库的 slug、文档名、向量块数。
+        返回文件夹→文档库的树形结构，含每个文档库的 slug、描述、文档名、向量块数。
         用文档库的 slug 作为 kb_search 的 kb_slug 参数来检索该文档库；
         用文件夹的 slug 可跨其下所有文档库合并检索。
         """
-        from .models import KnowledgeBase
-        lines = []
-        # 文件夹 + 其子文档库（部门过滤：子库部门与文件夹同步，故按文件夹过滤即可）
-        folders = KnowledgeBase.objects.filter(is_folder=True, **_dept_filter).order_by("name")
-        for folder in folders:
-            docs, chunks = folder.aggregate_counts()
-            lines.append(f"📁 {folder.name}（文件夹, slug={folder.slug}, {chunks} 向量块）")
-            for child in folder.children.filter(is_folder=False).order_by("name"):
-                doc_names = ", ".join(
-                    d.original_name for d in child.documents.all()
-                )[:60]
-                lines.append(
-                    f"  📄 {child.name}（slug={child.slug}, {child.chunk_count} 向量块）— 文档: {doc_names or '（无）'}"
-                )
-        # 独立文档库（无父库的顶层文档库）
-        standalone = KnowledgeBase.objects.filter(is_folder=False, parent__isnull=True, **_dept_filter).order_by("name")
-        for kb in standalone:
-            doc_names = ", ".join(d.original_name for d in kb.documents.all())[:60]
-            lines.append(
-                f"📄 {kb.name}（slug={kb.slug}, {kb.chunk_count} 向量块）— 文档: {doc_names or '（无）'}"
-            )
-        if not lines:
-            return "（暂无知识库）"
-        return "可用知识库（📁=文件夹可跨文档检索，📄=文档库搜单份文档）：\n" + "\n".join(lines)
+        return _kb_tree_text(_dept_filter)
 
     def kb_search(query: str, k: int = 0, kb_slug: str = "") -> str:
         """检索知识库，返回带来源标注的相关片段（多模态：含文本与图片）。

@@ -12,6 +12,7 @@ urlpatterns = [
     path("manage/<slug:slug>/", views.manage_detail, name="manage_detail"),
     path("manage/<slug:slug>/delete/", views.manage_delete, name="manage_delete"),
     path("manage/<slug:slug>/rename/", views.kb_rename, name="kb_rename"),
+    path("manage/<slug:slug>/doc/<uuid:doc_id>/desc/", views.doc_desc_update, name="doc_desc_update"),
     path("manage/<slug:slug>/doc/<uuid:doc_id>/delete/", views.doc_delete, name="doc_delete"),
     path("manage/<slug:slug>/status/", views.doc_status_api, name="doc_status"),
 

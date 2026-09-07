@@ -116,6 +116,9 @@ class Document(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     kb = models.ForeignKey(KnowledgeBase, on_delete=models.CASCADE, related_name="documents")
     original_name = models.CharField("原始文件名", max_length=255)
+    description = models.TextField(
+        "描述", blank=True, default="",
+        help_text="可选；会展示给 AI 帮其判断该文档与问题的相关性")
     file = models.FileField("文件", upload_to="documents/")
     file_type = models.CharField("类型", max_length=10, default="pdf")
     md_content = models.TextField("OCR/提取的 Markdown", blank=True, default="")
@@ -137,6 +140,25 @@ class Document(models.Model):
 
     def __str__(self):
         return f"{self.original_name} ({self.get_status_display()})"
+
+    # 文件类型徽章：按扩展名归类（pdf 红 / doc 蓝 / xls 绿 / txt 灰 / img 紫 / 其它 琥珀）
+    _BADGE_KINDS = {
+        "pdf": "pdf", "doc": "doc", "docx": "doc",
+        "xls": "xls", "xlsx": "xls", "xlsm": "xls", "csv": "xls", "tsv": "xls",
+        "md": "txt", "markdown": "txt", "txt": "txt",
+        "jpg": "img", "jpeg": "img", "png": "img", "webp": "img",
+    }
+
+    @property
+    def badge_kind(self) -> str:
+        name = self.original_name or ""
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else (self.file_type or "").lower()
+        return self._BADGE_KINDS.get(ext, "file")
+
+    @property
+    def badge_label(self) -> str:
+        return {"pdf": "PDF", "doc": "DOC", "xls": "XLS", "txt": "TXT",
+                "img": "IMG"}.get(self.badge_kind, "FILE")
 
 
 class SiteConfig(models.Model):

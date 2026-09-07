@@ -10,7 +10,7 @@
 
 
 <div class="section-bar">
-  <div><h2>手册库</h2><p>PDF / MD / TXT · xlsx / csv 自动识别为业务数据</p></div>
+  <div><h2>手册库</h2><p>PDF / MD / TXT / 图片（JPG·PNG·WebP）· xlsx / csv 自动识别为业务数据</p></div>
   <div class="section-actions">
     <button class="btn primary" type="button" onclick="document.getElementById('createForm').hidden=false">＋ 新建手册库</button>
   </div>
@@ -20,6 +20,8 @@
   <form method="post" class="card create-kb-form">
     {% csrf_token %}<input type="hidden" name="action" value="create_kb">
     <div class="field"><label>手册库名称</label><input name="name" required></div>
+    <div class="field"><label>描述（可选，会展示给 AI 帮它判断该搜哪个库）</label>
+      <input name="description" maxlength="200" placeholder="例如：过山车设备的维护手册与图纸"></div>
     <div class="field"><label>部门（通用 = 所有人可见）</label>
       {% if is_global_admin %}
       <select name="department">
@@ -46,26 +48,14 @@
         <span class="stat"><span class="v">{{ counts.1 }}</span><span class="k">向量块</span></span>
       </div>
       {% endwith %}
-      <div class="kb-rename" data-rename hidden>
-        <div class="field"><label>名称</label>
-          <input type="text" data-rn-name value="{{ kb.name }}"></div>
-        {% if is_global_admin %}
-        <div class="field"><label>部门（通用 = 所有部门可见；文件夹会同步其下全部子库）</label>
-          <select data-rn-dept>
-            {% for d in departments %}<option value="{{ d }}"{% if kb.department == d %} selected{% endif %}>{{ d }}</option>{% endfor %}
-          </select></div>
-        {% endif %}
-        <div style="display:flex;gap:8px">
-          <button class="btn sm primary" type="button" data-rn-save>保存</button>
-          <button class="btn sm outline" type="button" data-rn-cancel>取消</button>
-        </div>
-      </div>
       <div class="kb-actions" data-actions>
         <a class="btn sm primary" href="/kb/manage/{{ kb.slug }}/">管理 / 上传</a>
         <a class="btn sm outline" href="/kb/ask/?kb={{ kb.slug }}">检索</a>
-        <button class="btn sm outline" type="button" data-rn-toggle>改名</button>
+        <button class="btn sm outline" type="button" data-rn-toggle
+                data-slug="{{ kb.slug }}" data-name="{{ kb.name }}" data-dept="{{ kb.department }}">改名</button>
         <form method="post" action="/kb/manage/{{ kb.slug }}/delete/" style="display:inline"
-              onsubmit="return confirm('确定删除「{{ kb.name }}」？\n{{ kb.aggregate_counts.0 }} 份文档及所有向量数据将丢失。')">
+              data-confirm-title="删除知识库"
+              data-confirm="确定删除「{{ kb.name }}」？{{ kb.aggregate_counts.0 }} 份文档及所有向量数据将丢失。">
           {% csrf_token %}
           <button class="btn sm danger" type="submit">删除</button>
         </form>
@@ -76,6 +66,25 @@
   <div class="empty">还没有手册库</div>
   {% endfor %}
 </div>
+
+<dialog id="kbRenameDialog" class="fos-dialog">
+  <form id="kbRenameForm">
+    {% csrf_token %}
+    <div class="dialog-title">编辑知识库</div>
+    <div class="field"><label>名称</label><input name="name" required></div>
+    {% if is_global_admin %}
+    <div class="field"><label>部门（通用 = 所有部门可见；文件夹会同步其下全部子库）</label>
+      <select name="department">
+        {% for d in departments %}<option value="{{ d }}">{{ d }}</option>{% endfor %}
+      </select></div>
+    {% endif %}
+    <div class="dialog-err" id="kbRenameErr" hidden></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn outline" id="kbRenameCancel">取消</button>
+      <button type="submit" class="btn primary" id="kbRenameSave">保存</button>
+    </div>
+  </form>
+</dialog>
 
 {% if is_global_admin %}
 <div class="section-bar dataset-bar">
@@ -110,73 +119,68 @@
 @media(max-width:780px){.upload-grid{grid-template-columns:1fr}.upload-head{display:block}.upload-head>a{margin-top:10px}.create-kb-form{grid-template-columns:1fr}.upload-form{grid-template-columns:1fr}.section-bar{align-items:flex-end}.section-actions{flex-wrap:wrap;justify-content:flex-end}}
 </style>
 <script>
-/* 就地改名（AJAX，无刷新） */
+/* 库名称/部门编辑弹窗（AJAX，全站统一 fos-dialog 样式） */
 function getCSRFToken(){
   const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
   return m ? decodeURIComponent(m[1]) : '';
 }
+(function(){
+  const dlg = document.getElementById('kbRenameDialog');
+  if (!dlg) return;
+  const form = document.getElementById('kbRenameForm');
+  const err = document.getElementById('kbRenameErr');
+  const save = document.getElementById('kbRenameSave');
+  let currentSlug = '', currentCard = null;
 
-document.querySelectorAll('.kb-card').forEach(card => {
-  const slug = card.dataset.slug;
-  const toggleBtn = card.querySelector('[data-rn-toggle]');
-  const panel = card.querySelector('[data-rename]');
-  const actions = card.querySelector('[data-actions]');
-  const nameInput = card.querySelector('[data-rn-name]');
-  const deptInput = card.querySelector('[data-rn-dept]');
-  const deptBadge = card.querySelector('[data-dept-badge]');
-  const nameEl = card.querySelector('[data-name]');
-  const saveBtn = card.querySelector('[data-rn-save]');
-  const cancelBtn = card.querySelector('[data-rn-cancel]');
-  if (!toggleBtn) return;
-
-  let origName = nameInput.value;
-  let origDept = deptInput ? deptInput.value : '';
-
-  toggleBtn.addEventListener('click', () => {
-    origName = nameInput.value; origDept = deptInput ? deptInput.value : '';
-    panel.hidden = false;
-    actions.hidden = true;
-    nameInput.focus();
+  // 打开：预填当前卡片的名称/部门（事件委托，AJAX 刷新后仍有效）
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-rn-toggle]');
+    if (!t) return;
+    currentSlug = t.dataset.slug;
+    currentCard = t.closest('.kb-card');
+    form.name.value = t.dataset.name || '';
+    const dept = form.querySelector('[name=department]');
+    if (dept && t.dataset.dept) dept.value = t.dataset.dept;
+    err.hidden = true;
+    dlg.showModal();
+    form.name.focus();
   });
+  document.getElementById('kbRenameCancel').addEventListener('click', () => dlg.close());
 
-  cancelBtn.addEventListener('click', () => {
-    nameInput.value = origName;
-    if (deptInput) deptInput.value = origDept;
-    panel.hidden = true; actions.hidden = false;
-  });
-
-  saveBtn.addEventListener('click', async () => {
-    const name = nameInput.value.trim();
-    const dept = deptInput ? deptInput.value.trim() : '';
-    if (!name) { alert('名称不能为空'); nameInput.focus(); return; }
-    saveBtn.disabled = true; const old = saveBtn.textContent; saveBtn.textContent = '保存中…';
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    save.disabled = true; save.textContent = '保存中…';
     try {
-      const fd = new FormData();
-      fd.set('name', name);
-      if (deptInput) fd.set('department', dept);
-      fd.set('csrfmiddlewaretoken', getCSRFToken());
-      const resp = await fetch('/kb/manage/' + encodeURIComponent(slug) + '/rename/', {
+      const fd = new FormData(form);
+      const resp = await fetch('/kb/manage/' + encodeURIComponent(currentSlug) + '/rename/', {
         method: 'POST',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': getCSRFToken() },
         body: fd,
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const data = await resp.json();
       if (!data.ok) throw new Error(data.message || '保存失败');
-      // 只替换文本节点，保留部门徽章元素
-      nameEl.childNodes[0].nodeValue = data.name + ' ';
-      nameInput.value = data.name;
-      if (deptBadge && data.department) {
-        deptBadge.textContent = data.department;
-        deptBadge.title = '部门：' + data.department + '（通用 = 所有部门可见）';
+      // 回写卡片：只替换文本节点，保留部门徽章元素；改密按钮的 data 也同步
+      if (currentCard) {
+        const nameEl = currentCard.querySelector('[data-name]');
+        if (nameEl) nameEl.childNodes[0].nodeValue = data.name + ' ';
+        const badge = currentCard.querySelector('[data-dept-badge]');
+        if (badge && data.department) {
+          badge.textContent = data.department;
+          badge.title = '部门：' + data.department + '（通用 = 所有部门可见）';
+        }
+        const t = currentCard.querySelector('[data-rn-toggle]');
+        if (t) { t.dataset.name = data.name; t.dataset.dept = data.department || ''; }
       }
-      panel.hidden = true; actions.hidden = false;
-    } catch (e) {
-      alert('保存失败：' + (e.message || e));
+      dlg.close();
+      if (window.fosToast) fosToast('已保存', 'ok');
+    } catch (e2) {
+      err.textContent = e2.message || '保存失败'; err.hidden = false;
     } finally {
-      saveBtn.disabled = false; saveBtn.textContent = old;
+      save.disabled = false; save.textContent = '保存';
     }
   });
-});
+})();
 </script>
 {% endblock %}

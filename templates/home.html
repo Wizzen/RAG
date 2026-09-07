@@ -353,9 +353,10 @@
           const a = document.createElement('a');
           a.className = 'cite-chip';
           a.target = '_blank'; a.rel = 'noopener';
-          a.href = '/kb/doc/' + encodeURIComponent(c.doc_id) + '/slices/' +
-            (c.highlights || []).filter(h => h && h.length >= 3).slice(0, 12)
-             .map(h => 'h=' + encodeURIComponent(h)).join('&');
+          // 查询串必须以 ? 开头——此前漏掉导致 /slices/h=…&h=… 变路径段 → 404
+          const hls = (c.highlights || []).filter(h => h && h.length >= 3).slice(0, 12);
+          const qs = hls.map(h => 'h=' + encodeURIComponent(h)).join('&');
+          a.href = '/kb/doc/' + encodeURIComponent(c.doc_id) + '/slices/' + (qs ? '?' + qs : '');
           let name = (c.source || '文档').replace(/\.[^.]+$/, '');
           a.textContent = name.slice(0, 22);
           row.appendChild(a);
@@ -437,6 +438,9 @@ function l2BuildRings(){
       }
     } catch(e) {}
     t.remove();
+    // 闭合环接缝：字符只放得下一圈，尾部停在词中间（如 "...· DOC"）时
+    // 会与开头 "DOC" 相连成 "DOCDOC"。裁到最后一个 '·' 为止，接缝变 "· DOC"。
+    while (chars.length && chars[chars.length - 1][3] !== '·') chars.pop();
     if (!chars.length) return;
     const DY = 4.4;
     chars.forEach(([x, y, rot, ch]) => {
