@@ -23,13 +23,7 @@ document.documentElement.dataset.theme=t;})();
         <div class="field"><label>用户名</label><input name="username" autofocus required></div>
         <div class="field"><label>密码</label><input name="password1" type="password" required></div>
         <div class="field"><label>确认密码</label><input name="password2" type="password" required></div>
-        <div class="field">
-          <label>部门（决定可见的知识库；通用 = 仅见通用库）</label>
-          <select name="department">
-            <option value="通用">通用</option>
-            {% for d in departments %}{% if d != '通用' %}<option value="{{ d }}"{% if department == d %} selected{% endif %}>{{ d }}</option>{% endif %}{% endfor %}
-          </select>
-        </div>
+        <p class="auth-note">新账号默认「通用」部门（仅见通用知识库）；部门归属由管理员在用户管理页指派。</p>
         <button class="btn primary" type="submit">注册</button>
       </form>
       <div class="auth-foot">已有账号？<a href="/accounts/login/">登录</a></div>

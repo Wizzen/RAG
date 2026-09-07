@@ -200,7 +200,9 @@ def save_doc_images(doc_id, images: dict[str, str]) -> int:
 
 
 def rewrite_img_srcs(html: str, doc_id) -> str:
-    """把 md 里的相对图片引用 images/x.jpg 重写为受权限保护的视图 URL。"""
+    """把 <img> 的相对图片引用 images/x.jpg 重写为受权限保护的视图 URL，
+    并注入 loading=lazy + decoding=async（带图文档整页可达几十 MB，懒加载
+    只拉视口内的）。幂等：绝对 src 不再重写、已带 loading 的不重复注入。"""
     if not html:
         return html
     prefix = f"/kb/doc/{doc_id}/img/"
@@ -211,11 +213,18 @@ def rewrite_img_srcs(html: str, doc_id) -> str:
     html = re.sub(r"(!\[[^\]]*\]\()images/([0-9a-f]+\.(?:jpg|jpeg|png|webp))(\))",
                   _md_repl, html, flags=re.IGNORECASE)
 
-    def _tag_repl(m):
-        return m.group(1) + prefix + m.group(2) + m.group(3)
+    def _img_tag_repl(m):
+        tag = m.group(0)
+        # 相对 src → 受权限保护的视图 URL（兼容单/双引号）
+        tag = re.sub(
+            r'src=(["\'])images/([0-9a-f]+\.(?:jpg|jpeg|png|webp))\1',
+            lambda s: f"src={s.group(1)}{prefix}{s.group(2)}{s.group(1)}",
+            tag, flags=re.IGNORECASE)
+        if "loading=" not in tag:
+            tag = tag[:-1].rstrip() + ' loading="lazy" decoding="async">'
+        return tag
 
-    return re.sub(r'(<img\s[^>]*?src=")images/([0-9a-f]+\.(?:jpg|jpeg|png|webp))(")',
-                  _tag_repl, html, flags=re.IGNORECASE)
+    return re.sub(r"<img\b[^>]*>", _img_tag_repl, html, flags=re.IGNORECASE)
 
 
 # ------------------------------------------------------------------

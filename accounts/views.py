@@ -15,31 +15,22 @@ def _department_pool() -> list[str]:
 
 
 def register_view(request):
-    """用户注册（部门只能从已有部门中选择；默认「通用」）。"""
+    """用户注册。新账号一律「通用」部门——注册不受理部门自选
+    （自选即越权获得该部门全部知识库的访问），归属由管理员在用户管理页指派。"""
     if request.user.is_authenticated:
         return redirect("/")
-    departments = _department_pool()
-    department = ""
     if request.method == "POST":
         form = UserCreationForm(request.POST)
-        department = (request.POST.get("department") or "").strip()
-        # 部门池之外的一律回落「通用」——注册页不是新部门的创建入口
-        if department not in departments:
-            department = ""
         if form.is_valid():
             user = form.save()
             UserProfile.objects.update_or_create(
-                user=user, defaults={"department": department or DEPARTMENT_GENERAL},
+                user=user, defaults={"department": DEPARTMENT_GENERAL},
             )
             login(request, user)
             return redirect("/")
     else:
         form = UserCreationForm()
-    return render(request, "accounts/register.html", {
-        "form": form,
-        "department": department,
-        "departments": departments,
-    })
+    return render(request, "accounts/register.html", {"form": form})
 
 
 def _is_dept_admin(user) -> bool:

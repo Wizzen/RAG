@@ -170,6 +170,7 @@ def manage_list(request):
                 except ValueError as exc:
                     messages.error(request, str(exc))
 
+        elif action == "upload_structured":
             from .structured_data import FIELD_LABELS, StructuredDataError, import_structured_dataset
             upload = request.FILES.get("file")
             kind = (request.POST.get("kind") or "").strip()
@@ -505,9 +506,10 @@ def document_html(request, doc_id):
     # 限量防滥用（≤12 个 × ≤160 字符，与前端 slice(0,12) 对齐）；
     # 模板用 |json_script 渲染（XSS 安全，勿改回 |safe + json.dumps）。
     highlights = [h.strip()[:160] for h in request.GET.getlist("h") if h.strip()][:12]
+    from .pipeline import rewrite_img_srcs
     return render(request, "kb/document_html.html", {
         "doc": doc,
-        "html_body": doc.html_content or "",
+        "html_body": rewrite_img_srcs(doc.html_content or "", doc.id),
         "highlights": highlights,
     })
 
@@ -613,19 +615,21 @@ def ask(request):
     })
 
 
-@csrf_exempt
 @login_required
+@require_http_methods(["POST"])
 async def chat_stream(request):
     """SSE 流式问答端点。
 
     参数: message, thread_id, kb_slug
+    仅接受带 CSRF 校验的 POST——此前 csrf_exempt + 允许 GET 时，外站可用
+    <img src=...?message=...> 伪造受害者名下的消息并消耗本地 GPU。
     """
     from .agent import run_agent_stream
     from .config import llm_settings, retrieval_settings
 
-    message = (request.POST.get("message") or request.GET.get("message") or "").strip()
-    thread_id = request.POST.get("thread_id") or request.GET.get("thread_id") or ""
-    kb_slug = request.POST.get("kb_slug") or request.GET.get("kb_slug") or ""
+    message = (request.POST.get("message") or "").strip()
+    thread_id = request.POST.get("thread_id") or ""
+    kb_slug = request.POST.get("kb_slug") or ""
 
     if not message:
         return HttpResponse("missing 'message'", status=400)

@@ -42,6 +42,16 @@ class Command(BaseCommand):
             return
 
         self.stdout.write(f"待补图文档 {len(docs)} 份（MinerU 逐份重新解析，耗时视文档大小）")
+        # --reindex 会先删旧向量再重建：预检 embedding 端点，不可用直接中止，
+        # 避免"删完才发现嵌不进去"的静默检索丢失
+        if options["reindex"]:
+            try:
+                from kb.pipeline import _embeddings
+                _embeddings().embed_query("重建预检")
+            except Exception as e:
+                self.stderr.write(self.style.ERROR(
+                    f"embedding 端点不可用，中止（未删除任何数据）: {str(e)[:160]}"))
+                return
         ok = skip = fail = 0
         for doc in docs:
             self.stdout.write(f"· {doc.original_name} (库 {doc.kb.slug}) …", ending="")
@@ -57,9 +67,15 @@ class Command(BaseCommand):
                     # 先清旧向量再重建：run_indexing 的文本块用全新 uuid upsert，
                     # 不清会让同一文档的向量越积越多（吃召回名额、统计失真）。
                     delete_doc_vectors(doc.kb.slug, doc.original_name)
-                    n_chunks = run_indexing(doc.md_content, doc.kb.slug, doc.original_name, doc_id=doc.id)
-                    doc.chunk_count = n_chunks
-                    doc.save(update_fields=["chunk_count", "updated_at"])
+                    try:
+                        n_chunks = run_indexing(doc.md_content, doc.kb.slug, doc.original_name, doc_id=doc.id)
+                        doc.chunk_count = n_chunks
+                        doc.save(update_fields=["chunk_count", "updated_at"])
+                    except Exception:
+                        # 旧向量已删且重建失败 → 归零，防止"统计有数、检索无货"
+                        doc.chunk_count = 0
+                        doc.save(update_fields=["chunk_count", "updated_at"])
+                        raise
                 d = doc_image_dir(doc.id)
                 refs = {m.group(1) for m in re.finditer(r"images/([0-9a-f]+\.\w+)", doc.md_content)}
                 missing = sum(1 for name in refs if not (d / name).is_file()) if d.is_dir() else len(refs)

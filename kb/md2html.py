@@ -2,12 +2,15 @@
 
 MinerU 输出的「Markdown」其实是 HTML 超集：表格、图片、折叠块已经是
 原始 HTML（`<table>` / `<img>` / `<details>`）。因此本转换器只把 Markdown
-语法（标题、列表、段落、行内标记）转成 HTML，**原始 HTML 块消毒后透传**，
-不引入任何第三方库。
+语法（标题、列表、段落、行内标记）转成 HTML，**原始 HTML 块经 nh3 白名单
+消毒后透传**。
 
 安全（XSS）：文档由用户上传、输出直接进模板 `|safe`，因此——
 - 普通文本先整体 html.escape 再套行内 markdown 规则（<script> 变 &lt;script&gt;）；
-- 透传的白名单 HTML 剥 on* 事件属性、href/src 危险 scheme（javascript: 等）置 '#'；
+- 透传的 HTML 走 nh3（Rust ammonia）白名单解析消毒：剥 on* 事件属性与
+  一切非白名单标签/属性，URL 仅允许 http(s)/data。此前用正则剥 on* 可被
+  `<img/src=x/onerror=...>`（斜杠分隔属性）和 `<img src="x"onerror=...>`
+  （引号后紧跟）绕过，故必须真解析器；nh3 不可用时整体转义（保安全牺牲渲染）；
 - markdown 链接/图片的 URL 同样走 scheme 校验。
 
 输出是「正文片段」（无 <html>/<body> 包裹），由查看页模板负责整体布局。
@@ -16,6 +19,11 @@ from __future__ import annotations
 
 import html as _html
 import re
+
+try:
+    import nh3
+except ImportError:  # 依赖缺失时退化为整体转义（渲染降级，安全不降级）
+    nh3 = None
 
 # 原样透传的块级 HTML 起始标签（行首匹配，大小写不敏感）。
 # MinerU 常见：<table>、<img、<details>、<figure>、<br>、<hr>、<details。
@@ -38,12 +46,20 @@ _OLIST_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
 _ULIST_RE = re.compile(r"^\s*[-*+]\s+(.*)$")
 
 # ---- 安全（XSS）：文档由用户上传，渲染进 |safe 前必须消毒 ----
-# 危险 scheme 一律替换为 '#'（javascript:/vbscript:/file:/data:text/）
+# 危险 scheme 一律替换为 '#'（markdown 侧链接/图片用；原始 HTML 块由 nh3 处理）
 _DANGEROUS_SCHEME_RE = re.compile(r"^\s*(javascript|vbscript|file)\s*:", re.IGNORECASE)
-# 白名单原始 HTML 块里的事件属性（onerror=... / onclick=...）
-_ON_ATTR_RE = re.compile(r"""\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
-# href/src 属性值（用于 scheme 复检）
-_URL_ATTR_RE = re.compile(r"""(\s(?:href|src)\s*=\s*)(["']?)([^"'>\s]+)""", re.IGNORECASE)
+
+# nh3 白名单：与本转换器透传的块级 HTML 保持一致（_RAW_HTML_RE 的标签集）
+_NH3_TAGS = {
+    "table", "thead", "tbody", "tr", "td", "th", "img", "details", "summary",
+    "figure", "figcaption", "br", "hr", "blockquote", "div", "p",
+    "h1", "h2", "h3", "h4", "h5", "h6", "pre", "code", "ul", "ol", "li",
+}
+_NH3_ATTRS = {
+    "*": {"colspan", "rowspan", "align", "width", "height"},
+    "img": {"src", "alt", "loading", "decoding"},
+    "details": {"open"},
+}
 
 
 def _safe_url(url: str) -> str:
@@ -55,18 +71,20 @@ def _safe_url(url: str) -> str:
 
 
 def _sanitize_raw_html(block: str) -> str:
-    """白名单原始 HTML 块（<table>/<img>/<details> 等）消毒：
+    """白名单原始 HTML 块（<table>/<img>/<details> 等）消毒。
 
-    - 剥掉全部 on* 事件属性（<img src=x onerror=alert(1)> 是真实攻击面）；
-    - href/src 的危险 scheme 替换为 '#'。
+    nh3（Rust ammonia）按标签/属性白名单解析消毒：on* 事件属性、
+    javascript: URL、白名单外的标签全部被剥掉。nh3 不可用时整体转义。
     """
-    block = _ON_ATTR_RE.sub("", block)
-
-    def _fix_url(m):
-        val = _html.unescape(m.group(3))
-        return f'{m.group(1)}{m.group(2)}{_html.escape(_safe_url(val), quote=True)}'
-
-    return _URL_ATTR_RE.sub(_fix_url, block)
+    if nh3 is None:
+        return _html.escape(block)
+    return nh3.clean(
+        block,
+        tags=_NH3_TAGS,
+        attributes=_NH3_ATTRS,
+        url_schemes={"http", "https", "data"},
+        strip_comments=True,
+    )
 
 
 def _inline(text: str) -> str:

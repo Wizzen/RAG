@@ -1,4 +1,5 @@
 {% extends "kb/_base.html" %}
+{% load static %}
 {% block title %}智能问答 · SHDR RAG{% endblock %}
 {% block content %}
 <div class="qa-layout">
@@ -48,9 +49,10 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js"></script>
+<script src="{% static 'js/vendor/marked.min.js' %}"></script>
+<script src="{% static 'js/vendor/purify.min.js' %}"></script>
+<script src="{% static 'js/vendor/jspdf.umd.min.js' %}" defer></script>
+<script src="{% static 'js/vendor/jspdf.plugin.autotable.min.js' %}" defer></script>
 <script>
 /* 纯 Python xlsx 写入器（Pyodide 无 openpyxl/xlsxwriter）。
    用 stdlib zipfile + 手写 XML 生成 .xlsx，支持【多工作表】。
@@ -616,7 +618,7 @@ pd.DataFrame.to_excel = _patched_to_excel
           div.className = 'msg ' + (m.role === 'user' ? 'user' : 'ai');
           const inner = m.role === 'user'
             ? '<div class="bubble">' + (m.content||'').replace(/</g,'&lt;') + '</div>'
-            : AI_WHO + '<div class="bubble"><div class="answer">' + (window.marked ? window.marked.parse(m.content||'') : (m.content||'').replace(/</g,'&lt;')) + '</div></div>';
+            : AI_WHO + '<div class="bubble"><div class="answer">' + (window.marked ? DOMPurify.sanitize(window.marked.parse(m.content||'')) : (m.content||'').replace(/</g,'&lt;')) + '</div></div>';
           div.innerHTML = inner;
           messages.appendChild(div);
           // AI 消息：若有来源出处则渲染可点击链接
@@ -680,6 +682,7 @@ pd.DataFrame.to_excel = _patched_to_excel
       (c.images || []).forEach((u, idx) => {
         const ia = document.createElement('a');
         ia.className = 'cite-img-link';
+        ia.href = u;
         ia.target = '_blank'; ia.rel = 'noopener';
         ia.title = '命中图片 ' + (idx + 1) + '（来自 ' + name + '）· 点击看原图';
         const im = document.createElement('img');
@@ -720,12 +723,21 @@ pd.DataFrame.to_excel = _patched_to_excel
     let turnCitations = [];  // 本轮检索的来源出处（citations 事件累积）
     messages.scrollTop = messages.scrollHeight;
 
-    const url = '/kb/stream/?message=' + encodeURIComponent(text) +
-                '&thread_id=' + encodeURIComponent(currentThreadId);
+    const url = '/kb/stream/';
+    const body = new URLSearchParams({
+      message: text,
+      thread_id: currentThreadId,
+    });
 
     let mdBuffer = '';
+    // LLM 输出可能引用文档原文（含恶意 HTML）→ marked 渲染后必须 DOMPurify 消毒；
+    // marked 缺失时兜底整体转义（此前直插原文是 XSS 面）
     const renderMd = () => {
-      answerEl.innerHTML = window.marked ? window.marked.parse(mdBuffer) : mdBuffer;
+      if (window.marked && window.DOMPurify) {
+        answerEl.innerHTML = DOMPurify.sanitize(window.marked.parse(mdBuffer));
+      } else {
+        answerEl.textContent = mdBuffer;
+      }
       messages.scrollTop = messages.scrollHeight;
     };
 
@@ -739,7 +751,11 @@ pd.DataFrame.to_excel = _patched_to_excel
     let pendingThink = [];  // 思考行：下一个动作开始时即视为结束
 
     try {
-      const resp = await fetch(url, { method: 'POST' });
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': getCSRFToken() },
+        body,
+      });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const reader = resp.body.getReader();
       const dec = new TextDecoder();

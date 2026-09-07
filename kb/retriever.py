@@ -88,12 +88,18 @@ def _fuse_key(text: str) -> str:
 RRF_K = 60
 
 
-def search(kb_slug: str, query: str, k: int | None = None) -> list[dict[str, Any]]:
+def search(kb_slug: str, query: str, k: int | None = None,
+           query_embedding: list[float] | None = None,
+           rerank_enabled: bool = True) -> list[dict[str, Any]]:
     """混合检索：向量（语义）+ 关键词（精确编号/术语）双路召回，RRF 融合。
 
     - 向量路：Chroma 相似度（当前配置的 embedding 模型）
     - 关键词路：keyword.db 文本匹配（与 embedding 模型无关，换模型不影响）
     - 任一路失败自动降级为单路，不互相拖累
+    - query_embedding：调用方（search_folder/eval）已嵌好的查询向量，传入则
+      本库不再重复嵌入——跨库扇出时 N 次相同查询的远程嵌入变 1 次
+    - rerank_enabled=False：跳过精排（search_folder 合并后做一次全局 rerank，
+      替代此前每库各一次）
     """
     k = k or retrieval_settings()["top_k"]
     recall = max(k * 3, 15)
@@ -102,7 +108,16 @@ def search(kb_slug: str, query: str, k: int | None = None) -> list[dict[str, Any
     # ---- 向量路 ----
     vec_docs: list[tuple[Any, float]] = []
     try:
-        vec_docs = vs.similarity_search_with_relevance_scores(query, k=recall)
+        if query_embedding is not None:
+            res = vs._collection.query(  # noqa: SLF001 同 fetch_doc 的原生查询模式
+                query_embeddings=[query_embedding], n_results=recall,
+                include=["documents", "metadatas"])
+            from langchain_core.documents import Document as _Doc
+            vec_docs = [(_Doc(page_content=d, metadata=m or {}), 0.0)
+                        for d, m in zip((res.get("documents") or [[]])[0] or [],
+                                        (res.get("metadatas") or [[]])[0] or [])]
+        else:
+            vec_docs = vs.similarity_search_with_relevance_scores(query, k=recall)
     except Exception as e:
         # 降级为纯关键词检索，但必须留痕——embedding 端点挂掉时运维要能发现
         logging.getLogger(__name__).warning("向量检索失败（降级纯关键词）kb=%s: %s", kb_slug, e)
@@ -152,7 +167,7 @@ def search(kb_slug: str, query: str, k: int | None = None) -> list[dict[str, Any
     # 失败/未启用自动降级用融合序，不阻断。----
     from . import rerank as rerank_mod
     rr_cfg = rerank_mod.rerank_settings()
-    if rr_cfg["enabled"] and len(results) > 1:
+    if rerank_enabled and rr_cfg["enabled"] and len(results) > 1:
         candidates = sorted(fused.values(), key=lambda r: r["score"], reverse=True)[:max(k * 2, 8)]
         rr = rerank_mod.rerank(query, [c["text"] for c in candidates], top_n=k)
         if rr:
@@ -197,26 +212,67 @@ def is_kb_ready(kb_slug: str) -> bool:
 
 
 def search_folder(child_slugs: list[str], query: str, k: int | None = None) -> list[dict[str, Any]]:
-    """跨多个子文档库扇出检索：对每个子库各取 top_k，合并后按 score 排序取前 k。
+    """跨多个子文档库扇出检索：查询向量只嵌一次，各库本地召回（不精排）
+    后合并去重，再对融合序做一次全局 rerank。
 
-    用于文件夹级搜索（通用问题跨所有子文档库）。
+    此前每库各嵌一次查询 + 各做一次 rerank——N 库 = 2N 次远程调用且全串行
+    （30 库 ≈ 15-45 秒）；现在固定 1 次嵌入 + 1 次精排，每库只剩本地
+    Chroma/SQLite 查询。子库失败跳过并记日志，不阻断整体。
     """
     k = k or retrieval_settings()["top_k"]
+    if not child_slugs:
+        return []
+
+    q_emb: list[float] | None = None
+    try:
+        q_emb = _embeddings().embed_query(query)
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "跨库查询嵌入失败（各库降级纯关键词）: %s", str(e)[:120])
+
     all_results: list[dict[str, Any]] = []
     for slug in child_slugs:
         try:
-            all_results.extend(search(slug, query, k=k))
+            all_results.extend(
+                search(slug, query, k=k, query_embedding=q_emb, rerank_enabled=False))
         except Exception:
-            continue  # 某个子库缺失/出错不阻断整体
-    # 分桶排序：有精排分的（桶 0，按绝对相关度）永远排在无精排分的（桶 1，
-    # 按 RRF 分）之前——避免 0~1 的 rerank 分与 ~0.03 的 RRF 分跨量纲直接比较，
-    # 否则部分子库 rerank 瞬时失败时其结果会被系统性错位。
-    def _merge_key(r):
-        rs = r.get("rerank_score")
-        return (0, rs) if rs is not None else (1, r.get("score", 0))
+            logging.getLogger(__name__).exception("子库检索失败（跳过）kb=%s", slug)
+            continue
 
-    all_results.sort(key=_merge_key, reverse=True)
-    return all_results[:k]
+    # 跨库去重：同一块（含图片块）只保留一次，RRF 分累加后统一排序
+    fused: dict[str, dict[str, Any]] = {}
+    for r in all_results:
+        key = _fuse_key(r.get("text", "") + (r.get("image") or ""))
+        if key in fused:
+            fused[key]["score"] = (fused[key].get("score", 0) or 0) + (r.get("score", 0) or 0)
+        else:
+            fused[key] = r
+    results = sorted(fused.values(), key=lambda r: r["score"], reverse=True)[:k]
+
+    # ---- 全局单次精排（失败/未启用降级融合序）----
+    from . import rerank as rerank_mod
+    rr_cfg = rerank_mod.rerank_settings()
+    if rr_cfg["enabled"] and len(results) > 1:
+        candidates = sorted(fused.values(), key=lambda r: r["score"], reverse=True)[:max(k * 2, 8)]
+        rr = rerank_mod.rerank(query, [c["text"] for c in candidates], top_n=k)
+        if rr:
+            reranked = []
+            for it in rr:
+                idx = it.get("index")
+                if idx is not None and 0 <= idx < len(candidates):
+                    item = dict(candidates[idx])
+                    via = item.get("via")
+                    via = "+".join(sorted(via)) if isinstance(via, set) else str(via)
+                    item["via"] = via + "+rr"
+                    item["rerank_score"] = round(it.get("relevance_score", 0.0), 4)
+                    reranked.append(item)
+            if reranked:
+                results = reranked[:k]
+
+    for r in results:
+        if isinstance(r.get("via"), set):
+            r["via"] = "+".join(sorted(r["via"]))
+    return results
 
 
 def fetch_doc(

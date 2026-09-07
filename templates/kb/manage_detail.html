@@ -169,18 +169,21 @@ function renderDocRow(d) {
   nameEl.textContent = '📄 ' + d.name;
   const detailEl = row.querySelector('[data-detail]') || row.querySelector('.doc-detail');
 
-  // 清空并重建
+  // 清空并重建（与服务器端模板保持一致：完成态文档名带查看链接；名字/错误文本转义防注入）
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   let inner = row.querySelector('div[style="flex:1"]');
-  let html = `<div class="doc-name">${d.name}</div>`;
+  let html = d.status === 'completed'
+    ? `<div class="doc-name"><a href="/kb/doc/${d.id}/html/" target="_blank" rel="noopener" title="查看文档（含插图）">${esc(d.name)}</a></div>`
+    : `<div class="doc-name">${esc(d.name)}</div>`;
 
   if (d.status === 'completed') {
     html += `<div class="doc-detail"><span class="doc-badge badge-completed">✓ 已完成</span> · ${d.chunk_count} 个片段</div>`;
   } else if (d.status === 'failed') {
-    html += `<div class="doc-detail"><span class="doc-badge badge-failed">✗ 失败</span> ${d.error || '处理失败'}</div>`;
+    html += `<div class="doc-detail"><span class="doc-badge badge-failed">✗ 失败</span> ${esc(d.error) || '处理失败'}</div>`;
     html += `<div class="progress-bar"><div class="progress-fill err" style="width:100%"></div></div>`;
   } else {
     const icon = d.status === 'pending' ? '<span class="doc-badge badge-pending">⏳ 待处理</span>' : '<span class="spinner"></span>';
-    const text = d.stage_detail || d.status_display || '处理中…';
+    const text = esc(d.stage_detail || d.status_display) || '处理中…';
     html += `<div class="doc-detail">${icon} ${d.status !== 'pending' ? text : ''}</div>`;
     html += `<div class="progress-bar"><div class="progress-fill" style="width:${d.progress}%"></div></div>`;
   }

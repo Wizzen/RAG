@@ -1,4 +1,5 @@
 {% extends "kb/_base.html" %}
+{% load static %}
 {% block title %}SHDR RAG{% endblock %}
 {% block content %}
 <style>
@@ -219,7 +220,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="{% static 'js/vendor/marked.min.js' %}"></script>
+<script src="{% static 'js/vendor/purify.min.js' %}"></script>
 <script>
 
 // ── 内置 AI 问答（复用 /kb/stream/ SSE；同 ask 页语义的精简前端） ──
@@ -269,7 +271,9 @@
     const toolArea = am.querySelector('.tool-area');
     const toolRows = {}; let firstToken = true; let buf = ''; let cites = [];
     const render = () => {
-      answerEl.innerHTML = window.marked ? window.marked.parse(buf) : buf.replace(/</g, '&lt;');
+      answerEl.innerHTML = (window.marked && window.DOMPurify)
+        ? DOMPurify.sanitize(window.marked.parse(buf))
+        : buf.replace(/</g, '&lt;');
       log.scrollTop = log.scrollHeight;
     };
     const markDone = row => {
@@ -358,6 +362,7 @@
           (c.images || []).forEach((u, idx) => {
             const ia = document.createElement('a');
             ia.className = 'cite-img-link';
+            ia.href = u;
             ia.target = '_blank'; ia.rel = 'noopener';
             ia.title = '命中图片 ' + (idx + 1) + '（来自 ' + name + '）· 点击看原图';
             const im = document.createElement('img');

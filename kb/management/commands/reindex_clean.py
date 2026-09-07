@@ -55,6 +55,17 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("[dry-run] 不实际重建。"))
             return
 
+        # 预检 embedding 端点：本命令先删后建，端点不可用时重建必然失败，
+        # 届时旧向量已删——静默丢失整库检索能力（文档还显示 COMPLETED）。
+        # 动手删任何东西前先探活，失败直接中止。
+        try:
+            from kb.pipeline import _embeddings
+            _embeddings().embed_query("重建预检")
+        except Exception as e:
+            self.stderr.write(self.style.ERROR(
+                f"embedding 端点不可用，中止（未删除任何数据）: {str(e)[:160]}"))
+            return
+
         # 按文档库分组，每个库处理完后统一刷新统计 + 缓存
         by_kb: dict[str, list[Document]] = {}
         for d in docs:
@@ -84,6 +95,10 @@ class Command(BaseCommand):
                     self.stdout.write(self.style.SUCCESS(f"  ✓ {doc.original_name} → {n} 块"))
                 except Exception as e:
                     self.stderr.write(self.style.ERROR(f"  ✗ {doc.original_name}: {e}"))
+                    # 向量已随目录删除而丢失 → chunk_count 必须归零，
+                    # 否则语义检索仍会选中该库却永远查不到内容（静默失效）
+                    doc.chunk_count = 0
+                    doc.save(update_fields=["chunk_count", "updated_at"])
 
             # 刷新 KB 缓存统计
             kb.doc_count = kb.documents.filter(status=Document.Status.COMPLETED).count()

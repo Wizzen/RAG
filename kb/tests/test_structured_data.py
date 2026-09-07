@@ -212,3 +212,25 @@ class SemanticSearchSectionTests(TestCase):
             r = self.client.get(reverse("kb:search"), {"q": "任意"})
         self.assertEqual(r.status_code, 200)
         sf.assert_not_called()
+
+    def test_manual_upload_does_not_trigger_structured_import(self):
+        """upload_manual 分支不应顺带跑结构化导入（5270d18 曾丢失 elif 导致
+        手册上传后额外弹「仅支持 CSV」矛盾错误）。"""
+        from unittest.mock import patch
+        user = get_user_model().objects.create_user(
+            username="manual-only", password="pw", is_staff=True,
+        )
+        library = KnowledgeBase.objects.create(
+            name="手册库", slug="manual-only-lib", is_folder=True, created_by=user,
+        )
+        self.client.force_login(user)
+        with patch("kb.pipeline.process_document_async"):
+            r = self.client.post(reverse("kb:manage_list"), {
+                "action": "upload_manual",
+                "kb_slug": library.slug,
+                "file": SimpleUploadedFile(
+                    "guide.txt", b"brake ui-900", content_type="text/plain"),
+            }, follow=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertNotContains(r, "仅支持 CSV")
+        self.assertNotContains(r, "已导入")
