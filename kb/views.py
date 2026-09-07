@@ -77,9 +77,13 @@ def _create_manual_document(kb: KnowledgeBase, upload, user) -> Document:
 
     fname = Path(upload.name).name
     ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-    file_types = {"pdf": "pdf", "md": "md", "markdown": "md", "txt": "txt"}
+    file_types = {
+        "pdf": "pdf", "md": "md", "markdown": "md", "txt": "txt",
+        # 照片直传：JPG/PNG/WebP 走多模态索引
+        "jpg": "image", "jpeg": "image", "png": "image", "webp": "image",
+    }
     if ext not in file_types:
-        raise ValueError("手册仅支持 PDF、Markdown（.md）和 TXT 文件。")
+        raise ValueError("仅支持 PDF、Markdown（.md）、TXT 和图片（JPG/PNG/WebP）文件。")
 
     with transaction.atomic():
         if kb.is_folder:
@@ -141,7 +145,8 @@ def manage_list(request):
                 slug = _derive_unique_slug(name)
                 KnowledgeBase.objects.create(
                     name=name, slug=slug,
-                    description="", created_by=request.user,
+                    description=(request.POST.get("description") or "").strip()[:200],
+                    created_by=request.user,
                     is_folder=True, parent=None,
                     department=department or DEPARTMENT_GENERAL,
                 )
@@ -303,10 +308,11 @@ def manage_delete(request, slug):
 @login_required
 @require_http_methods(["POST"])
 def kb_rename(request, slug):
-    """重命名知识库（仅名称；slug 保持不变，避免迁移向量目录）。
+    """重命名知识库（名称 + 可选描述；slug 保持不变，避免迁移向量目录）。
 
     AJAX 优先：返回 JSON；非 AJAX 降级为重定向。
     部门管理员只能改本部门的库，且不能改库的部门归属。
+    description 仅在表单携带该字段时更新（留空即清空）。
     """
     from . import access as kb_access
     kb = get_object_or_404(KnowledgeBase, slug=slug)
@@ -317,7 +323,11 @@ def kb_rename(request, slug):
     if not name:
         return JsonResponse({"ok": False, "message": "名称不能为空"}, status=400)
     kb.name = name
-    kb.save(update_fields=["name", "updated_at"])
+    update_fields = ["name", "updated_at"]
+    if "description" in request.POST:
+        kb.description = (request.POST.get("description") or "").strip()
+        update_fields.append("description")
+    kb.save(update_fields=update_fields)
     # 可选：一并改部门（文件夹级联更新所有子库）；仅全局管理员可改归属，
     # 且只接受部门池内的值。
     if department and kb_access.is_global_admin(request.user):
@@ -329,14 +339,29 @@ def kb_rename(request, slug):
                or "application/json" in (request.META.get("HTTP_ACCEPT") or ""))
     if is_ajax:
         kb.refresh_from_db()
-        return JsonResponse({"ok": True, "name": kb.name, "department": kb.department})
-    messages.success(request, f"已重命名为「{kb.name}」。")
+        return JsonResponse({"ok": True, "name": kb.name, "department": kb.department,
+                             "description": kb.description})
+    messages.success(request, f"已更新「{kb.name}」。")
     return redirect("kb:manage_list")
 
 
-@_is_manager
 @login_required
 @require_http_methods(["POST"])
+def doc_desc_update(request, slug, doc_id):
+    """更新文档描述（AJAX；描述会展示给 AI 帮其判断文档相关性）。
+
+    与 doc_delete 同款权限模式：非管理者 404（不泄露存在性）。
+    """
+    from . import access as kb_access
+    kb = get_object_or_404(KnowledgeBase, slug=slug)
+    if not kb_access.can_manage_kb(request.user, kb):
+        raise Http404("知识库不存在")
+    doc = get_object_or_404(Document, id=doc_id, kb__in=_scope_kb_ids(kb))
+    doc.description = (request.POST.get("description") or "").strip()[:200]
+    doc.save(update_fields=["description", "updated_at"])
+    return JsonResponse({"ok": True, "description": doc.description})
+
+
 def doc_delete(request, slug, doc_id):
     """删除某知识库下的一份文档（文件夹则跨其所有子库查找）。
 
@@ -445,6 +470,7 @@ def doc_status_api(request, slug):
             "progress": PROGRESS_MAP.get(d.status, 0),
             "chunk_count": d.chunk_count,
             "error": d.error_msg[:100] if d.error_msg else "",
+            "desc": d.description or "",
         }
         for d in _scope_docs(kb)
     ]
@@ -615,6 +641,56 @@ def ask(request):
     })
 
 
+def _route_kb_by_question(message: str, user):
+    """问题文本 → 名称最相关的文档库（词面路由，交给 agent 前的确定性预定位）。
+
+    问题里明确出现某个库名或文档名（如「P8」「Dumbo」「药典」）时直接定位到该库，
+    避免 agent 在明显无关的库上浪费检索。保守策略：只有唯一强命中才返回，
+    歧义（多家同分）或无命中返回 None，由调用方走原有自动挑选。
+    """
+    from . import access as kb_access
+
+    text = (message or "").lower()
+    if not text.strip():
+        return None
+    scores: list[tuple[int, object]] = []  # (score, kb)
+    for kb in KnowledgeBase.objects.filter(kb_access.kb_q(user), is_folder=False):
+        names = [kb.name] + [d.original_name for d in kb.documents.all()]
+        score = 0
+        for name in names:
+            n = (name or "").lower().strip()
+            if not n:
+                continue
+            if n in text:  # 完整名称出现 → 强信号
+                score = max(score, len(n))
+                continue
+            stem = re.sub(r"\.[a-z0-9]+$", "", n)
+            for tok in re.split(r"[^0-9a-z\u4e00-\u9fff]+", stem):
+                if not tok:
+                    continue
+                if tok.isascii():
+                    # 2 字符纯字母 token（dr/en/mm）噪声大（子串误命中）→ 必须含数字（p8/g9）
+                    if len(tok) < 2 or (len(tok) == 2 and not any(c.isdigit() for c in tok)):
+                        continue
+                    if len(tok) >= 6:
+                        # 长编号/代号支持前缀提及（sdlspdrtp → sdlspdrtp0003）
+                        for cut in range(len(tok), 5, -1):
+                            if tok[:cut] in text:
+                                score = max(score, min(cut, 8))
+                                break
+                    elif tok in text:
+                        score = max(score, min(len(tok), 8))
+                elif len(tok) >= 2 and tok in text:  # CJK 连续段整体出现
+                    score = max(score, min(len(tok), 8))
+        scores.append((score, kb))
+    if not scores:
+        return None
+    scores.sort(key=lambda t: t[0], reverse=True)
+    top1, top2 = scores[0][0], (scores[1][0] if len(scores) > 1 else 0)
+    # 唯一强命中（≥2 字符且严格领先）才定位；平分视为歧义，不干预
+    return scores[0][1] if top1 >= 2 and top1 > top2 else None
+
+
 @login_required
 @require_http_methods(["POST"])
 async def chat_stream(request):
@@ -649,6 +725,9 @@ async def chat_stream(request):
             kb = KnowledgeBase.objects.filter(slug=kb_slug).first()
             if kb and not kb_access.kb_accessible(request.user, kb):
                 kb = None  # 指定了不可访问的库 → 视为未指定，走自动挑选
+        if not kb:
+            # 词面路由：问题明确提到某库/文档名 → 直接定位，避免无关库检索
+            kb = _route_kb_by_question(message, request.user)
         if not kb:
             kb = (
                 KnowledgeBase.objects.filter(kb_access.kb_q(request.user), is_folder=False, chunk_count__gt=0).first()

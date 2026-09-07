@@ -324,7 +324,10 @@ document.addEventListener('click', async (e) => {
   // 删除当前激活的配置（下拉旁的 ×）
   const delBtn = e.target.closest('.pc-del');
   if (delBtn){
-    if (!confirm('删除配置「' + delBtn.dataset.name + '」？')) return;
+    if (!(await fosConfirm({
+      title: '删除配置', confirmText: '删除',
+      message: '删除配置「' + delBtn.dataset.name + '」？',
+    }))) return;
     const fd = new FormData();
     fd.set('csrfmiddlewaretoken', CSRF);
     fd.set('action', 'preset_delete');

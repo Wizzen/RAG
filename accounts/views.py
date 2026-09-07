@@ -1,9 +1,10 @@
-"""accounts views: 注册（登录/登出用 Django 内建）+ 用户部门管理（staff）"""
+"""accounts views: 注册（登录/登出用 Django 内建）+ 用户部门管理（staff）+ 自助改密"""
 from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import UserCreationForm
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
+from django.views.decorators.http import require_http_methods
 
 from .models import DEPARTMENT_GENERAL, UserProfile
 
@@ -31,6 +32,36 @@ def register_view(request):
     else:
         form = UserCreationForm()
     return render(request, "accounts/register.html", {"form": form})
+
+
+@login_required
+@require_http_methods(["POST"])
+def password_change(request):
+    """用户自助修改自己的密码（AJAX，全站统一弹窗）。
+
+    校验：当前密码正确、两次新密码一致、至少 6 位（与添加账号的规则相同）、
+    不得与当前密码相同。update_session_auth_hash 保证改完不掉线。
+    """
+    from django.contrib.auth import update_session_auth_hash
+
+    old = request.POST.get("old_password") or ""
+    new1 = request.POST.get("new_password1") or ""
+    new2 = request.POST.get("new_password2") or ""
+
+    if not request.user.check_password(old):
+        ok, msg = False, "当前密码不正确。"
+    elif new1 != new2:
+        ok, msg = False, "两次输入的新密码不一致。"
+    elif len(new1) < 6:
+        ok, msg = False, "新密码至少 6 位。"
+    elif new1 == old:
+        ok, msg = False, "新密码不能与当前密码相同。"
+    else:
+        request.user.set_password(new1)
+        request.user.save()
+        update_session_auth_hash(request, request.user)
+        ok, msg = True, "密码已修改。"
+    return JsonResponse({"ok": ok, "message": msg})
 
 
 def _is_dept_admin(user) -> bool:
@@ -125,6 +156,16 @@ def user_list(request):
         if action in ("dept_add", "dept_rename", "dept_delete"):
             if viewer_global:
                 _handle_department_action(request, action)
+            if request.headers.get("x-requested-with") == "XMLHttpRequest":
+                # 弹窗 AJAX：从 messages 取回执行结果转 JSON（成功/失败都带提示）
+                from django.contrib.messages import get_messages
+                msgs = list(get_messages(request))
+                last = msgs[-1] if msgs else None
+                level = (getattr(last, "level_tag", "") or "").split()[0] if last else ""
+                return JsonResponse({
+                    "ok": bool(last) and level != "error",
+                    "message": str(last) if last else "操作完成。",
+                })
             return redirect("accounts:user_list")
 
         # ---- 添加账号（全局管理员 或 部门管理员；支持 AJAX 弹窗）----

@@ -552,7 +552,10 @@ pd.DataFrame.to_excel = _patched_to_excel
     if (btn.dataset.deleting) return;  // 防重复点击
     const thread = btn.dataset.thread;
     const title = (btn.dataset.title || '该会话');
-    if (!confirm('确定删除「' + title + '」？此操作不可撤销。')) return;
+    if (!(await fosConfirm({
+      title: '删除会话', confirmText: '删除',
+      message: '确定删除「' + title + '」？此操作不可撤销。',
+    }))) return;
     btn.dataset.deleting = '1';
     btn.disabled = true;
     try {

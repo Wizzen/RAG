@@ -12,7 +12,9 @@ OCR + 向量化流水线引擎。
 from __future__ import annotations
 
 import html
+import io
 import logging
+import hashlib
 import os
 import re
 import sys
@@ -143,11 +145,12 @@ def run_ocr(file_path: Path, file_type: str, on_progress=None) -> str:
 
 
 def run_ocr_with_images(file_path: Path, file_type: str, on_progress=None) -> tuple[str, dict[str, str]]:
-    """提取 Markdown + PDF 中的图片。
+    """提取 Markdown + 文档图片。
 
-    MD/TXT → 直接读取（无图片）；PDF → 调 MinerU（return_images）。
+    MD/TXT → 直接读取（无图片）；PDF → 调 MinerU（return_images）；
+    IMAGE → 直传照片标准化（EXIF 转正 + 缩放）后包装成单图文档。
     返回 (md, images)；images = {文件名: data:image/...;base64,...}。
-    on_progress 仅对 PDF 有效（OCR 耗时较长）。
+    on_progress 仅对 PDF / 大图有效。
     """
     if file_type in ("md", "markdown", "txt"):
         if on_progress:
@@ -155,8 +158,48 @@ def run_ocr_with_images(file_path: Path, file_type: str, on_progress=None) -> tu
         return file_path.read_text(encoding="utf-8", errors="ignore"), {}
     elif file_type == "pdf":
         return _ocr_pdf(file_path, on_progress=on_progress)
+    elif file_type == "image":
+        return _process_photo(file_path, on_progress=on_progress)
     else:
         raise ValueError(f"不支持的文件类型: {file_type}")
+
+
+# 直传照片嵌入前的统一边长上限：手机原图动辄 4000px/5MB+，
+# base64 后会撑爆 WeMM 请求；1568px 是主流多模态模型的常用输入档
+_PHOTO_MAX_SIDE = 1568
+
+
+def _process_photo(file_path: Path, on_progress=None) -> tuple[str, dict[str, str]]:
+    """直传照片 → (md, images)，结构与 MinerU 的 PDF 输出一致，
+    落盘/图片块索引/引用缩略图全部复用 PDF 插图链路。
+
+    EXIF 转正（手机竖拍）→ 超 1568px 缩边 → JPEG 重编码 →
+    以内容哈希命名（sha256，与 MinerU 约定相同，保证幂等）。
+    md 里 caption 与图片同行：_image_chunks 剥掉图片语法后，
+    剩余文本即该图片块的检索上下文。
+    """
+    from PIL import Image, ImageOps
+
+    if on_progress:
+        on_progress("正在处理图片…")
+    with Image.open(file_path) as im:
+        im = ImageOps.exif_transpose(im)
+        if im.mode != "RGB":
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            if im.mode in ("RGBA", "LA", "PA"):
+                bg.paste(im, mask=im.convert("RGBA").split()[-1])
+            else:
+                bg.paste(im.convert("RGB"))
+            im = bg
+        if max(im.size) > _PHOTO_MAX_SIDE:
+            im.thumbnail((_PHOTO_MAX_SIDE, _PHOTO_MAX_SIDE))
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=88)
+    raw = buf.getvalue()
+    name = hashlib.sha256(raw).hexdigest() + ".jpg"
+    b64 = _base64.b64encode(raw).decode()
+    caption = f"照片上传：{Path(file_path).name}"
+    return f"{caption} ![](images/{name})", {name: f"data:image/jpeg;base64,{b64}"}
 
 
 # ------------------------------------------------------------------
