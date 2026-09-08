@@ -830,6 +830,14 @@ def process_document(doc_id: str) -> None:
         kb.chunk_count = sum(d.chunk_count for d in kb.documents.filter(status=Document.Status.COMPLETED))
         kb.save(update_fields=["doc_count", "chunk_count", "updated_at"])
 
+        # 追踪表：库（或其父文件夹）启用了追踪 → 后台抽取关键信息登记
+        try:
+            from . import tracker as _tracker
+            _tracker.run_extraction_async(doc.id)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "追踪表抽取调度失败（不影响文档入库）doc=%s", doc_id)
+
     except Exception as e:
         # 标记失败
         try:

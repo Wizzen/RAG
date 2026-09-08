@@ -161,6 +161,78 @@ class Document(models.Model):
                 "img": "IMG"}.get(self.badge_kind, "FILE")
 
 
+class KbTracker(models.Model):
+    """知识库追踪表配置（一库一表）：文档入库完成后由 AI 按字段抽取关键信息。
+
+    适用场景：定检报告、月度走账等同构工作流文档的持续登记与追溯。
+    fields = [{"label": "检验日期"}, ...]（label 即列名即 JSON 键，所见即所得）。
+    """
+
+    kb = models.OneToOneField(
+        KnowledgeBase, on_delete=models.CASCADE, related_name="tracker",
+        verbose_name="知识库",
+    )
+    enabled = models.BooleanField("启用", default=False)
+    fields = models.JSONField("追踪字段", default=list, blank=True)
+    instruction = models.TextField(
+        "补充提示", max_length=500, blank=True, default="",
+        help_text="追加到抽取提示词，例如：结论只填 合格/不合格",
+    )
+    # 字段结构版本：配置里字段有任何增删改 → +1；行记录抽取时的版本，
+    # 落后即说明该行是旧结构抽的（页面打「字段已变更」标，提示可重试补齐）
+    schema_version = models.PositiveIntegerField("字段结构版本", default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "追踪表"
+        verbose_name_plural = "追踪表"
+
+    def __str__(self):
+        return f"{self.kb.name} 追踪表（{len(self.fields)} 字段）"
+
+
+class TrackerRow(models.Model):
+    """追踪表的一行 = 一份文档的抽取结果（同库同文档唯一，重试原地更新）。
+
+    重试带旧值重抽（提示词要求保旧）：结果有变化 → 状态 proposed 挂起，
+    proposed_values 存新值，等管理员在改前/改后对比弹窗里逐字段采纳；
+    首次抽取或结果与旧值一致 → 直接 done。
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "待抽取"
+        RUNNING = "running", "抽取中"
+        PROPOSED = "proposed", "待确认"
+        DONE = "done", "已完成"
+        FAILED = "failed", "失败"
+
+    tracker = models.ForeignKey(
+        KbTracker, on_delete=models.CASCADE, related_name="rows",
+    )
+    document = models.ForeignKey(
+        Document, on_delete=models.CASCADE, related_name="tracker_rows",
+    )
+    values = models.JSONField("抽取值", default=dict, blank=True)
+    proposed_values = models.JSONField("待确认的新值", default=dict, blank=True)
+    schema_version = models.PositiveIntegerField("抽取时的字段结构版本", default=0)
+    status = models.CharField(
+        "状态", max_length=12, choices=Status.choices, default=Status.PENDING,
+    )
+    error = models.CharField("错误", max_length=300, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-document__created_at"]
+        unique_together = [("tracker", "document")]
+        verbose_name = "追踪记录"
+        verbose_name_plural = "追踪记录"
+
+    def __str__(self):
+        return f"{self.document.original_name} → {self.get_status_display()}"
+
+
 class SiteConfig(models.Model):
     """站点服务配置（单行）。空字段回退到 .env / settings 默认值。
 
