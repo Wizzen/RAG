@@ -76,20 +76,29 @@ def parse_llm_json(text: str) -> dict:
 
 
 def _llm_invoke(prompt: str) -> str:
-    """走站点 LLM 配置做一次非流式补全（服务层可 patch 此函数做单测）。"""
-    from langchain_openai import ChatOpenAI
-    from .config import llm_settings
+    """走站点 LLM 配置做一次非流式补全（服务层可 patch 此函数做单测）。
 
-    cfg = llm_settings()
-    llm = ChatOpenAI(
-        model=cfg["model"],
-        api_key=cfg["api_key"] or "local-no-key",
-        base_url=cfg["base_url"],
-        temperature=0,
-        timeout=_LLM_TIMEOUT,
-    )
-    resp = llm.invoke(prompt)
-    return getattr(resp, "content", "") or ""
+    信号量限 2 并发：批量入库的自动钩子 + 补录 + 手动重试可能同时压上来，
+    本地小模型（LM Studio）并行承受力有限，超发只会拖垮整体时延。
+    """
+    with _LLM_SEMAPHORE:
+        from langchain_openai import ChatOpenAI
+        from .config import llm_settings
+
+        cfg = llm_settings()
+        llm = ChatOpenAI(
+            model=cfg["model"],
+            api_key=cfg["api_key"] or "local-no-key",
+            base_url=cfg["base_url"],
+            temperature=0,
+            timeout=_LLM_TIMEOUT,
+            max_retries=0,  # 默认 2 次重试会把最坏时长拖到 3×600s，超过卡死回收的 20 分钟窗
+        )
+        resp = llm.invoke(prompt)
+        return getattr(resp, "content", "") or ""
+
+
+_LLM_SEMAPHORE = threading.Semaphore(2)
 
 
 def run_extraction(doc_id, tracker_id=None) -> bool:
@@ -108,19 +117,27 @@ def run_extraction(doc_id, tracker_id=None) -> bool:
     if tracker_id is not None:
         tracker = KbTracker.objects.filter(id=tracker_id).first()
     else:
-        # 自动钩子：文档挂在子库时向上找父库（文件夹）上的追踪表
-        tracker = (getattr(doc.kb, "tracker", None)
-                   or getattr(doc.kb.parent, "tracker", None))
-    if tracker is None or not tracker.enabled or not tracker.fields:
+        # 自动钩子：按“就近且启用”解析归属表——子库启用中的 tracker 优先，
+        # 停用的不遮蔽（父文件夹表可覆盖其文档），与补录的过滤语义一致
+        tracker = None
+        for cand in (getattr(doc.kb, "tracker", None),
+                     getattr(doc.kb.parent, "tracker", None)):
+            if cand is not None and cand.enabled and cand.fields:
+                tracker = cand
+                break
+    if tracker is None:
         return False
 
     row, _created = TrackerRow.objects.get_or_create(
         tracker=tracker, document=doc,
         defaults={"status": TrackerRow.Status.PENDING},
     )
+    from django.utils import timezone as _tz
+    # updated_at 必须随认领刷新：否则补录翻出的旧失败行（updated_at 可能是
+    # 几天前）会被页面 GET 的 20 分钟回收逻辑当场误杀（在抽却被标"中断"）
     claimed = TrackerRow.objects.filter(
         id=row.id, status__in=[TrackerRow.Status.PENDING, TrackerRow.Status.FAILED],
-    ).update(status=TrackerRow.Status.RUNNING, error="")
+    ).update(status=TrackerRow.Status.RUNNING, error="", updated_at=_tz.now())
     if not claimed:
         return False  # 已有进行中的抽取
 
@@ -137,22 +154,33 @@ def run_extraction(doc_id, tracker_id=None) -> bool:
             v = data.get(f["label"])
             values[f["label"]] = str(v).strip()[:80] if v is not None else ""
 
+        # 终态写入均为 compare-and-set：仅当行仍处于 running（本次认领未被
+        # 抢走）才落库，防止并发写入方互相覆盖（输家静默放弃）。
+        from django.utils import timezone as _tz
         if prior and any(values[k] != (prior.get(k) or "") for k in values):
-            # 有旧值且出现差异 → 挂起待确认（旧值保留，新值存 proposed_values）
-            TrackerRow.objects.filter(id=row.id).update(
-                proposed_values=values, status=TrackerRow.Status.PROPOSED, error="")
-            return True
-        TrackerRow.objects.filter(id=row.id).update(
+            n = TrackerRow.objects.filter(id=row.id, status=TrackerRow.Status.RUNNING).update(
+                proposed_values=values, status=TrackerRow.Status.PROPOSED,
+                error="", updated_at=_tz.now())
+            return bool(n)
+        n = TrackerRow.objects.filter(id=row.id, status=TrackerRow.Status.RUNNING).update(
             values=values, proposed_values={},
             status=TrackerRow.Status.DONE,
-            schema_version=tracker.schema_version, error="")
-        return True
+            schema_version=tracker.schema_version,
+            error="", updated_at=_tz.now())
+        return bool(n)
     except Exception as e:  # noqa: BLE001 —— 失败要落到行上可见可重试
-        TrackerRow.objects.filter(id=row.id).update(
-            status=TrackerRow.Status.FAILED, error=str(e)[:280])
+        from django.utils import timezone as _tz
+        TrackerRow.objects.filter(
+            id=row.id, status=TrackerRow.Status.RUNNING).update(
+            status=TrackerRow.Status.FAILED, error=str(e)[:280],
+            updated_at=_tz.now())
         log.warning("追踪表抽取失败 doc=%s tracker=%s: %s",
                     doc_id, tracker.id, str(e)[:160])
         return False
+    finally:
+        # 后台线程用独立的 DB 连接，跑完即还（长驻会占 fd / 潜在锁）
+        from django.db import connection
+        connection.close()
 
 
 def run_extraction_async(doc_id, tracker_id=None) -> None:
@@ -163,15 +191,25 @@ def run_extraction_async(doc_id, tracker_id=None) -> None:
 
 
 def backfill_async(tracker: "KbTracker") -> int:
-    """补录：为库内所有已完成、且尚无 done 行的文档排队抽取。
+    """补录：为库内所有已完成、且尚无 done/proposed 行的文档排队抽取。
 
+    排除子库自身带 tracker 的文档（与自动钩子的遮蔽语义一致：子库
+    tracker 优先于父文件夹 tracker，避免同一文档在两张表重复登记）。
     返回排队的文档数；后台逐份执行（顺序，避免打爆本地 LLM）。
     """
     import django
     django.setup()
-    from .models import Document, TrackerRow
+    from django.db import connection
+    from .models import Document, KbTracker, TrackerRow
 
-    doc_ids = list(
+    # 遮蔽规则与自动钩子一致：子库 tracker 仅在「启用且已配置字段」时接管
+    # 自己的文档（停用/空字段的子库 tracker 不遮蔽，父文件夹表可覆盖）
+    shadowed_kb_ids = set(
+        KbTracker.objects.filter(enabled=True)
+        .exclude(fields=[]).exclude(id=tracker.id)
+        .values_list("kb_id", flat=True))
+    doc_ids = [
+        did for did, kb_id in
         Document.objects.filter(
             kb__in=[tracker.kb_id] + list(
                 tracker.kb.children.values_list("id", flat=True)),
@@ -179,11 +217,20 @@ def backfill_async(tracker: "KbTracker") -> int:
         ).exclude(tracker_rows__tracker=tracker,
                   tracker_rows__status__in=[TrackerRow.Status.DONE,
                                             TrackerRow.Status.PROPOSED],
-        ).values_list("id", flat=True))
+        ).values_list("id", "kb_id")
+        if kb_id not in shadowed_kb_ids
+    ]
 
     def _worker():
-        for did in doc_ids:
-            run_extraction(did, tracker.id)
+        try:
+            for did in doc_ids:
+                try:
+                    run_extraction(did, tracker.id)
+                except Exception:
+                    # 单份失败不拖垮整个队列（database is locked 等）
+                    log.exception("补录单份失败，跳过 doc=%s", did)
+        finally:
+            connection.close()  # 后台线程独立连接，跑完即还
 
     if doc_ids:
         threading.Thread(target=_worker, daemon=True).start()

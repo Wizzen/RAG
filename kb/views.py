@@ -150,9 +150,12 @@ def manage_list(request):
                     is_folder=True, parent=None,
                     department=department or DEPARTMENT_GENERAL,
                 )
-                messages.success(request, f"手册库「{name}」已创建（部门：{department or DEPARTMENT_GENERAL}），可以上传手册了。")
+                ok, msg = True, f"手册库「{name}」已创建（部门：{department or DEPARTMENT_GENERAL}），可以上传手册了。"
             else:
-                messages.error(request, "请填写手册库名称。")
+                slug = ""
+                ok, msg = False, "请填写手册库名称。"
+            if request.headers.get("x-requested-with") == "XMLHttpRequest":
+                return JsonResponse({"ok": ok, "message": msg, "slug": slug})
 
         elif action == "upload_manual":
             kb = KnowledgeBase.objects.filter(
@@ -328,6 +331,13 @@ def kb_rename(request, slug):
         kb.description = (request.POST.get("description") or "").strip()
         update_fields.append("description")
     kb.save(update_fields=update_fields)
+    # 可选：一并开关追踪表。取消勾选的 checkbox 不会发包，所以用隐藏的
+    # tracker_present 标记识别"表单带了开关"（列表页改名弹窗不带，不动追踪表）。
+    if request.POST.get("tracker_present") == "1":
+        from .models import KbTracker
+        tr, _ = KbTracker.objects.get_or_create(kb=kb, defaults={"fields": []})
+        tr.enabled = request.POST.get("tracker_enabled") == "on"
+        tr.save(update_fields=["enabled", "updated_at"])
     # 可选：一并改部门（文件夹级联更新所有子库）；仅全局管理员可改归属，
     # 且只接受部门池内的值。
     if department and kb_access.is_global_admin(request.user):
@@ -464,27 +474,48 @@ def tracker_view(request, slug):
     docs_qs = Document.objects.filter(kb_id__in=_scope_kb_ids(kb))
     _json_dumps = lambda obj: json.dumps(obj, ensure_ascii=False)  # noqa: E731
 
+    # 回收卡死的行：daemon 线程随进程退出被杀，行会永久停在 running。
+    # LLM 超时 600s，给 20 分钟余量；updated_at 在每次状态写入时都会刷新。
+    if request.method == "GET":
+        from datetime import timedelta
+        from django.utils import timezone as _tz
+        from .models import TrackerRow as _TR
+        _TR.objects.filter(
+            tracker=tr,  # 只回收本表（GET 不对其它库/部门的数据做写操作）
+            status=_TR.Status.RUNNING,
+            updated_at__lt=_tz.now() - timedelta(minutes=20),
+        ).update(status=_TR.Status.FAILED, error="进程重启导致抽取中断，请重试",
+                 updated_at=_tz.now())
+
     if request.method == "POST":
         action = request.POST.get("action", "")
-        if action == "config_save":
+        if action == "enable":
+            tr.enabled = True
+            tr.save(update_fields=["enabled", "updated_at"])
+            ok, msg = True, "追踪表已启用：先在下方配置字段，之后新文档入库即自动登记。"
+        elif action == "disable":
+            tr.enabled = False
+            tr.save(update_fields=["enabled", "updated_at"])
+            ok, msg = True, "追踪表已停用（已登记的记录保留，可随时重新启用）。"
+        elif action == "config_save":
             labels = []
             for line in (request.POST.get("fields_text") or "").splitlines():
-                s = line.strip().strip("：:").strip()
+                # 标签名会进确认弹窗的 innerHTML 与 LLM 提示词：剥掉尖括号防注入
+                s = line.strip().strip("：:").strip().replace("<", "").replace(">", "")
                 if s and s not in labels:
                     labels.append(s[:40])
             labels = labels[:12]
             old_labels = [f["label"] for f in tr.fields]
-            tr.enabled = bool(labels) and request.POST.get("enabled") == "on"
             tr.fields = [{"label": x} for x in labels]
             tr.instruction = (request.POST.get("instruction") or "").strip()[:500]
             if labels != old_labels:
                 tr.schema_version += 1  # 老行落版本 → 页面打「字段已变更」标
             tr.save()
-            ok, msg = True, ("追踪表配置已保存，新文档入库后将自动登记。"
-                             if tr.enabled else "追踪表配置已保存（未启用）。")
+            ok, msg = True, "追踪表配置已保存。"
         elif action == "row_confirm":
             """人工确认：按弹窗勾选把新值逐字段合并进旧值（choices: {"字段": "new"|"old"}）。"""
             import json as _json
+            from django.utils import timezone as _tz
             row = tr.rows.filter(id=request.POST.get("row_id"),
                                  status=TrackerRow.Status.PROPOSED).first()
             if row is None:
@@ -494,31 +525,52 @@ def tracker_view(request, slug):
                     choices = _json.loads(request.POST.get("choices") or "{}")
                 except ValueError:
                     choices = {}
+                if not isinstance(choices, dict):
+                    choices = {}
                 merged = dict(row.values)
                 for f in tr.fields:
                     key = f["label"]
                     if choices.get(key) == "new":
                         merged[key] = row.proposed_values.get(key, "")
-                TrackerRow.objects.filter(id=row.id).update(
+                # compare-and-set：期间被重试/他人确认则放弃，不覆盖新结果
+                n = TrackerRow.objects.filter(
+                    id=row.id, status=TrackerRow.Status.PROPOSED).update(
                     values=merged, proposed_values={},
                     status=TrackerRow.Status.DONE,
-                    schema_version=tr.schema_version, error="")
-                n_new = sum(1 for k in choices.values() if k == "new")
-                ok, msg = True, f"已确认：采纳 {n_new} 个新值。"
+                    schema_version=tr.schema_version, error="",
+                    updated_at=_tz.now())
+                if not n:
+                    ok, msg = False, "记录状态已变化（可能已被重新抽取），请刷新页面。"
+                else:
+                    n_new = sum(1 for k in choices.values() if k == "new")
+                    ok, msg = True, f"已确认：采纳 {n_new} 个新值。"
         elif action == "backfill":
-            n = tracker_svc.backfill_async(tr)
-            ok, msg = True, (f"已排队补录 {n} 份文档，抽取完成后自动刷新。"
-                             if n else "没有需要补录的文档（无已完成文档或均已登记）。")
-        elif action == "row_retry":
-            row = tr.rows.filter(id=request.POST.get("row_id")).first()
-            if row is None:
-                ok, msg = False, "记录不存在或已被删除。"
+            if not tr.enabled or not tr.fields:
+                ok, msg = False, "请先启用追踪表并配置字段，再补录。"
             else:
-                row.status = TrackerRow.Status.PENDING
-                row.error = ""
-                row.save(update_fields=["status", "error", "updated_at"])
-                tracker_svc.run_extraction_async(row.document_id, tr.id)
-                ok, msg = True, "已重新排队抽取。"
+                n = tracker_svc.backfill_async(tr)
+                ok, msg = True, (f"已排队补录 {n} 份文档，抽取完成后自动刷新。"
+                                 if n else "没有需要补录的文档（无已完成文档或均已登记）。")
+        elif action == "row_retry":
+            # 条件重置：抽取中（running）不允许重试——否则两个线程同时抽
+            # 同一文档，终态写入互相覆盖
+            from django.utils import timezone as _tz
+            row_id = request.POST.get("row_id")
+            n = tr.rows.filter(
+                id=row_id,
+                status__in=[TrackerRow.Status.FAILED, TrackerRow.Status.DONE,
+                            TrackerRow.Status.PROPOSED],
+            ).update(status=TrackerRow.Status.PENDING, error="",
+                     updated_at=_tz.now())
+            if not n:
+                ok, msg = False, "该记录不存在或正在抽取中，请稍候。"
+            else:
+                row = tr.rows.filter(id=row_id).first()
+                if row is None:
+                    ok, msg = False, "记录已被删除。"
+                else:
+                    tracker_svc.run_extraction_async(row.document_id, tr.id)
+                    ok, msg = True, "已重新排队抽取。"
         elif action == "row_delete":
             deleted, _ = tr.rows.filter(id=request.POST.get("row_id")).delete()
             ok, msg = (deleted > 0), ("记录已删除。" if deleted else "记录不存在或已被删除。")
@@ -535,10 +587,17 @@ def tracker_view(request, slug):
         from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
 
+        def _safe_cell(v):
+            # 公式注入防护：以 = + - @ 开头的字符串强制为文本（openpyxl 默认
+            # 会把 = 开头当公式写入，=WEBSERVICE/HYPERLINK/DDE 可外泄数据）
+            s2 = str(v or "")
+            return "'" + s2 if s2[:1] in ("=", "+", "-", "@") else s2
+
         wb = Workbook()
         ws = wb.active
         ws.title = "追踪表"
-        headers = (["文档名"] + [f["label"] for f in tr.fields]
+        # 表头同样过 _safe_cell：字段名可以以 = + - @ 开头（sanitize 只剥尖括号）
+        headers = (["文档名"] + [_safe_cell(f["label"]) for f in tr.fields]
                    + ["状态", "字段已变更", "记录时间", "错误"])
         ws.append(headers)
         head_fill = PatternFill("solid", fgColor="1F2937")
@@ -550,12 +609,14 @@ def tracker_view(request, slug):
         ws.row_dimensions[1].height = 22
 
         smap = dict(TrackerRow.Status.choices)
+
         for r in tr.rows.select_related("document").order_by("-document__created_at"):
-            ws.append([r.document.original_name]
-                      + [r.values.get(f["label"], "") for f in tr.fields]
+            ws.append([_safe_cell(r.document.original_name)]
+                      + [_safe_cell(r.values.get(f["label"], "")) for f in tr.fields]
                       + [smap.get(r.status, r.status),
                          "是" if r.schema_version < tr.schema_version else "",
-                         r.updated_at.strftime("%Y-%m-%d %H:%M"), r.error])
+                         r.updated_at.strftime("%Y-%m-%d %H:%M"),
+                         _safe_cell(r.error)])
         widths = {}
         for row in ws.iter_rows(values_only=True):
             for i, v in enumerate(row):
@@ -628,6 +689,7 @@ def doc_status_api(request, slug):
         {
             "id": str(d.id),
             "name": d.original_name,
+            "file_type": d.file_type or "",
             "status": d.status,
             "status_display": d.get_status_display(),
             "stage_detail": d.stage_detail or "",

@@ -375,3 +375,29 @@ class UnifiedDialogTests(TestCase):
         r2 = self.client.get(reverse("kb:manage_detail", args=["dlg-folder"]))
         self.assertContains(r2, "await fosConfirm")   # 文档删除
         self.assertContains(r2, "await fosPrompt")    # 描述编辑
+
+
+class KbCreateDialogTests(TestCase):
+    """新建手册库：统一弹窗 + AJAX JSON 分支（卡片实时插入由前端完成）。"""
+
+    def test_page_has_dialog_and_ajax_create(self):
+        user = get_user_model().objects.create_user(
+            username="kbdlg-admin", password="pw", is_staff=True)
+        self.client.force_login(user)
+        r = self.client.get(reverse("kb:manage_list"))
+        self.assertContains(r, 'id="kbCreateDialog"')
+        self.assertContains(r, 'id="openKbCreate"')
+        self.assertNotContains(r, "createForm")  # 旧内联面板已移除
+        # AJAX 创建 → JSON ok + 库落库
+        r2 = self.client.post(reverse("kb:manage_list"),
+                              {"action": "create_kb", "name": "弹窗建的库",
+                               "description": "测试", "department": "通用"},
+                              HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        data = r2.json()
+        self.assertTrue(data["ok"], data)
+        self.assertTrue(KnowledgeBase.objects.filter(name="弹窗建的库").exists())
+        # 空名称 → JSON ok=false
+        r3 = self.client.post(reverse("kb:manage_list"),
+                              {"action": "create_kb", "name": "  "},
+                              HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertFalse(r3.json()["ok"])

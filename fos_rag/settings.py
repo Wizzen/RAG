@@ -72,6 +72,12 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
+        # 后台线程（文档流水线/追踪表抽取）与请求并发写：WAL 允许读写共存，
+        # busy timeout 把偶发锁竞争从"报错"变成"等待"
+        "OPTIONS": {
+            "timeout": 20,
+            "init_command": "PRAGMA journal_mode=WAL;",
+        },
     }
 }
 

