@@ -12,16 +12,19 @@
 <div class="section-bar">
   <div><h2>手册库</h2><p>PDF / MD / TXT / 图片（JPG·PNG·WebP）· xlsx / csv 自动识别为业务数据</p></div>
   <div class="section-actions">
-    <button class="btn primary" type="button" onclick="document.getElementById('createForm').hidden=false">＋ 新建手册库</button>
+    <button class="btn primary" type="button" id="openKbCreate">＋ 新建手册库</button>
   </div>
 </div>
 
-<div id="createForm" hidden style="margin-bottom:16px;">
-  <form method="post" class="card create-kb-form">
-    {% csrf_token %}<input type="hidden" name="action" value="create_kb">
-    <div class="field"><label>手册库名称</label><input name="name" required></div>
+<dialog id="kbCreateDialog" class="fos-dialog">
+  <form id="kbCreateForm">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="create_kb">
+    <div class="dialog-title">新建手册库</div>
+    <div class="field"><label>手册库名称</label>
+      <input name="name" required maxlength="80"></div>
     <div class="field"><label>描述（可选，会展示给 AI 帮它判断该搜哪个库）</label>
-      <input name="description" maxlength="200" placeholder="例如：过山车设备的维护手册与图纸"></div>
+      <input name="description" maxlength="200"></div>
     <div class="field"><label>部门（通用 = 所有人可见）</label>
       {% if is_global_admin %}
       <select name="department">
@@ -29,13 +32,16 @@
       </select>
       {% else %}
       <input type="hidden" name="department" value="{{ my_department }}">
-      <span class="fos-sub">{{ my_department }}</span>
+      <span class="dept-badge">{{ my_department }}</span>
       {% endif %}
     </div>
-    <button class="btn primary" type="submit">创建</button>
-    <button class="btn outline" type="button" onclick="document.getElementById('createForm').hidden=true">取消</button>
+    <div class="dialog-err" id="kbCreateErr" hidden></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn outline" id="kbCreateCancel">取消</button>
+      <button type="submit" class="btn primary" id="kbCreateSubmit">创建</button>
+    </div>
   </form>
-</div>
+</dialog>
 
 <div class="kb-grid">
   {% for kb in kbs %}
@@ -115,9 +121,57 @@
 .emb-badge{display:inline-block;vertical-align:middle;font-size:10px;font-weight:500;font-family:var(--fm);line-height:1.4;color:var(--mute);background:var(--paper);border:1.5px dashed var(--rule-soft);border-radius:999px;padding:2px 8px;margin-left:4px;letter-spacing:.02em}
 
 .upload-head,.section-bar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.upload-head h1{margin-bottom:5px}.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0 12px}.upload-card{padding:17px;border:2px solid var(--rule);border-top:6px solid var(--danger);border-radius:8px;background:var(--surface)}.data-upload{border-top-color:#1f4fa8}.upload-card-head{display:flex;gap:11px;align-items:flex-start}.upload-no{font:800 20px var(--fm);color:var(--danger)}.data-upload .upload-no{color:#1f4fa8}.upload-card h2,.section-bar h2{font:700 15px var(--fd);text-transform:uppercase;margin:0 0 4px}.upload-card p,.section-bar p{font-size:11px;color:var(--mute);margin:0}.upload-form{display:grid;grid-template-columns:minmax(140px,.8fr) minmax(180px,1.2fr);gap:9px;margin-top:15px}.upload-form .btn{grid-column:1/-1;justify-content:center}.upload-form select,.upload-form input[type=file]{width:100%;min-height:41px;padding:8px;border:2px solid var(--rule);border-radius:5px;background:var(--paper)}.empty.compact{padding:13px;margin-top:15px}.upload-guidance{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:10px 12px;margin-bottom:24px;border:1px solid var(--rule-soft);border-radius:5px;background:var(--surface)}.upload-guidance strong,.upload-guidance span{font-size:10px}.upload-guidance span{font-family:var(--fm);padding:3px 6px;background:var(--paper);border-radius:3px}
-.upload-guidance.compact{padding:8px 0 0;margin:12px 0 0;border-top:1px solid var(--rule-soft);border-left:0;border-radius:0;background:none}.section-bar{align-items:center;margin:18px 0 12px;padding-bottom:9px;border-bottom:2px solid var(--rule)}.section-actions{display:flex;gap:8px;align-items:center}.create-kb-form{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:end}.dataset-bar{margin-top:28px}.count-chip{font:700 11px var(--fm);padding:5px 8px;background:var(--text);color:var(--paper);border-radius:3px}.dataset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px}.dataset-grid article{display:flex;flex-direction:column;gap:5px;padding:11px;border:1px solid var(--rule-soft);border-left:4px solid #1f4fa8;border-radius:5px;background:var(--surface)}.dataset-grid span{font:700 9px var(--fm);color:#1f4fa8;text-transform:uppercase}.dataset-grid strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dataset-grid small{font-size:10px;color:var(--mute)}
-@media(max-width:780px){.upload-grid{grid-template-columns:1fr}.upload-head{display:block}.upload-head>a{margin-top:10px}.create-kb-form{grid-template-columns:1fr}.upload-form{grid-template-columns:1fr}.section-bar{align-items:flex-end}.section-actions{flex-wrap:wrap;justify-content:flex-end}}
+.upload-guidance.compact{padding:8px 0 0;margin:12px 0 0;border-top:1px solid var(--rule-soft);border-left:0;border-radius:0;background:none}.section-bar{align-items:center;margin:18px 0 12px;padding-bottom:9px;border-bottom:2px solid var(--rule)}.section-actions{display:flex;gap:8px;align-items:center}.dataset-bar{margin-top:28px}.count-chip{font:700 11px var(--fm);padding:5px 8px;background:var(--text);color:var(--paper);border-radius:3px}.dataset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px}.dataset-grid article{display:flex;flex-direction:column;gap:5px;padding:11px;border:1px solid var(--rule-soft);border-left:4px solid #1f4fa8;border-radius:5px;background:var(--surface)}.dataset-grid span{font:700 9px var(--fm);color:#1f4fa8;text-transform:uppercase}.dataset-grid strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dataset-grid small{font-size:10px;color:var(--mute)}
+@media(max-width:780px){.upload-grid{grid-template-columns:1fr}.upload-head{display:block}.upload-head>a{margin-top:10px}.upload-form{grid-template-columns:1fr}.section-bar{align-items:flex-end}.section-actions{flex-wrap:wrap;justify-content:flex-end}}
 </style>
+<script>
+/* 新建手册库弹窗（AJAX）：创建成功后只替换卡片网格，页面无刷新 */
+function getCSRFToken(){
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+(function(){
+  const dlg = document.getElementById('kbCreateDialog');
+  if (!dlg) return;
+  const form = document.getElementById('kbCreateForm');
+  const err = document.getElementById('kbCreateErr');
+  const submit = document.getElementById('kbCreateSubmit');
+
+  document.getElementById('openKbCreate').addEventListener('click', () => {
+    err.hidden = true;
+    form.name.value = '';
+    dlg.showModal();
+    form.name.focus();
+  });
+  document.getElementById('kbCreateCancel').addEventListener('click', () => dlg.close());
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    submit.disabled = true; submit.textContent = '创建中…';
+    try {
+      const resp = await fetch(location.href, {
+        method: 'POST',
+        body: new FormData(form),
+        headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': getCSRFToken()},
+      });
+      const data = await resp.json();
+      if (!data.ok) { err.textContent = data.message || '创建失败'; err.hidden = false; return; }
+      dlg.close();
+      // 实时更新：重拉当前页，仅替换卡片网格（弹窗/事件绑定不受影响）
+      const page = await (await fetch(location.href)).text();
+      const doc = new DOMParser().parseFromString(page, 'text/html');
+      const fresh = doc.querySelector('.kb-grid');
+      if (fresh) document.querySelector('.kb-grid').innerHTML = fresh.innerHTML;
+      if (window.fosToast) fosToast(data.message, 'ok');
+    } catch(ex) {
+      err.textContent = '请求失败：' + ex; err.hidden = false;
+    } finally {
+      submit.disabled = false; submit.textContent = '创建';
+    }
+  });
+})();
+</script>
 <script>
 /* 库名称/部门编辑弹窗（AJAX，全站统一 fos-dialog 样式） */
 function getCSRFToken(){

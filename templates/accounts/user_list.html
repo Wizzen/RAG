@@ -191,7 +191,7 @@ document.addEventListener('click', async (e) => {
   if (e.target.closest('#openDeptAdd')) {
     const v = await fosPrompt({
       title: '添加部门', label: '部门名称', confirmText: '添加',
-      placeholder: '例如：机械', hint: '部门决定用户与知识库的可见范围，创建后可在账号和知识库上指派',
+      hint: '部门决定用户与知识库的可见范围，创建后可在账号和知识库上指派',
     });
     if (v === null || !v.trim()) return;
     await deptPost({action: 'dept_add', name: v.trim()});

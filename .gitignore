@@ -35,3 +35,5 @@ venv/
 .idea/
 .DS_Store
 *.swp
+db.sqlite3-wal
+db.sqlite3-shm

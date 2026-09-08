@@ -11,7 +11,7 @@
 
 <form method="get" class="lookup-form">
   <div class="lookup-row">
-    <input id="drawingQuery" name="q" value="{{ q }}" placeholder="图纸号 / 部件 / G-code / 设备 / APEX / 任意问题" autofocus autocomplete="off">
+    <input id="drawingQuery" name="q" value="{{ q }}" autofocus autocomplete="off">
     <button class="btn primary" type="submit">综合搜索</button>
     {% if q %}<a class="btn outline" href="{% url 'kb:search' %}">清除</a>{% endif %}
   </div>

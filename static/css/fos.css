@@ -175,10 +175,11 @@ a{color:inherit;text-decoration:none}
 .doc-list.grid .doc-detail{display:block;line-height:1.9;margin-top:6px}
 .doc-list.grid .doc-desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:2px 0 0;font-size:11px;line-height:1.65;color:var(--mute)}
 .doc-list.grid .doc-desc:empty{display:none}
-.doc-list.grid .desc-edit-btn{margin:8px 0 0}
 .doc-list.grid .progress-bar{max-width:none;margin-top:10px}
-.doc-list.grid .doc-del-btn{align-self:flex-end;margin-top:12px;background:transparent;border:1px solid var(--rule-soft);color:var(--mute)}
-.doc-list.grid .doc-del-btn:hover{background:var(--err-soft);border-color:var(--danger);color:var(--danger)}
+/* 卡片底部操作行：更新描述（左，幽灵）与删除（右，红色实底，与列表视图一致） */
+.doc-list.grid .doc-actions{width:100%;margin-top:12px;justify-content:space-between;padding-top:10px;border-top:1px solid var(--rule-soft)}
+.doc-list.grid .desc-edit-btn{background:transparent;border-color:var(--rule-soft);color:var(--mute)}
+.doc-list.grid .desc-edit-btn:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
 .doc-list.grid .empty{grid-column:1/-1}
 .doc-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0}
 .doc-del-form{display:inline;margin-left:auto;flex-shrink:0}
