@@ -4,6 +4,8 @@
 <div style="display:flex;gap:8px;flex-wrap:wrap">
   <a class="btn sm outline" href="/kb/manage/">← 返回资料上传中心</a>
   <a class="btn sm outline" href="/kb/inspection/">检查项提取</a>
+  <a class="btn sm outline" href="/kb/manage/{{ kb.slug }}/tracker/"
+     title="文档入库后由 AI 按字段自动登记，工作流追溯">追踪表</a>
 </div>
 <h1>{{ kb.name }} <span class="dept-badge">{{ kb.department }}</span>{% if kb.embedding_label %} <span class="emb-badge">🧬 {{ kb.embedding_label }}</span>{% endif %}</h1>
 <p class="fos-sub"><span id="kbDescText">{% if kb.description %}{{ kb.description }}{% else %}（无描述）{% endif %}</span>

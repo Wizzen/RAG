@@ -1,0 +1,251 @@
+{% extends "kb/_base.html" %}
+{% block title %}{{ kb.name }} · 追踪表{% endblock %}
+{% block content %}
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+  <a class="btn sm outline" href="/kb/manage/{{ kb.slug }}/">← 返回 {{ kb.name }}</a>
+</div>
+<h1>{{ kb.name }} <span class="dept-badge">追踪表</span></h1>
+
+<div class="section-bar">
+  <div>
+    <h2>追踪记录</h2>
+    <p>文档入库后由 AI 按字段自动登记 · {{ rows|length }} 条
+       {% if tracker.enabled %}· 已启用（新文档自动抽取）{% else %}· 未启用{% endif %}
+       {% if missing_n %}· {{ missing_n }} 份已完成文档待补录{% endif %}</p>
+  </div>
+  <div class="section-actions">
+    <button type="button" class="btn outline" id="trkBackfill" title="为库里已完成但未登记的文档排队抽取">补录已有文档</button>
+    <a class="btn outline" href="/kb/manage/{{ kb.slug }}/tracker/?xlsx=1">导出 Excel</a>
+  </div>
+</div>
+
+{% if rows %}
+<div class="trk-table-wrap">
+<table class="trk-table">
+  <thead>
+    <tr>
+      <th>文档</th>
+      {% for f in tracker.fields %}<th>{{ f.label }}</th>{% endfor %}
+      <th>状态</th><th>记录时间</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr data-status="{{ r.status }}">
+      <td class="doc">{{ r.doc_name }}</td>
+      {% for c in r.cells %}<td>{{ c }}</td>{% endfor %}
+      <td>
+        {% if r.status == 'done' %}
+          <span class="doc-badge badge-completed">✓ 已完成</span>
+        {% elif r.status == 'proposed' %}
+          <span class="doc-badge badge-proposed">◆ 待确认</span>
+        {% elif r.status == 'running' %}
+          <span class="spinner"></span> 抽取中
+        {% elif r.status == 'pending' %}
+          <span class="doc-badge badge-pending">⏳ 待抽取</span>
+        {% else %}
+          <span class="doc-badge badge-failed" title="{{ r.error }}">✗ 失败</span>{% endif %}
+        {% if r.stale %} <span class="doc-badge badge-stale"
+          title="追踪字段在该文档登记后有过变更，可点「重试」按新字段补齐">字段已变更</span>{% endif %}
+      </td>
+      <td class="mute">{{ r.updated_at|date:"m-d H:i" }}</td>
+      <td class="acts">
+        {% if r.status == 'proposed' %}
+        <button type="button" class="btn sm primary trk-confirm" data-payload="{{ r.payload }}">确认变更</button>
+        {% endif %}
+        <button type="button" class="btn sm outline trk-retry" data-row="{{ r.id }}">重试</button>
+        <form method="post" action="/kb/manage/{{ kb.slug }}/tracker/" style="display:inline"
+              data-confirm-title="删除追踪记录"
+              data-confirm="删除「{{ r.doc_name }}」的这条追踪记录？">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="row_delete">
+          <input type="hidden" name="row_id" value="{{ r.id }}">
+          <button class="btn sm danger" type="submit">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="empty">
+  还没有追踪记录。在下方配置字段并启用后，
+  {% if completed_n %}点「补录已有文档」即可把库里 {{ completed_n }} 份已完成文档登记进来；{% endif %}
+  之后新上传的文档会在入库完成时自动登记。
+</div>
+{% endif %}
+
+<div class="section-bar" style="margin-top:26px">
+  <div><h2>抽取配置</h2><p>字段即表格列名；抽取由站点 LLM 完成，失败可重试</p></div>
+</div>
+<div class="trk-config">
+  <form method="post" action="/kb/manage/{{ kb.slug }}/tracker/" id="trkConfigForm">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="config_save">
+    <div class="trk-field">
+      <label><input type="checkbox" name="enabled" {% if tracker.enabled %}checked{% endif %}>
+        启用自动登记（文档入库完成后自动抽取）</label>
+    </div>
+    <div class="trk-grid">
+      <div class="trk-field">
+        <label>追踪字段（一行一个，最多 12 个，即表格列名）</label>
+        <textarea name="fields_text" rows="5" placeholder="设备编号&#10;检验日期&#10;检验结论&#10;下次检验日期">{{ fields_text }}</textarea>
+      </div>
+      <div class="trk-field">
+        <label>补充提示（可选，帮 AI 更准地抽取）</label>
+        <textarea name="instruction" rows="5" maxlength="500"
+                  placeholder="例如：结论只填 合格 / 不合格；日期统一 YYYY-MM-DD">{{ tracker.instruction }}</textarea>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end">
+      <button type="submit" class="btn primary">保存配置</button>
+    </div>
+  </form>
+</div>
+
+<style>
+.trk-table-wrap{background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;overflow-x:auto}
+.trk-table{width:100%;border-collapse:collapse;font-size:13px}
+.trk-table th{font-family:var(--fd);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--dim);text-align:left;padding:10px 14px;border-bottom:1.5px solid var(--rule-soft);white-space:nowrap}
+.trk-table td{padding:9px 14px;border-bottom:1px solid var(--rule-soft);vertical-align:top;max-width:260px}
+.trk-table tr:last-child td{border-bottom:0}
+.trk-table td.doc{font:600 12.5px var(--fm)}
+.trk-table td.mute{font-size:11px;color:var(--mute);white-space:nowrap}
+.trk-table td.acts{white-space:nowrap}
+.badge-proposed{background:var(--brand-soft);color:var(--brand);border-color:var(--brand)}
+.badge-stale{background:var(--warn-soft);color:#8a6300;border-color:var(--warn)}
+/* 确认变更弹窗：改前/改后逐字段对比 */
+.trk-diff{width:100%;border-collapse:collapse;font-size:12.5px;margin:4px 0 8px}
+.trk-diff th{font:700 11px var(--fd);text-transform:uppercase;letter-spacing:.05em;color:var(--dim);
+  text-align:left;padding:6px 8px;border-bottom:1.5px solid var(--rule-soft)}
+.trk-diff td{padding:7px 8px;border-bottom:1px solid var(--rule-soft);vertical-align:top;word-break:break-all}
+.trk-diff tr:last-child td{border-bottom:0}
+.trk-diff td.chg{background:var(--warn-soft);color:var(--text)}
+.trk-diff .empty-v{color:var(--mute)}
+.trk-cf-hint{font-size:11px;color:var(--mute);margin:0 0 4px}  /* 表单内提示（.dialog-hint 的左右 padding 在此会双重缩进） */
+.trk-diff-bar{display:flex;gap:8px;justify-content:flex-end}
+.trk-config{background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;padding:16px}
+.trk-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
+.trk-field label{display:block;font-size:12px;font-weight:500;color:var(--dim);margin-bottom:6px}
+.trk-field label input[type=checkbox]{margin-right:6px;vertical-align:-2px}
+.trk-field textarea{width:100%;padding:9px 11px;font:500 13px var(--fm);border:1.5px solid var(--rule-soft);
+  border-radius:6px;background:var(--paper);color:var(--text);box-sizing:border-box;resize:vertical}
+.trk-field textarea:focus{border-color:var(--brand);outline:none}
+@media(max-width:780px){.trk-grid{grid-template-columns:1fr}}
+</style>
+<dialog id="trkConfirmDialog" class="fos-dialog">
+  <form id="trkConfirmForm">
+    <div class="dialog-title">确认变更 · <span id="trkCfDoc"></span></div>
+    <div class="trk-cf-hint">重抽后与已登记值有差异，请逐字段确认；空值→新值默认采纳，旧值→不同新值默认保留旧值</div>
+    <table class="trk-diff">
+      <thead><tr><th>字段</th><th>当前值（改前）</th><th>新值（改后）</th><th style="width:70px">采纳新值</th></tr></thead>
+      <tbody id="trkCfBody"></tbody>
+    </table>
+    <div class="dialog-err" id="trkCfErr" hidden></div>
+    <div class="trk-actions dialog-actions">
+      <button type="button" class="btn outline" id="trkCfAllNew">全部采纳新值</button>
+      <span style="flex:1"></span>
+      <button type="button" class="btn outline" id="trkCfCancel">取消</button>
+      <button type="button" class="btn primary" id="trkCfOk">确认</button>
+    </div>
+  </form>
+</dialog>
+<script>
+/* 确认变更弹窗：从按钮 data-payload 读改前/改后值，逐字段勾选后 POST row_confirm */
+(function(){
+  const dlg = document.getElementById('trkConfirmDialog');
+  if (!dlg) return;
+  const body = document.getElementById('trkCfBody');
+  const err = document.getElementById('trkCfErr');
+  let current = null;
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.trk-confirm');
+    if (!btn) return;
+    current = JSON.parse(btn.dataset.payload);
+    document.getElementById('trkCfDoc').textContent = current.doc;
+    err.hidden = true;
+    body.innerHTML = '';
+    current.fields.forEach((f, i) => {
+      const oldV = current.old[i] || '', newV = current.new[i] || '';
+      const changed = oldV !== newV;
+      // 默认：填空（旧空新有）→ 采纳；冲突（都有且不同）→ 保留旧值
+      const checked = changed && !oldV;
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td>${f}</td>` +
+        `<td class="${changed ? 'chg' : ''}">${oldV ? esc(oldV) : '<span class="empty-v">（空）</span>'}</td>` +
+        `<td class="${changed ? 'chg' : ''}">${newV ? esc(newV) : '<span class="empty-v">（空）</span>'}</td>` +
+        `<td><input type="checkbox" data-k="${esc(f)}" ${checked ? 'checked' : ''} ${changed ? '' : 'disabled'}></td>`;
+      body.appendChild(tr);
+    });
+    dlg.showModal();
+  });
+
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+
+  document.getElementById('trkCfCancel').addEventListener('click', () => dlg.close());
+  document.getElementById('trkCfAllNew').addEventListener('click', () => {
+    body.querySelectorAll('input[type=checkbox]').forEach(c => { if (!c.disabled) c.checked = true; });
+  });
+  document.getElementById('trkCfOk').addEventListener('click', async () => {
+    if (!current) return;
+    const choices = {};
+    body.querySelectorAll('input[type=checkbox]').forEach(c => {
+      if (c.checked) choices[c.dataset.k] = 'new';
+    });
+    err.hidden = true;
+    try {
+      const r = await fetch(location.pathname, {
+        method: 'POST',
+        body: new URLSearchParams({action: 'row_confirm', row_id: current.row,
+                                   choices: JSON.stringify(choices)}),
+        headers: {'X-CSRFToken': getCSRFToken(), 'X-Requested-With': 'XMLHttpRequest'},
+      });
+      const data = await r.json();
+      if (!data.ok) { err.textContent = data.message || '确认失败'; err.hidden = false; return; }
+      dlg.close();
+      fosToast(data.message, 'ok');
+      setTimeout(() => location.reload(), 500);
+    } catch(ex) {
+      err.textContent = '请求失败：' + ex; err.hidden = false;
+    }
+  });
+})();
+</script>
+<script>
+/* 追踪表动作：补录 / 重试（AJAX + 刷新），删除走 data-confirm 表单直提 */
+function getCSRFToken(){
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+async function trkPost(params){
+  const r = await fetch(location.pathname, {
+    method: 'POST',
+    body: new URLSearchParams(params),
+    headers: {'X-CSRFToken': getCSRFToken(), 'X-Requested-With': 'XMLHttpRequest'},
+  });
+  const data = await r.json().catch(() => ({ok: false, message: '请求失败'}));
+  fosToast(data.message || (data.ok ? '已提交' : '操作失败'), data.ok ? 'ok' : 'err');
+  if (data.ok) setTimeout(() => location.reload(), 600);
+}
+document.addEventListener('click', async (e) => {
+  if (e.target.closest('#trkBackfill')) {
+    e.target.closest('#trkBackfill').disabled = true;
+    await trkPost({action: 'backfill'});
+    return;
+  }
+  const rt = e.target.closest('.trk-retry');
+  if (rt) {
+    rt.disabled = true;
+    await trkPost({action: 'row_retry', row_id: rt.dataset.row});
+  }
+});
+/* 有抽取中的行 → 轮询刷新直到出结果 */
+if (document.querySelector('.trk-table [data-status="pending"], .trk-table [data-status="running"]')) {
+  setTimeout(() => location.reload(), 4000);
+}
+</script>
+{% endblock %}

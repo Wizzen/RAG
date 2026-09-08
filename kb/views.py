@@ -446,6 +446,170 @@ def doc_delete(request, slug, doc_id):
 
 @_is_manager
 @login_required
+def tracker_view(request, slug):
+    """知识库追踪表：文档入库后由 AI 按自定义字段抽取关键信息登记，供追溯。
+
+    - 配置：字段（一行一个，即列名）+ 补充提示 + 启用开关。
+    - 动作：补录已有文档（backfill）/ 单行重试 / 删除行 / 导出 CSV。
+    - 权限与 manage_detail 一致（全局管理员 或 该部门管理员）。
+    """
+    from . import access as kb_access
+    from . import tracker as tracker_svc
+    from .models import KbTracker, TrackerRow
+
+    kb = get_object_or_404(KnowledgeBase, slug=slug)
+    if not kb_access.can_manage_kb(request.user, kb):
+        raise Http404("知识库不存在")
+    tr, _ = KbTracker.objects.get_or_create(kb=kb, defaults={"fields": []})
+    docs_qs = Document.objects.filter(kb_id__in=_scope_kb_ids(kb))
+    _json_dumps = lambda obj: json.dumps(obj, ensure_ascii=False)  # noqa: E731
+
+    if request.method == "POST":
+        action = request.POST.get("action", "")
+        if action == "config_save":
+            labels = []
+            for line in (request.POST.get("fields_text") or "").splitlines():
+                s = line.strip().strip("：:").strip()
+                if s and s not in labels:
+                    labels.append(s[:40])
+            labels = labels[:12]
+            old_labels = [f["label"] for f in tr.fields]
+            tr.enabled = bool(labels) and request.POST.get("enabled") == "on"
+            tr.fields = [{"label": x} for x in labels]
+            tr.instruction = (request.POST.get("instruction") or "").strip()[:500]
+            if labels != old_labels:
+                tr.schema_version += 1  # 老行落版本 → 页面打「字段已变更」标
+            tr.save()
+            ok, msg = True, ("追踪表配置已保存，新文档入库后将自动登记。"
+                             if tr.enabled else "追踪表配置已保存（未启用）。")
+        elif action == "row_confirm":
+            """人工确认：按弹窗勾选把新值逐字段合并进旧值（choices: {"字段": "new"|"old"}）。"""
+            import json as _json
+            row = tr.rows.filter(id=request.POST.get("row_id"),
+                                 status=TrackerRow.Status.PROPOSED).first()
+            if row is None:
+                ok, msg = False, "记录不存在或已不在待确认状态。"
+            else:
+                try:
+                    choices = _json.loads(request.POST.get("choices") or "{}")
+                except ValueError:
+                    choices = {}
+                merged = dict(row.values)
+                for f in tr.fields:
+                    key = f["label"]
+                    if choices.get(key) == "new":
+                        merged[key] = row.proposed_values.get(key, "")
+                TrackerRow.objects.filter(id=row.id).update(
+                    values=merged, proposed_values={},
+                    status=TrackerRow.Status.DONE,
+                    schema_version=tr.schema_version, error="")
+                n_new = sum(1 for k in choices.values() if k == "new")
+                ok, msg = True, f"已确认：采纳 {n_new} 个新值。"
+        elif action == "backfill":
+            n = tracker_svc.backfill_async(tr)
+            ok, msg = True, (f"已排队补录 {n} 份文档，抽取完成后自动刷新。"
+                             if n else "没有需要补录的文档（无已完成文档或均已登记）。")
+        elif action == "row_retry":
+            row = tr.rows.filter(id=request.POST.get("row_id")).first()
+            if row is None:
+                ok, msg = False, "记录不存在或已被删除。"
+            else:
+                row.status = TrackerRow.Status.PENDING
+                row.error = ""
+                row.save(update_fields=["status", "error", "updated_at"])
+                tracker_svc.run_extraction_async(row.document_id, tr.id)
+                ok, msg = True, "已重新排队抽取。"
+        elif action == "row_delete":
+            deleted, _ = tr.rows.filter(id=request.POST.get("row_id")).delete()
+            ok, msg = (deleted > 0), ("记录已删除。" if deleted else "记录不存在或已被删除。")
+        else:
+            ok, msg = False, "未知操作。"
+        if request.headers.get("x-requested-with") == "XMLHttpRequest":
+            return JsonResponse({"ok": ok, "message": msg})
+        (messages.success if ok else messages.error)(request, msg)
+        return redirect("kb:tracker", slug=slug)
+
+    if request.GET.get("xlsx") == "1":
+        # 真 .xlsx（openpyxl）：中文无编码坑，双击即开；带表头样式与自适应列宽
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "追踪表"
+        headers = (["文档名"] + [f["label"] for f in tr.fields]
+                   + ["状态", "字段已变更", "记录时间", "错误"])
+        ws.append(headers)
+        head_fill = PatternFill("solid", fgColor="1F2937")
+        for c in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=c)
+            cell.font = Font(bold=True, color="FFFFFF", size=11)
+            cell.fill = head_fill
+            cell.alignment = Alignment(vertical="center")
+        ws.row_dimensions[1].height = 22
+
+        smap = dict(TrackerRow.Status.choices)
+        for r in tr.rows.select_related("document").order_by("-document__created_at"):
+            ws.append([r.document.original_name]
+                      + [r.values.get(f["label"], "") for f in tr.fields]
+                      + [smap.get(r.status, r.status),
+                         "是" if r.schema_version < tr.schema_version else "",
+                         r.updated_at.strftime("%Y-%m-%d %H:%M"), r.error])
+        widths = {}
+        for row in ws.iter_rows(values_only=True):
+            for i, v in enumerate(row):
+                w = min(max(len(str(v or "")) * 1.9, 10), 46)
+                widths[i] = max(widths.get(i, 0), w)
+        for i, w in widths.items():
+            ws.column_dimensions[get_column_letter(i + 1)].width = w
+        ws.freeze_panes = "A2"
+
+        import io as _io
+        buf = _io.BytesIO()
+        wb.save(buf)
+        resp = HttpResponse(
+            buf.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument"
+                         ".spreadsheetml.sheet",
+        )
+        resp["Content-Disposition"] = f'attachment; filename="tracker-{slug}.xlsx"'
+        return resp
+
+    done_doc_ids = list(tr.rows.filter(status=TrackerRow.Status.DONE)
+                        .values_list("document_id", flat=True))
+    field_labels = [f["label"] for f in tr.fields]
+    rows = []
+    for r in tr.rows.select_related("document").order_by("-document__created_at"):
+        cells = [r.values.get(k, "") for k in field_labels]
+        proposed = [r.proposed_values.get(k, "") for k in field_labels]
+        rows.append({
+            "id": r.id,
+            "doc_name": r.document.original_name,
+            "status": r.status,
+            "error": r.error,
+            "updated_at": r.updated_at,
+            "cells": cells,
+            "proposed": proposed,
+            "stale": r.schema_version < tr.schema_version,
+            # 确认弹窗数据（HTML 属性内联 JSON，autoescape 处理引号）
+            "payload": _json_dumps({"row": r.id, "doc": r.document.original_name,
+                                    "fields": field_labels,
+                                    "old": cells, "new": proposed}),
+        })
+    return render(request, "kb/tracker.html", {
+        "kb": kb,
+        "tracker": tr,
+        "rows": rows,
+        "fields_text": "\n".join(f["label"] for f in tr.fields),
+        "completed_n": docs_qs.filter(status=Document.Status.COMPLETED).count(),
+        "missing_n": docs_qs.filter(status=Document.Status.COMPLETED)
+                            .exclude(id__in=done_doc_ids).count(),
+    })
+
+
+@_is_manager
+@login_required
 def doc_status_api(request, slug):
     """AJAX：返回该 KB 下所有文档的最新状态（供前端轮询）+ 进度百分比。
 
