@@ -1,32 +1,16 @@
-{% load static %}
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>登录 · SHDR RAG</title>
-<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20260906-19">
-<script>
-(function(){var t=null;try{t=localStorage.getItem('fos-theme');}catch(e){}
-if(t!=='dark'&&t!=='light'){t=(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
-document.documentElement.dataset.theme=t;})();
-</script>
-</head>
-<body>
-<div class="auth-wrap">
-  <div class="auth-card">
-    <div class="ah">登录</div>
-    <div class="ab">
-      {% if form.errors %}<div class="auth-error">用户名或密码不正确。</div>{% endif %}
-      <form method="post">
-        {% csrf_token %}
-        <div class="field"><label>用户名</label><input name="username" autofocus required></div>
-        <div class="field"><label>密码</label><input name="password" type="password" required></div>
-        <button class="btn primary" type="submit">登录</button>
-      </form>
-      <div class="auth-foot">没有账号？<a href="/accounts/register/">注册</a></div>
-    </div>
-  </div>
+{% extends "accounts/_auth_base.html" %}
+{% block title %}登录 · SHDR RAG{% endblock %}
+{% block auth_card %}
+<div class="ah">登录</div>
+<div class="ab">
+  {% if form.errors %}<div class="auth-error">用户名或密码不正确。</div>{% endif %}
+  {% if next %}{% if user.is_authenticated %}<div class="auth-error">当前账号无权访问该页面，请换账号登录。</div>{% endif %}{% endif %}
+  <form method="post">
+    {% csrf_token %}
+    <div class="field"><label>用户名</label><input name="username" autofocus required></div>
+    <div class="field"><label>密码</label><input name="password" type="password" required></div>
+    <button class="btn primary" type="submit">登录</button>
+  </form>
+  <div class="auth-foot">没有账号？<a href="/accounts/register/">注册</a></div>
 </div>
-</body>
-</html>
+{% endblock %}

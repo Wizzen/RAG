@@ -38,6 +38,41 @@ def _pick_anchor(clean_text: str) -> str:
         return c
     # 全部候选都被排除（整行都是报告号类 token）→ 退而求其次取行首
     return first_line[:30]
+
+
+# ── 视觉模式：检索命中的图片以多模态内容块随工具结果发给模型 ──
+# LangChain 工具返回 list[dict] 内容块（{"type":"image","base64":...}）时，
+# 会被转成多模态 ToolMessage，模型下一轮直接「看到」图片本体。
+_VISION_MAX_IMAGES = 4   # 每次检索最多附带张数（防 base64 撑爆上下文）
+_VISION_MAX_SIDE = 1568  # 缩边上限（主流多模态输入档；与照片入库同规格）
+
+
+def _image_content_block(doc_id: str, name: str) -> dict | None:
+    """文档插图 → LangChain 图片内容块（base64；超边自动缩放重编码）。"""
+    import base64 as _b64
+    import io as _io
+    from .pipeline import doc_image_dir
+
+    p = doc_image_dir(doc_id) / name
+    try:
+        data = p.read_bytes()
+    except OSError:
+        return None
+    mime = "image/png" if p.suffix.lower() == ".png" else "image/jpeg"
+    try:
+        from PIL import Image
+        with Image.open(_io.BytesIO(data)) as im:
+            if im.width > _VISION_MAX_SIDE or im.height > _VISION_MAX_SIDE:
+                im.thumbnail((_VISION_MAX_SIDE, _VISION_MAX_SIDE))
+                buf = _io.BytesIO()
+                im.convert("RGB").save(buf, "JPEG", quality=85)
+                data, mime = buf.getvalue(), "image/jpeg"
+    except Exception:  # noqa: BLE001 —— 解码失败用原图，交给服务端报错
+        pass
+    return {"type": "image",
+            "base64": _b64.b64encode(data).decode(),
+            "mime_type": mime}
+
   # 本轮检索的来源出处（含 doc_id/text，供前端渲染链接）
 
 # 进程级持久化 checkpointer（AsyncSqliteSaver，data/checkpoints.sqlite3）。
@@ -91,8 +126,23 @@ def _kb_tree_text(dept_filter: dict) -> str:
     「说明」= 管理员可选填写的描述：库级说明写库的主题，文档级说明写
     单份文档的内容——帮助 LLM 判断该检索哪个库/引用哪份文档。
     """
-    from .models import KnowledgeBase
+    from .models import KbTracker, KnowledgeBase
     lines = []
+
+    # 追踪表信息：kb_id → 摘要（启用状态/字段数/登记条数）。字段名清单不在树里
+    # 铺开（会膨胀）——模型用 tracker_lookup 留空查询即可见全部字段名。
+    trk_info: dict = {}
+    for tr in KbTracker.objects.select_related("kb"):
+        n_rows = tr.rows.count()
+        if not tr.fields and not n_rows:
+            continue  # 空壳行（首次访问设置页时自动创建），树里不显示
+        mark = "✓" if tr.enabled else "✗"
+        fields_txt = f"{len(tr.fields)}字段" if tr.fields else "无字段"
+        trk_info[tr.kb_id] = f"追踪表:{mark}{fields_txt}/{n_rows}条登记"
+
+    def _trk(kb) -> str:
+        t = trk_info.get(kb.id)
+        return f"｜{t}" if t else ""
 
     def _desc(obj) -> str:
         d = (getattr(obj, "description", "") or "").strip()
@@ -116,19 +166,21 @@ def _kb_tree_text(dept_filter: dict) -> str:
     folders = KnowledgeBase.objects.filter(is_folder=True, **dept_filter).order_by("name")
     for folder in folders:
         docs, chunks = folder.aggregate_counts()
-        lines.append(f"📁 {folder.name}（文件夹, slug={folder.slug}, {chunks} 向量块）{_desc(folder)}")
+        lines.append(f"📁 {folder.name}（文件夹, slug={folder.slug}, {chunks} 向量块）{_desc(folder)}{_trk(folder)}")
         for child in folder.children.filter(is_folder=False).order_by("name"):
-            lines.append(f"  📄 {child.name}（slug={child.slug}, {child.chunk_count} 向量块）{_desc(child)}")
+            lines.append(f"  📄 {child.name}（slug={child.slug}, {child.chunk_count} 向量块）{_desc(child)}{_trk(child)}")
             lines.extend(_doc_lines(child, "     "))
     # 独立文档库（无父库的顶层文档库）
     standalone = KnowledgeBase.objects.filter(is_folder=False, parent__isnull=True, **dept_filter).order_by("name")
     for kb in standalone:
-        lines.append(f"📄 {kb.name}（slug={kb.slug}, {kb.chunk_count} 向量块）{_desc(kb)}")
+        lines.append(f"📄 {kb.name}（slug={kb.slug}, {kb.chunk_count} 向量块）{_desc(kb)}{_trk(kb)}")
         lines.extend(_doc_lines(kb, "   "))
     if not lines:
         return "（暂无知识库）"
     return ("可用知识库（📁=文件夹可跨文档检索，📄=文档库搜单份文档；"
-            "「说明」为库/文档的内容描述，选库与引用来源时参考它判断相关性）：\n" + "\n".join(lines))
+            "「说明」为库/文档的内容描述，选库与引用来源时参考它判断相关性；"
+            "「追踪表」=该库的结构化登记台账（✓启用/✗停用，字段数/登记条数），"
+            "查登记信息用 tracker_lookup）：\n" + "\n".join(lines))
 
 
 def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkpointer,
@@ -177,15 +229,16 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 1. **选库**：不确定有哪些文档库时调一次 list_knowledge_bases 查看层级与 slug，之后按需用 kb_slug 定位到具体文档库。不要每次都调。
 2. **检索（两种工具，按需选择）**：
    - **kb_search**：按问题语义检索最相关的少数片段（指定 kb_slug 选库，不传则用默认范围）。适合「问某个点」「查某个指标」。单次问题内最多调 2 次。
-   - **多模态检索**：kb_search 的结果里可能混有 `[图片]` 条目——这是从 PDF 提取的图纸/示意图/表格截图，其文本是图片所在章节与图注（OCR 片段）。用户问「图纸/布置图/示意图/长什么样」这类视觉问题时，这些命中很有价值：依据其上下文文字回答，并提及「相关图纸见回答下方引用区的图片」。图片会**自动**附在引用区供用户查看——不要在回答里拼贴图片地址或「查看: /kb/...」链接。
+   - **多模态检索**：kb_search 的结果里可能混有 `[图片]` 条目——这是从 PDF 提取的图纸/示意图/表格截图，其文本是图片所在章节与图注（OCR 片段）。用户问「图纸/布置图/示意图/长什么样」这类视觉问题时，这些命中很有价值：依据其上下文文字回答，并提及「相关图纸见回答下方引用区的图片」。图片会**自动**附在引用区供用户查看——不要在回答里拼贴图片地址或「查看: /kb/...」链接。**视觉模式开启时**，最相关的命中图片会以图片本体直接附在检索结果里——这时请依据图片内容本身作答（可以描述图中结构、标注、细节）。
    - **kb_fetch_doc**：按 文档/章节/关键词 提取**全部**匹配片段（非相似度排序，按文档原序）。适合用户要「完整表格/完整清单/全部条目」「导出整张表」，或当 kb_search 返回的表格/清单明显被切断（缺行缺列）时改用它补全。**取完整表格的正确策略**：一张大表常被切成很多块，且数据行往往不含表名关键词（如表名是「受力部件」但数据行是材料牌号/规格）。所以①先用表名关键词（contains=表名）取表头/说明性块；②看其中出现的材料牌号/编号/类别词（如 API 5L、CrNiMo、QT、序号等），再用这些作为 contains 各取一次，把数据行抓全；③最后把多批片段按文档原序拼回整表。单次问题内最多调 4 次（该工具不走向量、开销小）。
+   - **tracker_lookup**：查**追踪表**——文档入库时 AI 自动登记的结构化台账。**字段由各库管理员自行配置，不同库字段不同**；不确定某库登记了哪些信息时，先留空 query 调一次看字段配置与最近登记，再按字段值查。用户问「某文档登记的某项信息是多少」「登记台账里有没有…」这类**登记信息**问题时优先用它，比检索原文片段更准。单次问题内最多调 2 次。
 3. **检索经济性**：已取到的内容直接用于回答，不要用相近关键词重复检索。若第一次结果不足，换一个实质不同的关键词再查一次。生成 write_analysis 前，确保已取到足够完整的数据。
 4. **如何描述你的依据（重要）**：你的知识来自 kb_search / kb_fetch_doc 取回的**知识库片段**，不是你「打开了 PDF」或「读取了整份文档」。回答时请如实表述为「根据从 XX 文档检索到的内容」「知识库中的相关片段显示」，并标注来源文档名。片段可能不完整或含 OCR 误差——不要假装你看到了完整的原文/整张表格；若已用 kb_fetch_doc 多次仍取不到某部分，明确说明「检索到的片段中未包含该部分」。
 5. 回答须准确、客观，语言专业且易于理解。
 6. 若知识库中无相关内容，如实说明，不得编造（禁止幻觉）。
 
 当用户要求数据分析、统计、汇总，或导出 Excel/表格/文件时：
-- 先取数据：若是要某张表/清单的【完整】内容（如「导出受力部件表」「列出全部故障代码」），优先用 kb_fetch_doc（contains=关键词）一次性抓全；若是查某个具体指标，用 kb_search。
+- 先取数据：若是要某张表/清单的【完整】内容（如「导出受力部件表」「列出全部故障代码」），优先用 kb_fetch_doc（contains=关键词）一次性抓全；若是查某个具体指标，用 kb_search；若是查登记台账信息，用 tracker_lookup。
 - 再调用 write_analysis，传入完整可运行的 Python 代码（code 参数）。
 - 代码会在用户浏览器的 Pyodide 沙箱里运行，可用 pandas、numpy、matplotlib。
 - 把检索到的数据作为字面量写进代码，例如：df = pd.DataFrame([...])。
@@ -209,8 +262,9 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         """检索知识库，返回带来源标注的相关片段（多模态：含文本与图片）。
 
         结果里可能混有 [图片] 条目 = 文档里的图纸/示意图（其文本为章节与图注）。
-        图片命中会自动附到回答的引用区给用户看，按其上下文文字利用即可，
-        不要在回答里复述图片链接。
+        站点开启视觉模式（LLM 支持图片输入）时，最相关的命中图片会以图片本体
+        随结果附上——请结合图片内容本身回答视觉问题。
+        图片命中也会自动附到回答引用区给用户看，不要在回答里复述图片链接。
 
         参数:
             query: 要检索的问题或关键词。
@@ -250,6 +304,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         if not results:
             return f"在库「{target}」中未检索到相关内容。"
         blocks = []
+        img_hits: list[tuple[str, str]] = []  # (doc_id, 图片名)——视觉模式用
         # 记录来源出处（供前端渲染可点击链接 → 文档查看页高亮）。
         # 按【文档】去重：同一文档只出一个 chip，但收集该文档所有命中片段，
         # 点击后查看页一次性高亮全部命中块。
@@ -331,6 +386,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                 # 不带图片 URL：图片命中已自动附到回答引用区，给 LLM 看 URL 只会被
                 # 原样抄进答案正文（实测如此）
                 body = f"[图片] {r.get('text', '')}"
+                img_hits.append((r["doc_id"], r["image"]))
             else:
                 body = r["text"]
             blocks.append(f"[{i}] (来源文档: {src_full})\n{body}")
@@ -338,7 +394,54 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             f"已从知识库「{target}」检索到 {len(results)} 条相关片段"
             f"（向量相似度检索，非原文直读；片段可能不完整或含 OCR 噪声）。"
         )
-        return header + "\n\n" + "\n\n".join(blocks)
+        text_out = header + "\n\n" + "\n\n".join(blocks)
+        # 视觉模式补一道图片专用召回：图片块与文本查询存在模态鸿沟，混排时
+        # 几乎进不了 top-k（img_hits 常年为空）——单独按 type=image 拉最近的图。
+        # 多取一倍备用：下面的「同库约束」会滤掉其它库的图
+        if llm_cfg.get("vision") and not img_hits:
+            try:
+                from .pipeline import _embeddings
+                from .retriever import _image_lane
+                q_emb = _embeddings().embed_query(query)
+                lane_slugs = (target_kb.child_doc_slugs() if target_kb.is_folder
+                              else [target])
+                img_hits = [(it["doc_id"], it["image"])
+                            for it in _image_lane(lane_slugs, q_emb,
+                                                  limit=_VISION_MAX_IMAGES * 2)
+                            if it.get("doc_id") and it.get("image")]
+            except Exception:  # noqa: BLE001 —— 图片道失败不拖累文本检索
+                img_hits = []
+        # 同库约束：同一次进入 LLM 上下文的图片必须在同一个知识库下——
+        # 跨库图纸混附会让模型张冠李戴（文件夹扇出检索天然跨子库）。
+        # 以第一张（最相关）图片所属库为锚，其余库的一律滤掉
+        if llm_cfg.get("vision") and len(img_hits) > 1:
+            try:
+                from .models import Document
+                kb_of = dict(Document.objects.filter(
+                    id__in=[d for d, _ in img_hits]).values_list("id", "kb__slug"))
+                anchor = kb_of.get(img_hits[0][0])
+                img_hits = [h for h in img_hits if kb_of.get(h[0]) == anchor]
+            except Exception:  # noqa: BLE001 —— 解析失败退化为不附图
+                img_hits = []
+        # 视觉模式：站点 LLM 支持图片输入时，把最相关的命中图片本体随工具结果
+        # 返回（多模态内容块），模型可直接依据图片内容回答——不再只看图注文字
+        if llm_cfg.get("vision") and img_hits:
+            parts = [{"type": "text",
+                      "text": text_out + "\n\n（下方附本轮检索最相关的命中图片本体，请结合图片内容本身作答）"}]
+            n, seen_img = 0, set()
+            for doc_id, img in img_hits:
+                if img in seen_img:
+                    continue
+                blk = _image_content_block(doc_id, img)
+                if blk:
+                    parts.append(blk)
+                    seen_img.add(img)
+                    n += 1
+                if n >= _VISION_MAX_IMAGES:
+                    break
+            if n:
+                return parts
+        return text_out
 
     def kb_fetch_doc(
         kb_slug: str = "", source: str = "", section: str = "",
@@ -446,6 +549,100 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         )
         return header + "\n\n" + "\n\n".join(blocks)
 
+    def tracker_lookup(query: str = "", kb_slug: str = "") -> str:
+        """查询追踪表：文档入库时 AI 自动抽取登记的结构化关键信息表（登记台账）。
+
+        追踪字段由**各库管理员自行配置，不同库字段不同**（如检测报告库可能是
+        检验结论类字段，设备手册库可能是型号参数类字段）。不确定某库登记了
+        哪些信息时，先把 query 留空调用一次：会列出各库的字段配置与最近登记，
+        再按字段值查。用户问「某文档登记的某项信息是多少」这类台账问题时
+        优先用本工具——比 kb_search 检索原文片段更直接、更准确。
+
+        参数:
+            query: 关键词，匹配文档名或任意字段值（不区分大小写）。留空 = 各库字段配置 + 最近登记。
+            kb_slug: 只查该知识库（或其父文件夹）的追踪表。不传 = 可见范围内全部追踪表。
+        """
+        from .models import KbTracker, KnowledgeBase, TrackerRow
+
+        q = (query or "").strip().lower()
+        cands: list = []
+        if kb_slug:
+            try:
+                target_kb = KnowledgeBase.objects.get(slug=kb_slug)
+            except KnowledgeBase.DoesNotExist:
+                return f"知识库「{kb_slug}」不存在，请用 list_knowledge_bases 查看可选项。"
+            if not _dept_allowed(target_kb):
+                # 部门不可访问：与不存在同样处理，不泄露存在性
+                return f"知识库「{kb_slug}」不存在，请用 list_knowledge_bases 查看可选项。"
+            # 抽取归属是「就近」的：本库优先，其次父文件夹
+            cands = [getattr(target_kb, "tracker", None),
+                     getattr(target_kb.parent, "tracker", None)]
+        else:
+            cands = list(KbTracker.objects.select_related("kb"))
+
+        tracker_ids, labels = [], {}
+        for tr in cands:
+            if tr is None or not tr.fields or tr.id in tracker_ids:
+                continue
+            if not _dept_allowed(tr.kb):
+                continue
+            tracker_ids.append(tr.id)
+            labels[tr.id] = [f["label"] for f in tr.fields]
+        if not tracker_ids:
+            return ("可见范围内没有配置追踪表的知识库；"
+                    "这类问题请改用 kb_search 检索文档原文。")
+
+        rows = (TrackerRow.objects.filter(tracker_id__in=tracker_ids)
+                .select_related("document", "tracker__kb")
+                .order_by("-updated_at")[:200])
+        status_map = dict(TrackerRow.Status.choices)
+        matched = []
+        for r in rows:
+            doc_l = (r.document.original_name or "").lower() if r.document else ""
+            if q and doc_l.find(q) < 0:
+                hit = any(q in str(v).lower()
+                          for v in list(r.values.values()) + list(r.proposed_values.values()))
+                if not hit:
+                    continue
+            matched.append(r)
+            if len(matched) >= 20:
+                break
+        if not matched and q:
+            return (f"追踪表中没有匹配「{query}」的记录。"
+                    "可换关键词、留空 query 查看各库字段配置，或改用 kb_search 检索文档原文。")
+
+        blocks = []
+        # 空查询 = 浏览模式：先给各库的字段配置（模型据此判断该查什么词）
+        if not q:
+            for tid in tracker_ids:
+                tr = next(t for t in cands if t is not None and t.id == tid)
+                blocks.append(f"◆ 库「{tr.kb.name}」追踪字段：{' / '.join(labels[tid])}")
+            blocks.append("")
+        if not matched:
+            return "\n".join(blocks) + "（各库均无登记记录）"
+        for i, r in enumerate(matched, 1):
+            fl = labels.get(r.tracker_id, [])
+            parts = []
+            for k in fl:
+                v = str(r.values.get(k, "") or "").strip()
+                pv = str(r.proposed_values.get(k, "") or "").strip()
+                shown = v or pv
+                if not shown:
+                    continue
+                if r.status == TrackerRow.Status.PROPOSED and pv and pv != v:
+                    parts.append(f"{k}: {shown}（待管理员确认）")
+                else:
+                    parts.append(f"{k}: {shown}")
+            st = status_map.get(r.status, r.status)
+            doc_name = r.document.original_name if r.document else "（文档已删除）"
+            updated = r.updated_at.strftime("%Y-%m-%d")
+            body = " | ".join(parts) if parts else "（登记字段均为空）"
+            blocks.append(f"[{i}] 库「{r.tracker.kb.name}」· {doc_name}"
+                          f"（{updated} 登记 · {st}）\n    {body}")
+        head = (f"追踪表查询结果（关键词「{query or '浏览：字段配置 + 最近记录'}」，"
+                f"共 {len(matched)} 条，最多展示 20 条）：")
+        return head + "\n" + "\n".join(blocks)
+
     def write_analysis(code: str, filename: str = "analysis.xlsx") -> str:
         """生成一段 Python 数据分析/导出脚本，交由用户浏览器的 Pyodide 沙箱执行。
 
@@ -468,7 +665,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
     # 复用进程级持久化 checkpointer；thread_id（在 thread_config 里）区分不同会话
     return create_agent(
         model=_get_llm(llm_cfg),
-        tools=[list_knowledge_bases, kb_search, kb_fetch_doc, write_analysis],
+        tools=[list_knowledge_bases, kb_search, kb_fetch_doc, tracker_lookup, write_analysis],
         system_prompt=system_prompt,
         checkpointer=checkpointer,
         name=f"kb_agent_{kb_slug}",

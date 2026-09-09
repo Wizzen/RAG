@@ -17,7 +17,7 @@
       <div class="cfg-left">
         <div class="cfg-cat">LLM 大模型</div>
         <div class="cfg-model">{{ eff.llm.model|default:"（未配置）" }}
-          <span class="cfg-sub">{{ eff.llm.base_url|default:"（无地址）" }} · 温度 {{ eff.llm.temperature }}</span></div>
+          <span class="cfg-sub">{{ eff.llm.base_url|default:"（无地址）" }} · 温度 {{ eff.llm.temperature }}{% if eff.llm.vision %} · 视觉{% endif %}</span></div>
       </div>
       <div class="cfg-right">
         <span class="cfg-preset-badge">{% if active.llm %}配置：{{ active.llm }}{% else %}自定义{% endif %}</span>
@@ -62,8 +62,7 @@
     <div class="cfg-row">
       <div class="cfg-left">
         <div class="cfg-cat">检索参数</div>
-        <div class="cfg-model">分块 {{ eff.retrieval.chunk_size }} · 重叠 {{ eff.retrieval.chunk_overlap }} · Top {{ eff.retrieval.top_k }}
-          <span class="cfg-sub">切块与每次检索返回条数</span></div>
+        <div class="cfg-model">分块 {{ eff.retrieval.chunk_size }} · 重叠 {{ eff.retrieval.chunk_overlap }} · Top {{ eff.retrieval.top_k }}</div>
       </div>
       <div class="cfg-right">
         <span class="cfg-preset-badge">{% if active.retrieval %}配置：{{ active.retrieval }}{% else %}自定义{% endif %}</span>
@@ -106,7 +105,7 @@
 
     <div class="cfg-row">
       <div class="cfg-left">
-        <div class="cfg-cat">重排序 Rerank <span class="cfg-note">混合召回后精排</span></div>
+        <div class="cfg-cat">重排序 Rerank</div>
         <div class="cfg-model">{{ eff.rerank.model|default:"（未配置）" }}
           <span class="cfg-sub">{{ eff.rerank.base_url|default:"（无地址）" }} · {{ eff.rerank.enabled|yesno:"启用,关闭" }}</span></div>
       </div>
@@ -114,13 +113,16 @@
         <span class="cfg-preset-badge">{% if active.rerank %}配置：{{ active.rerank }}{% else %}自定义{% endif %}</span>
         <button class="btn sm outline" type="button" data-test="rerank">测试</button>
         <button class="btn sm primary" type="button" data-edit="rerank">编辑</button>
-        {% if presets_by_cat.rerank %}{% for p in presets_by_cat.rerank %}
-        <span class="preset-chip{% if active.rerank == p.name %} on{% endif %}" data-pid="{{ p.id }}">
-          <span class="preset-chip-name">{{ p.name }}</span>
-          <button type="button" class="pc-load" data-pid="{{ p.id }}" title="切换到此配置">切换</button>
-          <button type="button" class="pc-del" data-pid="{{ p.id }}" data-name="{{ p.name }}" title="删除此配置">×</button>
-        </span>
-        {% endfor %}{% endif %}
+        {% if presets_by_cat.rerank %}
+        <select class="cfg-switch" data-cat="rerank" title="切换到已保存的配置" data-current="{{ active_pid.rerank }}">
+          <option value="">自定义</option>
+          {% for p in presets_by_cat.rerank %}
+          <option value="{{ p.id }}" {% if active.rerank == p.name %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+          <option value="__new__">＋ 创建新配置…</option>
+        </select>
+        {% if active_pid.rerank %}<button type="button" class="pc-del del-cur" data-pid="{{ active_pid.rerank }}" data-name="{{ active.rerank }}" title="删除当前配置">×</button>{% endif %}
+        {% endif %}
       </div>
     </div>
 
@@ -140,16 +142,15 @@
   <div class="dialog-title" id="cfgDialogTitle">编辑配置</div>
   <form id="cfgDialogForm">
     {% csrf_token %}
-    <input type="hidden" name="action" value="save" id="cfgDialogAction">
+    <input type="hidden" name="action" value="preset_save" id="cfgDialogAction">
     <div id="cfgDialogFields"></div>
     <div class="field">
       <label>配置名称</label>
-      <input type="text" name="preset_name" id="cfgPresetName">
+      <input type="text" name="preset_name" id="cfgPresetName" required>
     </div>
     <div class="dialog-err" id="cfgDialogErr" hidden></div>
     <div class="dialog-actions">
       <button type="button" class="btn outline" id="cfgCancel">取消</button>
-      <button type="button" class="btn outline" id="cfgSavePreset">存为配置</button>
       <button type="button" class="btn primary" id="cfgSave">保存</button>
     </div>
   </form>
@@ -177,6 +178,8 @@ const CAT_FIELDS = {
       {name:'llm_api_key', label:'API Key', type:'password', key:['llm','api_key']},
       {name:'llm_model', label:'模型', type:'text', key:['llm','model']},
       {name:'llm_temperature', label:'温度', type:'number', step:'0.1', key:['llm','temperature']},
+      {name:'llm_vision', label:'支持图片输入（视觉）', type:'checkbox', key:['llm','vision'],
+        hint:'开启后，检索命中图片时把图片本体发给模型'},
     ],
   },
   embedding: {
@@ -184,25 +187,30 @@ const CAT_FIELDS = {
     fields: [
       {name:'embedding_base_url', label:'Base URL', type:'text', key:['embedding','base_url']},
       {name:'embedding_api_key', label:'API Key', type:'password', key:['embedding','api_key']},
-      {name:'embedding_model', label:'模型（含 wemm 走自托管 /embed 协议）', type:'text', key:['embedding','model']},
+      {name:'embedding_model', label:'模型', type:'text', key:['embedding','model'],
+        hint:'名称含 wemm 时走自托管 /embed 协议'},
       {name:'embedding_dimensions', label:'维度', type:'number', key:['embedding','dimensions']},
     ],
   },
   retrieval: {
     title: '编辑检索参数',
     fields: [
-      {name:'kb_chunk_size', label:'分块大小 (chunk_size)', type:'number', key:['retrieval','chunk_size']},
-      {name:'kb_chunk_overlap', label:'分块重叠 (chunk_overlap)', type:'number', key:['retrieval','chunk_overlap']},
-      {name:'kb_top_k', label:'Top K (检索条数)', type:'number', key:['retrieval','top_k']},
+      {name:'kb_chunk_size', label:'分块大小', type:'number', key:['retrieval','chunk_size']},
+      {name:'kb_chunk_overlap', label:'分块重叠', type:'number', key:['retrieval','chunk_overlap']},
+      {name:'kb_top_k', label:'Top K', type:'number', key:['retrieval','top_k']},
     ],
   },
   rerank: {
     title: '编辑重排序配置',
     fields: [
-      {name:'rerank_enabled', label:'启用重排序（混合召回后精排）', type:'checkbox', key:['rerank','enabled']},
-      {name:'rerank_base_url', label:'Base URL（如 https://api.siliconflow.cn/v1 或本地 http://127.0.0.1:1236）', type:'text', key:['rerank','base_url']},
-      {name:'rerank_api_key', label:'API Key（本地服务可留空；SiliconFlow 可复用向量模型的 Key）', type:'password', key:['rerank','api_key']},
-      {name:'rerank_model', label:'模型（如 BAAI/bge-reranker-v2-m3）', type:'text', key:['rerank','model']},
+      {name:'rerank_enabled', label:'启用重排序', type:'checkbox', key:['rerank','enabled'],
+        hint:'混合召回后用 cross-encoder 精排'},
+      {name:'rerank_base_url', label:'Base URL', type:'text', key:['rerank','base_url'],
+        hint:'如 https://api.siliconflow.cn/v1 或本地服务'},
+      {name:'rerank_api_key', label:'API Key', type:'password', key:['rerank','api_key'],
+        hint:'本地服务可留空；SiliconFlow 可复用向量模型的 Key'},
+      {name:'rerank_model', label:'模型', type:'text', key:['rerank','model'],
+        hint:'如 BAAI/bge-reranker-v2-m3'},
     ],
   },
   mineru: {
@@ -228,12 +236,14 @@ function openEdit(cat, opts = {}){
   document.getElementById('cfgDialogFields').dataset.cat = cat;
   document.getElementById('cfgDialogFields').innerHTML = def.fields.map(f => {
     const v = f.key ? (eff[f.key[0]] || {})[f.key[1]] : '';
+    const hint = f.hint ? ` title="${f.hint}"` : '';
     if (f.type === 'checkbox'){
-      return `<div class="field"><label>${f.label}</label>
-       <input name="${f.name}" type="checkbox" ${v ? 'checked' : ''} style="width:auto"></div>`;
+      // switch 开关：整行可点，hint 挂在文字上（悬停可见，不占版面）
+      return `<div class="field"><label class="sw"><input name="${f.name}" type="checkbox" ${v ? 'checked' : ''}>
+       <span class="track"></span><span class="sw-txt"${hint}>${f.label}</span></label></div>`;
     }
     return `<div class="field"><label>${f.label}</label>
-     <input name="${f.name}" type="${f.type}" ${f.step?`step="${f.step}"`:''} value="${String(v ?? '').replace(/"/g,'&quot;')}"></div>`;
+     <input name="${f.name}" type="${f.type}" ${f.step?`step="${f.step}"`:''}${hint} value="${String(v ?? '').replace(/"/g,'&quot;')}"></div>`;
   }).join('');
   // 默认预填当前配置名（原地更新）；创建新配置时留空待命名
   document.getElementById('cfgPresetName').value = opts.blankName ? '' : ((data.active || {})[cat] || '');
@@ -241,11 +251,21 @@ function openEdit(cat, opts = {}){
   dlg().showModal();
 }
 
+/* 统一 JSON 请求：会话过期/无权限时服务端 302 到登录页，fetch 静默跟随并拿到
+   HTML——裸 r.json() 只会抛 "Unexpected token '<'"。这里明确诊断并引导重登。 */
+async function fetchJSON(url, opts){
+  const r = await fetch(url, opts);
+  const ct = r.headers.get('content-type') || '';
+  if (r.redirected || !ct.includes('json')){
+    throw new Error('登录已过期或当前账号无权限，请用管理员账号重新登录');
+  }
+  return r.json();
+}
+
 async function postConfig(fd, errEl){
   fd.set('csrfmiddlewaretoken', CSRF);
   fd.set('category', document.getElementById('cfgDialogFields').dataset.cat);
-  const r = await fetch(location.href, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}});
-  const data = await r.json();
+  const data = await fetchJSON(location.href, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}});
   if (!data.ok){
     errEl.textContent = data.message || '操作失败';
     errEl.hidden = false;
@@ -270,18 +290,16 @@ document.addEventListener('click', async (e) => {
   if (e.target.closest('#cfgCancel')){ dlg().close(); return; }
 
   const saveBtn = e.target.closest('#cfgSave');
-  const presetBtn = e.target.closest('#cfgSavePreset');
-  if (saveBtn || presetBtn){
+  if (saveBtn){
     const form = document.getElementById('cfgDialogForm');
     const err = document.getElementById('cfgDialogErr');
-    if (presetBtn){
-      const name = document.getElementById('cfgPresetName').value.trim();
-      if (!name){ err.textContent = '请填写配置名称。'; err.hidden = false; return; }
-    }
+    // 单一保存：配置名称必填。同名 → 更新该预设；新名 → 另存新预设；
+    // 两种情况都立即写入生效配置并设为激活（服务端 preset_save 语义）
+    const name = document.getElementById('cfgPresetName').value.trim();
+    if (!name){ err.textContent = '请填写配置名称。'; err.hidden = false; return; }
     const fd = new FormData(form);
-    fd.set('action', presetBtn ? 'preset_save' : 'save');
-    const btn = presetBtn || saveBtn;
-    btn.disabled = true; btn.textContent = '保存中…';
+    fd.set('action', 'preset_save');
+    saveBtn.disabled = true; saveBtn.textContent = '保存中…';
     try {
       const data = await postConfig(fd, err);
       if (data){
@@ -291,7 +309,7 @@ document.addEventListener('click', async (e) => {
       }
     } catch(ex){
       toast('请求失败：' + ex, false);
-    } finally { btn.disabled = false; btn.textContent = presetBtn ? '存为配置' : '保存'; }
+    } finally { saveBtn.disabled = false; saveBtn.textContent = '保存'; }
     return;
   }
 
@@ -306,8 +324,7 @@ document.addEventListener('click', async (e) => {
       const fd = new FormData();
       fd.set('csrfmiddlewaretoken', CSRF);
       fd.set('target', testBtn.dataset.test);
-      const r = await fetch('/kb/settings/test/', {method:'POST', body:fd});
-      const data = await r.json();
+      const data = await fetchJSON('/kb/settings/test/', {method:'POST', body:fd});
       let html = '';
       for (const [k, v] of Object.entries(data.results || {})){
         const color = v.ok ? 'var(--ok)' : 'var(--danger)';
@@ -333,8 +350,7 @@ document.addEventListener('click', async (e) => {
     fd.set('action', 'preset_delete');
     fd.set('preset_id', delBtn.dataset.pid);
     try {
-      const r = await fetch(location.href, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}});
-      const data = await r.json();
+      const data = await fetchJSON(location.href, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}});
       await refreshPage();
       toast(data.message, !!data.ok);
     } catch(ex){ toast('删除失败：' + ex, false); }
@@ -361,8 +377,7 @@ document.addEventListener('change', async (e) => {
   fd.set('preset_id', pid);
   sel.disabled = true;
   try {
-    const r = await fetch(location.href, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}});
-    const data = await r.json();
+    const data = await fetchJSON(location.href, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}});
     await refreshPage();
     toast(data.message, !!data.ok);
   } catch(ex){
@@ -382,6 +397,16 @@ document.addEventListener('change', async (e) => {
 .cfg-sub{font:500 11px var(--fm);color:var(--mute)}
 .cfg-right{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
 .cfg-switch{padding:4px 8px;font:500 12px var(--fm);border:1.5px solid var(--rule-soft);border-radius:6px;background:var(--paper);color:var(--text)}
+/* 编辑弹窗内的开关（checkbox 字段）：整行可点。
+   .fos-dialog .field label{display:block} 优先级 0-2-1，压过 label.sw——必须同级对拼 */
+label.sw, .fos-dialog label.sw{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.sw input{position:absolute;opacity:0;width:0!important;height:0!important;pointer-events:none}
+.sw .track{flex-shrink:0;display:inline-block;width:38px;height:22px;border-radius:999px;background:var(--rule-soft);position:relative;transition:background .18s ease}
+.sw .track::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .18s ease}
+.sw input:checked + .track{background:var(--brand)}
+.sw input:checked + .track::after{transform:translateX(16px)}
+.sw input:focus-visible + .track{outline:2px solid var(--brand);outline-offset:2px}
+.sw .sw-txt{font:500 13px var(--fm);color:var(--text)}
 .pc-del.del-cur{border:0;background:none;cursor:pointer;font:700 14px var(--fm);color:var(--dim);padding:0 2px;line-height:1}
 .pc-del.del-cur:hover{color:var(--danger)}
 .toast{font:600 12px var(--fm);color:var(--paper);padding:9px 14px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.28);opacity:0;transform:translateX(12px);transition:all .25s;max-width:380px}

@@ -1,0 +1,35 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}SHDR RAG{% endblock %}</title>
+<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20260909-2">
+<script>
+(function(){var t=null;try{t=localStorage.getItem('fos-theme');}catch(e){}
+if(t!=='dark'&&t!=='light'){t=(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+document.documentElement.dataset.theme=t;})();
+</script>
+<style>
+  /* 认证页专属：logo 悬于卡片上方，卡片保持原 auth-card 样式 */
+  .auth-wrap{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:22px}
+  .auth-mark{display:flex;flex-direction:column;align-items:center;gap:2px;user-select:none}
+  .auth-mark svg{width:218px;height:auto}
+  .auth-brandline{font-family:var(--fm);font-size:11px;font-weight:600;letter-spacing:.32em;color:var(--mute)}
+  @media (max-height:760px){.auth-mark svg{width:170px}.auth-wrap{gap:14px}}
+  @media (prefers-reduced-motion: reduce){.auth-mark{opacity:.9}}
+</style>
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-mark">
+    {% include "_loop_mark.html" with mark_class="" %}
+    <span class="auth-brandline">SHDR · RAG</span>
+  </div>
+  <div class="auth-card">
+    {% block auth_card %}{% endblock %}
+  </div>
+</div>
+</body>
+</html>

@@ -23,13 +23,28 @@ class TrackerServiceTests(TestCase):
 
     def test_prompt_contains_fields_rules_and_truncation(self):
         fields = [{"label": "设备编号"}, {"label": "检验日期"}]
+        # 上限内（18k < 24k）应全文直送，不再截断
         md = "正文" * 9000
         p = build_extraction_prompt("定检库", fields, md, instruction="结论只填合格/不合格")
         self.assertIn("设备编号", p)
         self.assertIn("严禁编造", p)
         self.assertIn("结论只填合格/不合格", p)
         self.assertIn("YYYY-MM-DD", p)
-        self.assertLessEqual(len(p), 16000 + 800)  # 正文被截断
+        self.assertNotIn("已省略", p)
+        self.assertLessEqual(len(p), 24000 + 800)  # 全文 + 提示词开销
+
+    def test_prompt_over_limit_keeps_head_and_tail(self):
+        """超长文档头尾保留：文末签名表（检验员等落款）不能被截掉。"""
+        fields = [{"label": "检验员姓名"}]
+        md = ("头部标记" + "正" * 30000
+              + "中部标记" + "文" * 30000
+              + "\n姓名/NAME: Tang sheng dong")  # 共约 6 万字符 > 24000 上限
+        p = build_extraction_prompt("定检库", fields, md)
+        self.assertIn("已省略", p)                 # 确实超长截断了
+        self.assertIn("头部标记", p)                # 头部保留
+        self.assertNotIn("中部标记", p)             # 中部被省略
+        self.assertIn("Tang sheng dong", p)        # 尾部签名表保留
+        self.assertLessEqual(len(p), 24000 + 900)
 
     def test_parse_llm_json_variants(self):
         self.assertEqual(parse_llm_json('{"a": "1"}'), {"a": "1"})

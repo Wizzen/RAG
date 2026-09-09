@@ -57,6 +57,11 @@ a{color:inherit;text-decoration:none}
 .fos-topbar .sp{flex:1}
 .fos-topbar .auth{font-family:var(--fm);font-size:12px;color:var(--mute)}
 .fos-topbar .auth a{color:var(--brand);margin-left:8px;font-weight:600}
+/* 退出：登出须 POST（Django 5+），按钮做成与 .auth a 完全同款的文字链接 */
+.fos-topbar .auth .logout-form{display:inline;margin-left:8px}
+.fos-topbar .auth .logout-form button{appearance:none;background:none;border:0;padding:0;cursor:pointer;
+  font:600 12px var(--fm);color:var(--brand)}
+.fos-topbar .auth .logout-form button:hover{opacity:.8}
 .topbar-dept{font:600 10px var(--fm);color:var(--dim);background:var(--paper);border:1px solid var(--rule-soft);border-radius:999px;padding:2px 8px;margin-left:4px;vertical-align:middle}
 /* 知识库徽章（管理页）：部门 + 向量模型。dept-badge 此前只在 manage_list 内联定义，提到全局 */
 .dept-badge{display:inline-block;vertical-align:middle;font:600 10px var(--fm);color:var(--dim);background:var(--paper);border:1px solid var(--rule-soft);border-radius:999px;padding:2px 8px;margin-left:6px;}
@@ -337,10 +342,11 @@ a{color:inherit;text-decoration:none}
 
 /* ── Q&A layout: conversation sidebar + chat main（应用式整页聊天） ── */
 .qa-layout{display:grid;grid-template-columns:232px minmax(0,1fr);gap:24px;align-items:stretch;
+  grid-template-rows:minmax(0,1fr);  /* 隐式 auto 行会随内容长高，溢出定高容器 → 只剩页面级滚动 */
   height:calc(100vh - 100px);height:calc(100dvh - 100px);min-height:480px}
 /* 问答页是应用式整屏布局，收掉容器底部大留白，保证一屏内无页面级滚动 */
 .fos-container:has(.qa-layout){padding-bottom:20px}
-.qa-main{display:flex;flex-direction:column;min-width:0}
+.qa-main{display:flex;flex-direction:column;min-width:0;min-height:0}
 .chat-col{display:flex;flex-direction:column;flex:1;min-height:0;width:100%;max-width:860px;margin:0 auto}
 .qa-head{display:flex;align-items:center;gap:10px;padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid var(--rule);flex-wrap:wrap}
 .qa-title{font-family:var(--fd);font-weight:600;font-size:11px;color:var(--dim)}
