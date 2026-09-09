@@ -244,6 +244,9 @@ class SiteConfig(models.Model):
     llm_api_key = models.CharField("LLM API Key", max_length=255, blank=True, default="")
     llm_model = models.CharField("LLM 模型", max_length=120, blank=True, default="")
     llm_temperature = models.FloatField("LLM 温度", null=True, blank=True)
+    # 模型是否支持图片输入（视觉）。开启后 kb_search 命中图片时把图以
+    # LangChain 多模态内容块随工具结果返回，模型可真正「看图」回答。
+    llm_vision = models.BooleanField("LLM 支持图片输入", default=False)
 
     # ---- Embedding ----
     embedding_base_url = models.CharField("Embedding Base URL", max_length=255, blank=True, default="")
@@ -318,7 +321,7 @@ _SITECONFIG_FIELDS = [
 
 # 分类 → 该分类包含的 SiteConfig 字段名。预设按分类独立保存/加载。
 PRESET_CATEGORIES = {
-    "llm": ["llm_base_url", "llm_api_key", "llm_model", "llm_temperature"],
+    "llm": ["llm_base_url", "llm_api_key", "llm_model", "llm_temperature", "llm_vision"],
     "embedding": ["embedding_base_url", "embedding_api_key", "embedding_model", "embedding_dimensions"],
     "retrieval": ["kb_chunk_size", "kb_chunk_overlap", "kb_top_k"],
     "mineru": ["mineru_api_base", "mineru_api_key", "mineru_backend", "mineru_lang"],

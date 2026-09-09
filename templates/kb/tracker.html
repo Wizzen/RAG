@@ -26,21 +26,27 @@
 
 
 {% if rows %}
+{# 表格布局：fixed 列宽 + 单元格省略号（悬停提示全文），点击行展开完整值明细；#}
+{# 首列/表头冻结，列多时横向滚动——不再出现逐字竖排撑爆行高 #}
 <div class="trk-table-wrap">
 <table class="trk-table">
   <thead>
     <tr>
-      <th>文档</th>
-      {% for f in tracker.fields %}<th>{{ f.label }}</th>{% endfor %}
-      <th>状态</th><th>记录时间</th><th></th>
+      <th class="c-doc">文档</th>
+      {% for f in tracker.fields %}<th class="c-field">{{ f.label }}</th>{% endfor %}
+      <th class="c-status">状态</th>
+      <th class="c-time">时间</th>
+      {% if tracker.enabled %}<th class="c-acts">操作</th>{% endif %}
     </tr>
   </thead>
   <tbody>
     {% for r in rows %}
-    <tr data-status="{{ r.status }}">
-      <td class="doc">{{ r.doc_name }}</td>
-      {% for c in r.cells %}<td>{{ c }}</td>{% endfor %}
-      <td>
+    <tr class="trk-row" data-status="{{ r.status }}" title="点击展开 / 收起完整字段值">
+      <td class="c-doc" title="{{ r.doc_name }}">{{ r.doc_name }}</td>
+      {% for p in r.pairs %}
+      <td class="c-val{% if p.changed %} chg{% endif %}" title="{{ p.label }}：{{ p.value }}">{{ p.value }}</td>
+      {% endfor %}
+      <td class="c-status">
         {% if r.status == 'done' %}
           <span class="doc-badge badge-completed">✓ 已完成</span>
         {% elif r.status == 'proposed' %}
@@ -50,13 +56,14 @@
         {% elif r.status == 'pending' %}
           <span class="doc-badge badge-pending">⏳ 待抽取</span>
         {% else %}
-          <span class="doc-badge badge-failed" title="{{ r.error }}">✗ 失败</span>{% endif %}
-        {% if r.stale %} <span class="doc-badge badge-stale"
+          <span class="doc-badge badge-failed" title="{{ r.error }}">✗ 失败</span>
+        {% endif %}
+        {% if r.stale %}<span class="doc-badge badge-stale"
           title="追踪字段在该文档登记后有过变更，可点「重试」按新字段补齐">字段已变更</span>{% endif %}
       </td>
-      <td class="mute">{{ r.updated_at|date:"m-d H:i" }}</td>
+      <td class="c-time">{{ r.updated_at|date:"m-d H:i" }}</td>
       {% if tracker.enabled %}
-      <td class="acts">
+      <td class="c-acts">
         {% if r.status == 'proposed' %}
         <button type="button" class="btn sm primary trk-confirm" data-payload="{{ r.payload }}">确认变更</button>
         {% endif %}
@@ -73,6 +80,16 @@
         </form>
       </td>
       {% endif %}
+    </tr>
+    <tr class="trk-detail" hidden>
+      <td colspan="{{ r.pairs|length|add:4 }}">
+        {% if r.error %}<div class="trk-err-full">✗ {{ r.error }}</div>{% endif %}
+        <dl>
+          {% for p in r.pairs %}
+          <div><dt>{{ p.label }}</dt><dd>{{ p.value|default:"—" }}</dd></div>
+          {% endfor %}
+        </dl>
+      </td>
     </tr>
     {% endfor %}
   </tbody>
@@ -113,15 +130,34 @@
 {% endif %}
 
 <style>
-.trk-table-wrap{background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;overflow-x:auto}
-.trk-table{width:100%;border-collapse:collapse;font-size:13px}
-.trk-table th{font-family:var(--fd);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
-  color:var(--dim);text-align:left;padding:10px 14px;border-bottom:1.5px solid var(--rule-soft);white-space:nowrap}
-.trk-table td{padding:9px 14px;border-bottom:1px solid var(--rule-soft);vertical-align:top;max-width:260px}
-.trk-table tr:last-child td{border-bottom:0}
-.trk-table td.doc{font:600 12.5px var(--fm)}
-.trk-table td.mute{font-size:11px;color:var(--mute);white-space:nowrap}
-.trk-table td.acts{white-space:nowrap}
+/* 表格布局：fixed 列宽 + 省略号单元格，首列与表头冻结，横向滚动 */
+.trk-table-wrap{background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;
+  overflow:auto;max-height:calc(100vh - 220px);min-height:120px}
+.trk-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:12.5px}
+.trk-table th{position:sticky;top:0;z-index:2;background:var(--surface);
+  font-family:var(--fd);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--dim);text-align:left;padding:10px 12px;border-bottom:1.5px solid var(--rule-soft);white-space:nowrap}
+.trk-table td{padding:8px 12px;border-bottom:1px solid var(--rule-soft);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.trk-table tbody tr:last-child td{border-bottom:0}
+.trk-table .c-doc{position:sticky;left:0;z-index:1;width:210px;min-width:210px;
+  font:600 12px var(--fm)}
+.trk-table th.c-doc{z-index:3}
+.trk-table .c-field{width:120px}
+.trk-table .c-status{width:96px}
+.trk-table .c-time{width:64px;font:500 11px var(--fm);color:var(--mute)}
+.trk-table .c-acts{width:172px;white-space:nowrap}
+.trk-table .c-acts form{display:inline}
+.trk-table tr.trk-row{cursor:pointer}
+.trk-table tr.trk-row:hover td{background:var(--paper)}
+.trk-table td.chg{background:var(--warn-soft)}
+/* 展开明细行：完整字段值（不省略），网格铺开 */
+.trk-detail td{white-space:normal;cursor:default;background:var(--paper)}
+.trk-detail:hover td{background:var(--paper)}
+.trk-detail dl{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:7px 16px;margin:2px 0}
+.trk-detail dt{font:700 10px var(--fm);color:var(--mute)}
+.trk-detail dd{margin:2px 0 0;font:500 12px var(--fm);color:var(--text);word-break:break-all}
+.trk-err-full{font:500 12px var(--fm);color:var(--danger);margin-bottom:8px}
 .badge-proposed{background:var(--brand-soft);color:var(--brand);border-color:var(--brand)}
 .badge-stale{background:var(--warn-soft);color:#8a6300;border-color:var(--warn)}
 /* 确认变更弹窗：改前/改后逐字段对比 */
@@ -225,6 +261,14 @@
 })();
 </script>
 <script>
+/* 点击行 → 展开/收起紧随的完整值明细行（按钮/表单点击不触发） */
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, form, input')) return;
+  const row = e.target.closest('tr.trk-row');
+  if (!row) return;
+  const detail = row.nextElementSibling;
+  if (detail && detail.classList.contains('trk-detail')) detail.hidden = !detail.hidden;
+});
 /* 追踪表动作：补录 / 重试（AJAX + 刷新），删除走 data-confirm 表单直提 */
 function getCSRFToken(){
   const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);

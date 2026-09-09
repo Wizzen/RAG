@@ -19,7 +19,23 @@ log = logging.getLogger(__name__)
 
 # 送入 LLM 的正文上限：定检/财务类报告的关键信息集中在头部与表格，
 # 12k 字符足够覆盖；超出部分截断（也可在字段提示里要求只看某章节）。
-_MAX_CONTENT_CHARS = 12000
+_MAX_CONTENT_CHARS = 24000
+
+
+def _md_head_tail(md: str, limit: int = _MAX_CONTENT_CHARS) -> str:
+    """正文进提示词的截断策略：limit 内发全文；超长才保头 + 保尾。
+
+    检验/审批类文档的签名表（检验员、日期、盖章）几乎总在文末，纯头部
+    截断会系统性丢掉落款信息（实测 14k 字符文档的检验员姓名在第 13.8k
+    字符处被切掉）。尾部保底让落款表始终可见；上限仍防超长手册把本地
+    小模型的上下文打爆。
+    """
+    md = md or ""
+    if len(md) <= limit:
+        return md
+    head = int(limit * 0.58)
+    tail = limit - head
+    return md[:head] + "\n\n……（中间内容过长已省略）……\n\n" + md[-tail:]
 _LLM_TIMEOUT = 600  # 本地 LLM（LM Studio）prefill 慢，超时给足
 
 
@@ -57,8 +73,8 @@ def build_extraction_prompt(kb_name: str, fields: list[dict], md_content: str,
 
 只输出 JSON，形如：{json.dumps({f["label"]: "" for f in fields}, ensure_ascii=False)}
 
-文档全文（可能截断）：
-{md_content[:_MAX_CONTENT_CHARS]}"""
+文档全文（超长时中部省略、头尾保留）：
+{_md_head_tail(md_content)}"""
     return tpl
 
 

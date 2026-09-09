@@ -211,13 +211,76 @@ def is_kb_ready(kb_slug: str) -> bool:
         return False
 
 
-def search_folder(child_slugs: list[str], query: str, k: int | None = None) -> list[dict[str, Any]]:
+def _image_lane(slugs: list[str], query_embedding: list[float] | None,
+                limit: int = 8) -> list[dict[str, Any]]:
+    """图片块专用召回道（WeMM 多模态块，type=image）。
+
+    实测多模态块与文本查询存在固有模态鸿沟（同查询下文本块余弦≈0.5、
+    图片块仅≈0.35），887 个文本块混排时 20 个图片块永远进不了 top-k 召回窗口，
+    图纸类文档的图片因此「搜不到」。这里按 where=type=image 独立召回，
+    跨库合并后按距离升序取前 limit 张，由调用方并入结果尾部——
+    语义命中区的「可命中图片」承诺由此兑现。
+    任何失败降级为空列表，不影响文本检索。
+    """
+    if query_embedding is None:
+        return []
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for slug in slugs:
+        try:
+            col = get_kb_vectorstore(slug)._collection  # noqa: SLF001
+            res = col.query(
+                query_embeddings=[query_embedding], n_results=limit,
+                where={"type": "image"},
+                include=["documents", "metadatas", "distances"],
+            )
+            docs = (res.get("documents") or [[]])[0] or []
+            metas = (res.get("metadatas") or [[]])[0] or []
+            dists = (res.get("distances") or [[]])[0] or []
+            for d, m, dist in zip(docs, metas, dists):
+                m = m or {}
+                if not m.get("image"):
+                    continue
+                ranked.append((float(dist or 1.0), {
+                    "text": (d or "").strip() or "文档插图",
+                    "source": m.get("source", ""),
+                    "section": m.get("section", ""),
+                    "score": 0.0, "via": "img",
+                    "type": "image", "image": m["image"],
+                }))
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "图片召回道失败（跳过该库）kb=%s", slug, exc_info=True)
+    ranked.sort(key=lambda t: t[0])
+    out = [item for _dist, item in ranked[:limit]]
+    # doc_id 映射（与 search() 同款：来源出处链接需要 doc_id）
+    if out:
+        try:
+            from .models import Document
+            name_to_id = {
+                d["original_name"]: str(d["id"])
+                for d in Document.objects.filter(
+                    kb__slug__in=slugs).values("original_name", "id")
+            }
+            for r in out:
+                r["doc_id"] = name_to_id.get(r["source"], "")
+            out = [r for r in out if r["doc_id"]]
+        except Exception:
+            logging.getLogger(__name__).warning("图片召回道 doc_id 映射失败", exc_info=True)
+            return []
+    return out
+
+
+def search_folder(child_slugs: list[str], query: str, k: int | None = None,
+                  include_images: bool = False) -> list[dict[str, Any]]:
     """跨多个子文档库扇出检索：查询向量只嵌一次，各库本地召回（不精排）
     后合并去重，再对融合序做一次全局 rerank。
 
     此前每库各嵌一次查询 + 各做一次 rerank——N 库 = 2N 次远程调用且全串行
     （30 库 ≈ 15-45 秒）；现在固定 1 次嵌入 + 1 次精排，每库只剩本地
     Chroma/SQLite 查询。子库失败跳过并记日志，不阻断整体。
+
+    include_images=True：额外跑图片专用召回道并把图片块并入结果尾部
+    （文本 rerank 只看占位文本「文档插图」必弃图片，故在精排后并入）。
     """
     k = k or retrieval_settings()["top_k"]
     if not child_slugs:
@@ -272,6 +335,16 @@ def search_folder(child_slugs: list[str], query: str, k: int | None = None) -> l
     for r in results:
         if isinstance(r.get("via"), set):
             r["via"] = "+".join(sorted(r["via"]))
+
+    # ---- 图片专用召回道（精排后并入：rerank 只看文本，图片必被弃）----
+    if include_images:
+        seen = {_fuse_key(r.get("text", "") + (r.get("image") or "")) for r in results}
+        for it in _image_lane(child_slugs, q_emb):
+            key = _fuse_key(it.get("text", "") + (it.get("image") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(it)
     return results
 
 

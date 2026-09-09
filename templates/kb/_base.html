@@ -17,7 +17,7 @@
 })();
 </script>
 <title>{% block title %}SHDR RAG{% endblock %}</title>
-<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20260906-19">
+<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20260909-2">
 <style>
   /* Back-compat aliases so existing child templates keep working.
      Child pages use the old variable names; we map them to the new tokens. */
@@ -48,8 +48,8 @@
     <svg class="ico-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.4A7 7 0 0 1 7.6 3.5a7 7 0 1 0 8.9 8.9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
   </button>
   <span class="auth">
-    <span class="who{% if user.is_authenticated %} pw-open" title="修改密码"{% endif %}>{{ user.username }}{% if user_department and user_department != '通用' %} <span class="topbar-dept" title="我的部门">{{ user_department }}</span>{% endif %}</span>
-    {% if user.is_authenticated %}<a href="/accounts/logout/">退出</a>{% else %}<a href="/accounts/login/">登录</a>{% endif %}
+    <span class="who{% if user.is_authenticated %} pw-open{% endif %}"{% if user.is_authenticated %} title="修改密码"{% endif %}>{{ user.username }}{% if user_department and user_department != '通用' %} <span class="topbar-dept" title="我的部门">{{ user_department }}</span>{% endif %}</span>
+    {% if user.is_authenticated %}<form class="logout-form" method="post" action="{% url 'accounts:logout' %}">{% csrf_token %}<button type="submit">退出</button></form>{% else %}<a href="/accounts/login/">登录</a>{% endif %}
   </span>
   <button class="fos-nav-toggle" id="navToggle" aria-label="菜单" aria-expanded="false">☰</button>
 </div>

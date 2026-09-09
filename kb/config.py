@@ -49,11 +49,14 @@ def normalize_openai_base_url(value: str, *, ollama: bool = False) -> str:
 
 def llm_settings() -> dict:
     c = get_config()
+    vision = c.llm_vision or getattr(settings, "LLM_VISION", False)
     return {
         "base_url": normalize_openai_base_url(_eff(c.llm_base_url, settings.LLM_BASE_URL)),
         "api_key": _eff(c.llm_api_key, settings.LLM_API_KEY),
         "model": _eff(c.llm_model, settings.LLM_MODEL),
         "temperature": c.llm_temperature if c.llm_temperature is not None else settings.LLM_TEMPERATURE,
+        # 视觉能力：开启后检索命中图片时把图发给模型（多模态内容块）
+        "vision": bool(vision),
     }
 
 

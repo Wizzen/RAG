@@ -1,34 +1,16 @@
-{% load static %}
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>注册 · SHDR RAG</title>
-<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20260906-19">
-<script>
-(function(){var t=null;try{t=localStorage.getItem('fos-theme');}catch(e){}
-if(t!=='dark'&&t!=='light'){t=(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
-document.documentElement.dataset.theme=t;})();
-</script>
-</head>
-<body>
-<div class="auth-wrap">
-  <div class="auth-card">
-    <div class="ah">注册</div>
-    <div class="ab">
-      {% if form.errors %}<div class="auth-error">注册信息有误</div>{% endif %}
-      <form method="post">
-        {% csrf_token %}
-        <div class="field"><label>用户名</label><input name="username" autofocus required></div>
-        <div class="field"><label>密码</label><input name="password1" type="password" required></div>
-        <div class="field"><label>确认密码</label><input name="password2" type="password" required></div>
-        <p class="auth-note">新账号默认「通用」部门（仅见通用知识库）；部门归属由管理员在用户管理页指派。</p>
-        <button class="btn primary" type="submit">注册</button>
-      </form>
-      <div class="auth-foot">已有账号？<a href="/accounts/login/">登录</a></div>
-    </div>
-  </div>
+{% extends "accounts/_auth_base.html" %}
+{% block title %}注册 · SHDR RAG{% endblock %}
+{% block auth_card %}
+<div class="ah">注册</div>
+<div class="ab">
+  {% if form.errors %}<div class="auth-error">注册信息有误</div>{% endif %}
+  <form method="post">
+    {% csrf_token %}
+    <div class="field"><label>用户名</label><input name="username" autofocus required></div>
+    <div class="field"><label>密码</label><input name="password1" type="password" required></div>
+    <div class="field"><label>确认密码</label><input name="password2" type="password" required></div>
+    <button class="btn primary" type="submit">注册</button>
+  </form>
+  <div class="auth-foot">已有账号？<a href="/accounts/login/">登录</a></div>
 </div>
-</body>
-</html>
+{% endblock %}

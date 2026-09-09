@@ -188,14 +188,14 @@ class SemanticSearchSectionTests(TestCase):
         with patch("kb.retriever.search_folder", return_value=self._hits()) as sf:
             r = self.client.get(reverse("kb:search"), {"q": "结构图纸"})
         self.assertEqual(r.status_code, 200)
+        # 三栏结构：语义命中（文本）与图片命中（多模态召回道）分区展示
         self.assertContains(r, "语义命中")
-        self.assertContains(r, "🖼 图片块")
+        self.assertContains(r, "图片命中")
         self.assertContains(r, "/kb/doc/d1/img/" + "a" * 64 + ".jpg")
-        # 图片命中内联显示缩略图（点击新标签看原图），不是只有占位链接
+        # 图片命中以缩略图卡片展示（点击新标签看原图），不是只有占位链接
         self.assertContains(r, '<img src="/kb/doc/d1/img/' + "a" * 64 + '.jpg"')
         self.assertContains(r, 'loading="lazy"')
         self.assertContains(r, "查看切片上下文")
-        self.assertContains(r, "相关度 0.97")
         # 检索范围 = 有向量的可见库（通用用户的 通用 ∪ 本部门 → 只有 sem-gen）
         self.assertEqual(sf.call_args.args[0], ["sem-gen"])
 
@@ -204,7 +204,8 @@ class SemanticSearchSectionTests(TestCase):
                    side_effect=RuntimeError("WeMM 不可达")):
             r = self.client.get(reverse("kb:search"), {"q": "结构图纸"})
         self.assertEqual(r.status_code, 200)
-        self.assertContains(r, "语义·含图 0")
+        self.assertContains(r, "语义 0")
+        self.assertContains(r, "图片 0")
 
     def test_no_indexed_kb_skips_retrieval_entirely(self):
         KnowledgeBase.objects.filter(slug__in=["sem-gen", "sem-mech"]).update(chunk_count=0)

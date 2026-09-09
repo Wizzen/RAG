@@ -644,14 +644,20 @@ def tracker_view(request, slug):
     for r in tr.rows.select_related("document").order_by("-document__created_at"):
         cells = [r.values.get(k, "") for k in field_labels]
         proposed = [r.proposed_values.get(k, "") for k in field_labels]
+        # 卡片式字段 chip：标签+值成对，跳过空值；待确认行里与登记值不同的
+        # 新值高亮（与确认弹窗的 diff 语义一致）
+        pairs = []
+        for k, v, pv in zip(field_labels, cells, proposed):
+            changed = (r.status == TrackerRow.Status.PROPOSED
+                       and pv and pv != v)
+            pairs.append({"label": k, "value": v or pv, "changed": changed})
         rows.append({
             "id": r.id,
             "doc_name": r.document.original_name,
             "status": r.status,
             "error": r.error,
             "updated_at": r.updated_at,
-            "cells": cells,
-            "proposed": proposed,
+            "pairs": pairs,
             "stale": r.schema_version < tr.schema_version,
             # 确认弹窗数据（HTML 属性内联 JSON，autoescape 处理引号）
             "payload": _json_dumps({"row": r.id, "doc": r.document.original_name,
@@ -1097,7 +1103,7 @@ def _semantic_matches(user, query: str, k: int = 8) -> list[dict]:
     if not slugs:
         return []
     try:
-        results = search_folder(slugs, query, k=k)
+        results = search_folder(slugs, query, k=k, include_images=True)
     except Exception as e:
         _logging.getLogger(__name__).warning(
             "综合搜索语义检索失败（降级为空）q=%s: %s", query, str(e)[:120])
@@ -1137,7 +1143,10 @@ def search_view(request):
 
     user_dept = kb_access.user_department(request.user)
     lookup = lookup_related(q, department=user_dept) if q else None
-    semantic_matches = _semantic_matches(request.user, q) if q else []
+    # 语义命中拆两栏展示：文本块（含 rerank 相关度）与图片块（多模态召回道）
+    sem_all = _semantic_matches(request.user, q) if q else []
+    semantic_matches = [m for m in sem_all if not m.get("is_image")]
+    image_matches = [m for m in sem_all if m.get("is_image")]
     datasets = (
         StructuredDataset.objects.filter(active=True)
         .select_related("imported_by").order_by("kind", "-created_at")
@@ -1146,6 +1155,7 @@ def search_view(request):
         "q": q,
         "lookup": lookup,
         "semantic_matches": semantic_matches,
+        "image_matches": image_matches,
         "datasets": datasets,
     })
 
@@ -1260,6 +1270,7 @@ _CONFIG_FIELDS = [
     ("llm_api_key", "llm_api_key", "password", "LLM_API_KEY"),
     ("llm_model", "llm_model", "text", "LLM_MODEL"),
     ("llm_temperature", "llm_temperature", "float", "LLM_TEMPERATURE"),
+    ("llm_vision", "llm_vision", "bool", "LLM_VISION"),
     ("embedding_base_url", "embedding_base_url", "text", "EMBEDDING_BASE_URL"),
     ("embedding_api_key", "embedding_api_key", "password", "EMBEDDING_API_KEY"),
     ("embedding_model", "embedding_model", "text", "EMBEDDING_MODEL"),
