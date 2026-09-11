@@ -1,4 +1,5 @@
 {% extends "kb/_base.html" %}
+{% load static %}
 {% block title %}综合关联搜索 · SHDR RAG{% endblock %}
 {% block content %}
 <div class="asset-head">
@@ -92,10 +93,18 @@
         <p>{{ first.snippet }}</p>
         <div class="hit-chips">
           {% for m in g.list %}
+          {% if m.chunk_id %}
+          {# 有 chunk 溯源：点击开证据面板（原 PDF 页 + 红框定位） #}
+          <button type="button" class="hit-chip ev-open" data-chunk="{{ m.chunk_id }}"
+                  title="第 {{ forloop.counter }} 处{% if m.section %}（{{ m.section }}）{% endif %}{% if m.page %} · {{ m.page }}{% endif %}：点击在原 PDF 中定位">
+            {{ forloop.counter }}. {{ m.snippet|truncatechars:16 }}{% if m.page_short %} <span class="sem-page">P{{ m.page_short }}</span>{% endif %}
+          </button>
+          {% else %}
           <a class="hit-chip" href="/kb/doc/{{ m.doc_id }}/html/?h={{ m.highlight|urlencode }}&h={{ m.highlight_short|urlencode }}" target="_blank"
              title="第 {{ forloop.counter }} 处{% if m.section %}（{{ m.section }}）{% endif %}：{{ m.snippet }}">
             {{ forloop.counter }}. {{ m.snippet|truncatechars:16 }}
           </a>
+          {% endif %}
           {% endfor %}
         </div>
       </article>
@@ -111,11 +120,12 @@
     <div class="manual-list">
       {% for m in semantic_matches %}
       <article class="manual-card">
-        <div><strong>{{ m.source }}</strong>
-          <span>{% if m.section %}{{ m.section }} · {% endif %}{{ m.via }}{% if m.score %} · 相关度 {{ m.score|floatformat:2 }}{% endif %}</span>
+        <div><strong>{{ m.source }}</strong>{% if m.page %} <span class="sem-page">P{{ m.page|cut:"第 "|cut:" "|cut:"页" }}</span>{% endif %}
+          <span class="match-meta">{% if m.section %}{{ m.section }} · {% endif %}{{ m.via }}{% if m.score %}<span class="rel-badge" title="重排序模型给出的匹配度"><span class="rel-bar" style="width:{% widthratio m.score 1 100 %}%"></span><i>{% widthratio m.score 1 100 %}%</i></span>{% endif %}</span>
         </div>
         <p>{{ m.text|truncatechars:180 }}</p>
         <div class="hit-chips">
+          {% if m.chunk_id %}<button type="button" class="hit-chip ev-open" data-chunk="{{ m.chunk_id }}">📍 证据定位</button>{% endif %}
           <a class="hit-chip" href="/kb/doc/{{ m.doc_id }}/slices/?h={{ m.anchor|urlencode }}" target="_blank" rel="noopener">查看切片上下文</a>
         </div>
       </article>
@@ -129,11 +139,15 @@
     <div class="section-title"><h2>图片命中</h2><span>{{ image_matches|length }} 张 · 最多 8 张</span></div>
     <div class="img-hit-grid">
       {% for m in image_matches %}
-      <a class="img-hit" href="{{ m.images.0 }}" target="_blank" rel="noopener"
-         title="{{ m.source }}{% if m.section %} · {{ m.section }}{% endif %} · 点击查看原图">
-        <img src="{{ m.images.0 }}" alt="图片命中：{{ m.section|default:m.source }}" loading="lazy">
-        <span class="img-cap">{{ m.section|default:m.source|truncatechars:14 }}</span>
-      </a>
+      <div class="img-hit-wrap">
+        <a class="img-hit" href="{{ m.images.0 }}" target="_blank" rel="noopener"
+           title="{{ m.source }}{% if m.section %} · {{ m.section }}{% endif %} · 点击查看原图">
+          <img src="{{ m.images.0 }}" alt="图片命中：{{ m.section|default:m.source }}" loading="lazy">
+          <span class="img-cap">{{ m.section|default:m.source|truncatechars:14 }}</span>
+        </a>
+        {% if m.score %}<span class="rel-badge img-rel" title="图文向量相似度（与文本栏的重排序匹配度口径不同）"><span class="rel-bar" style="width:{% widthratio m.score 1 100 %}%"></span><i>{% widthratio m.score 1 100 %}%</i></span>{% endif %}
+        {% if m.chunk_id %}<button type="button" class="img-ev-btn ev-open" data-chunk="{{ m.chunk_id }}" title="在原 PDF 中定位此图">📍 定位</button>{% endif %}
+      </div>
       {% endfor %}
     </div>
   </section>
@@ -194,5 +208,26 @@
 .hit-chip{font:600 11px var(--fm);padding:4px 9px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:999px;color:var(--dim);text-decoration:none;cursor:pointer;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hit-chip:hover{border-color:var(--danger);color:var(--danger);background:var(--paper)}
 @media(max-width:720px){.asset-head{display:block}.no-ai{display:inline-block;margin-top:9px}.lookup-row{flex-wrap:wrap}.lookup-row input{flex-basis:100%}.import-form{grid-template-columns:1fr}.record-meta,.manual-card>div{display:block}.record-meta span,.manual-card span{display:block;margin-top:4px}}
+.img-hit-wrap{position:relative;display:flex;flex-direction:column;gap:4px;min-width:0}
+.img-ev-btn{position:absolute;top:6px;right:6px;font:600 10px var(--fm);padding:3px 8px;border-radius:999px;border:1.5px solid var(--rule-soft);background:var(--surface);color:var(--dim);cursor:pointer;opacity:.92}
+.img-ev-btn:hover{border-color:#7c4dbe;color:#7c4dbe}
+/* 页码徽标（手册原文 / 语义命中的溯源定位） */
+.sem-page{font:700 10px var(--fm);color:#7c4dbe;background:rgba(124,77,190,.12);border-radius:3px;padding:1px 5px;margin-left:4px;white-space:nowrap}
+button.hit-chip{font:600 11px var(--fm);text-align:left}
+/* 匹配度徽章（rerank 分数 → 百分比 + 迷你进度条） */
+.match-meta{display:inline-flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap;justify-content:flex-end}
+.rel-badge{position:relative;display:inline-flex;align-items:center;justify-content:flex-end;min-width:64px;font:700 10px var(--fm);color:var(--dim);background:var(--paper);border:1.5px solid var(--rule-soft);border-radius:999px;padding:2px 8px 2px 4px;overflow:hidden;white-space:nowrap}
+.rel-bar{position:absolute;left:1px;top:1px;bottom:1px;background:rgba(124,77,190,.18);border-radius:999px;transition:width .3s}
+.rel-badge i{font-style:normal;position:relative}
+.img-rel{position:absolute;top:6px;left:6px;opacity:.95}
 </style>
+<script src="{% static 'js/evidence_panel.js' %}"></script>
+<script>
+/* 证据定位按钮（语义命中卡片 / 图片命中的 📍）→ 打开证据面板 */
+document.addEventListener('click', function (e) {
+  const btn = e.target.closest('.ev-open');
+  if (!btn || !window.fosEvidencePanel) return;
+  window.fosEvidencePanel(btn.dataset.chunk);
+});
+</script>
 {% endblock %}

@@ -57,7 +57,7 @@ class Command(BaseCommand):
             self.stdout.write(f"· {doc.original_name} (库 {doc.kb.slug}) …", ending="")
             try:
                 from pathlib import Path as _Path
-                md, images = run_ocr_with_images(_Path(doc.file.path), doc.file_type)
+                md, images, content_list = run_ocr_with_images(_Path(doc.file.path), doc.file_type)
                 n = save_doc_images(doc.id, images)
                 # 新 md 里引用了、但 md_content（旧）里也引用的图片都应落盘；
                 # 名字按内容哈希 → 新旧一致，无需回写 md_content。
@@ -68,7 +68,8 @@ class Command(BaseCommand):
                     # 不清会让同一文档的向量越积越多（吃召回名额、统计失真）。
                     delete_doc_vectors(doc.kb.slug, doc.original_name)
                     try:
-                        n_chunks = run_indexing(doc.md_content, doc.kb.slug, doc.original_name, doc_id=doc.id)
+                        n_chunks = run_indexing(doc.md_content, doc.kb.slug, doc.original_name,
+                                                doc_id=doc.id, content_list=content_list)
                         doc.chunk_count = n_chunks
                         doc.save(update_fields=["chunk_count", "updated_at"])
                     except Exception:

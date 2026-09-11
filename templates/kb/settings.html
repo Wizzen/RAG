@@ -17,7 +17,7 @@
       <div class="cfg-left">
         <div class="cfg-cat">LLM 大模型</div>
         <div class="cfg-model">{{ eff.llm.model|default:"（未配置）" }}
-          <span class="cfg-sub">{{ eff.llm.base_url|default:"（无地址）" }} · 温度 {{ eff.llm.temperature }}{% if eff.llm.vision %} · 视觉{% endif %}</span></div>
+          <span class="cfg-sub">{{ eff.llm.base_url|default:"（无地址）" }} · 温度 {{ eff.llm.temperature }}{% if eff.llm.vision %} · 视觉{% endif %}{% if eff.llm.qa_enhance %} · 规划+核实{% endif %}</span></div>
       </div>
       <div class="cfg-right">
         <span class="cfg-preset-badge">{% if active.llm %}配置：{{ active.llm }}{% else %}自定义{% endif %}</span>
@@ -180,6 +180,8 @@ const CAT_FIELDS = {
       {name:'llm_temperature', label:'温度', type:'number', step:'0.1', key:['llm','temperature']},
       {name:'llm_vision', label:'支持图片输入（视觉）', type:'checkbox', key:['llm','vision'],
         hint:'开启后，检索命中图片时把图片本体发给模型'},
+      {name:'qa_enhance', label:'问答管线增强（规划 + 核实）', type:'checkbox', key:['llm','qa_enhance'],
+        hint:'回答前先做问题理解，回答后对照检索证据核实，未核实拒答；每问多两次 LLM 调用'},
     ],
   },
   embedding: {

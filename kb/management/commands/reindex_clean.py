@@ -87,7 +87,12 @@ class Command(BaseCommand):
             new_chunk_total = 0
             for doc in lib_docs:
                 try:
-                    n = run_indexing(doc.md_content, kb_slug, doc.original_name, doc_id=doc.id)
+                    # 溯源重建：OCR 时落盘的 content_list 还在 → 不重跑 OCR 也能
+                    # 恢复页码/坐标（没有则该文档无溯源，引用退化为切片页）
+                    from kb import provenance as _prov
+                    n = run_indexing(doc.md_content, kb_slug, doc.original_name,
+                                     doc_id=doc.id,
+                                     content_list=_prov.load_content_list(doc.id))
                     doc.chunk_count = n
                     doc.save(update_fields=["chunk_count", "updated_at"])
                     new_chunk_total += n

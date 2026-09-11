@@ -49,9 +49,19 @@
 <div class="upload-area">
   <form method="post" enctype="multipart/form-data" id="uploadForm">
     {% csrf_token %}
-    <label class="upload-label" for="fileInput">点击选择文件（PDF / Markdown / TXT / CSV / XLSX / 图片 JPG·PNG·WebP，业务表自动识别）</label>
-    <input type="file" name="file" id="fileInput" accept=".pdf,.md,.markdown,.txt,.csv,.tsv,.xlsx,.xlsm,.jpg,.jpeg,.png,.webp">
+    <label class="upload-label" for="fileInput">点击选择文件（可按住 Shift/Cmd 多选；或把整个文件夹拖到这里）PDF / Markdown / TXT / CSV / XLSX / 图片 JPG·PNG·WebP，业务表自动识别</label>
+    <input type="file" name="file" id="fileInput" multiple
+           accept=".pdf,.md,.markdown,.txt,.csv,.tsv,.xlsx,.xlsm,.jpg,.jpeg,.png,.webp">
+    <input type="file" id="dirInput" webkitdirectory multiple hidden>
+    <div class="upload-pick-row">
+      <button type="button" class="btn sm outline" id="pickDirBtn">选择整个文件夹</button>
+      <label class="page-embed-opt" title="图纸/扫描件类 PDF：OCR 文字少，整页视觉入库后可按自然语言搜到图纸页；普通文本手册无需开启">
+        <input type="checkbox" name="page_embed" id="pageEmbedOpt">
+        图纸 / 扫描件（整页视觉入库）
+      </label>
+    </div>
     <div id="fileName" style="margin-top:8px;font-size:12px;color:var(--dim)"></div>
+    <ul class="upload-queue" id="uploadQueue" hidden></ul>
     <button class="btn primary" type="submit" id="uploadBtn" style="margin-top:10px;display:none">开始上传</button>
   </form>
 </div>
@@ -77,6 +87,7 @@
       <div class="doc-detail" data-detail>
         {% if doc.status == 'completed' %}
           <span class="doc-badge badge-completed">✓ 已完成</span> · {{ doc.chunk_count }} 个片段
+          {% if doc.file_type == 'pdf' and doc.page_embed %}<span class="doc-badge badge-vis" title="整页视觉入库：每页渲染成图入多模态向量库">视觉模式</span>{% endif %}
           <span class="doc-desc" data-doc-desc>{{ doc.description }}</span>
         {% elif doc.status == 'failed' %}
           <span class="doc-badge badge-failed">✗ 失败</span> {{ doc.error_msg|truncatechars:80 }}
@@ -95,6 +106,11 @@
       {% if doc.status == 'completed' %}
       <button type="button" class="btn sm outline desc-edit-btn" data-doc-id="{{ doc.id }}"
               title="更新文档描述（会展示给 AI 帮其判断文档相关性）">更新描述</button>
+      {% if doc.file_type == 'pdf' %}
+      <button type="button" class="btn sm outline page-embed-btn" data-doc-id="{{ doc.id }}"{% if doc.page_embed %} data-on="1"{% endif %}
+              data-name="{{ doc.original_name }}"
+              title="图纸/扫描件类 PDF 开启：每页渲染成图 + 页面文本锚定入多模态向量库，自然语言可搜到图纸页">{% if doc.page_embed %}关闭视觉模式{% else %}开启视觉模式{% endif %}</button>
+      {% endif %}
       {% endif %}
       <button type="button" class="btn sm danger doc-del-btn" title="删除此文档及其向量"
               data-doc-id="{{ doc.id }}" data-name="{{ doc.original_name }}">删除</button>
@@ -181,6 +197,51 @@
   });
 })();
 
+// ── 视觉文档模式切换（图纸/扫描件：整页视觉入库的开/关）──
+(function(){
+  const list = document.getElementById('docList');
+  if (!list) return;
+  list.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.page-embed-btn');
+    if (!btn || btn.disabled) return;
+    const docId = btn.dataset.docId;
+    const name = btn.dataset.name || '该文档';
+    const turningOn = !btn.dataset.on;
+    if (turningOn && !(await fosConfirm({
+      title: '开启整页视觉入库', confirmText: '开启',
+      message: '为「' + name + '」的每一页生成视觉向量（渲染 + 嵌入，页数多时需数分钟）。\n适合图纸/扫描件；普通文本手册不建议开启。',
+    }))) return;
+    if (!turningOn && !(await fosConfirm({
+      title: '关闭整页视觉入库', confirmText: '关闭',
+      message: '删除「' + name + '」的全部整页视觉向量（文本片段与插图不受影响）。',
+    }))) return;
+    btn.disabled = true;
+    const old = btn.textContent;
+    btn.textContent = turningOn ? '生成中…' : '关闭中…';
+    try {
+      const r = await fetch(`/kb/manage/${KB_SLUG}/doc/${docId}/page-embed/`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': getCSRFToken(), 'X-Requested-With': 'XMLHttpRequest' },
+        body: new URLSearchParams({ enable: turningOn ? '1' : '0' }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data.ok === false) throw new Error(data.message || ('HTTP ' + r.status));
+      if (turningOn) {
+        btn.dataset.on = '1'; btn.textContent = '关闭视觉模式';
+        if (window.fosToast) fosToast('已开启视觉模式，页面向量后台生成中（完成后片段数自动更新）', 'ok');
+        setTimeout(() => location.reload(), 2500);
+      } else {
+        delete btn.dataset.on; btn.textContent = '开启视觉模式';
+        if (window.fosToast) fosToast('已关闭视觉模式，整页向量已移除', 'ok');
+        setTimeout(() => location.reload(), 1200);
+      }
+    } catch (err) {
+      btn.disabled = false; btn.textContent = old;
+      if (window.fosToast) fosToast('操作失败：' + (err.message || err), 'err');
+    }
+  });
+})();
+
 // ── 视图模式切换（列表/网格）：同一 DOM，CSS 切换；偏好存 localStorage ──
 (function(){
   const list = document.getElementById('docList');
@@ -215,15 +276,152 @@ function ftypeBadge(name, fileType){
 
 const KB_SLUG = '{{ kb.slug }}';
 const fileInput = document.getElementById('fileInput');
+const dirInput = document.getElementById('dirInput');
 const fileName = document.getElementById('fileName');
 const uploadBtn = document.getElementById('uploadBtn');
+const uploadQueue = document.getElementById('uploadQueue');
+const pageEmbedOpt = document.getElementById('pageEmbedOpt');
+const pickDirBtn = document.getElementById('pickDirBtn');
 const docList = document.getElementById('docList');
 
-fileInput.addEventListener('change', () => {
-  if (fileInput.files.length) {
-    fileName.textContent = '已选：' + fileInput.files[0].name;
-    uploadBtn.style.display = 'inline-flex';
+/* ---------- 批量上传：多选 / 选文件夹 / 拖拽（含文件夹递归） ---------- */
+const OK_EXT = ['pdf','md','markdown','txt','csv','tsv','xlsx','xlsm','jpg','jpeg','png','webp'];
+let pendingFiles = [];   // 待上传队列（去重按 name+size）
+
+function addFiles(list){
+  let added = 0, skipped = 0;
+  for (const f of list){
+    const ext = (f.name.split('.').pop() || '').toLowerCase();
+    if (!OK_EXT.includes(ext) || f.name === '.DS_Store'){ skipped++; continue; }
+    const key = f.name + ':' + f.size;
+    if (pendingFiles.some(x => x.name === f.name && x.size === f.size)){ skipped++; continue; }
+    pendingFiles.push(f); added++;
   }
+  renderQueue();
+  const parts = [];
+  if (added) parts.push('已选 ' + pendingFiles.length + ' 个文件');
+  if (skipped) parts.push('跳过 ' + skipped + ' 个（不支持的类型或重复）');
+  fileName.textContent = parts.join(' · ');
+  uploadBtn.style.display = pendingFiles.length ? 'inline-flex' : 'none';
+  uploadBtn.textContent = pendingFiles.length > 1
+    ? '开始上传（' + pendingFiles.length + ' 个文件）' : '开始上传';
+}
+
+function renderQueue(){
+  if (!pendingFiles.length){ uploadQueue.hidden = true; uploadQueue.innerHTML = ''; return; }
+  uploadQueue.hidden = false;
+  uploadQueue.innerHTML = '';
+  pendingFiles.forEach((f, i) => {
+    const li = document.createElement('li');
+    li.className = 'uq-item';
+    li.dataset.idx = i;
+    const kb = f.size > 1048576 ? (f.size/1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(f.size/1024)) + ' KB';
+    li.innerHTML = '<span class="uq-name"></span><span class="uq-size"></span><span class="uq-state">待上传</span>';
+    li.querySelector('.uq-name').textContent = f.name;
+    li.querySelector('.uq-size').textContent = kb;
+    uploadQueue.appendChild(li);
+  });
+}
+
+function setQueueState(i, state, text){
+  const li = uploadQueue.querySelector(`[data-idx="${i}"]`);
+  if (!li) return;
+  li.className = 'uq-item ' + state;
+  li.querySelector('.uq-state').textContent = text;
+}
+
+// 拖拽：文件夹 → webkitGetAsEntry 递归展开（dataTransfer.files 不含目录内容）
+function scanEntry(entry){
+  if (entry.isFile){
+    return new Promise(res => entry.file(f => res([f]), () => res([])));
+  }
+  return new Promise(res => {
+    const reader = entry.createReader();
+    const collected = [];
+    const readBatch = () => reader.readEntries(async batch => {
+      if (!batch.length){
+        const nested = await Promise.all(collected.map(scanEntry));
+        res(nested.flat());
+        return;
+      }
+      collected.push(...batch);
+      readBatch();  // readEntries 单次最多返回 100 条，循环读到空
+    }, () => res([]));
+    readBatch();
+  });
+}
+
+(function(){
+  const area = document.querySelector('.upload-area');
+  if (!area) return;
+  ['dragenter','dragover'].forEach(ev => area.addEventListener(ev, e => {
+    e.preventDefault(); area.classList.add('drag-over');
+  }));
+  ['dragleave','drop'].forEach(ev => area.addEventListener(ev, e => {
+    e.preventDefault(); area.classList.remove('drag-over');
+  }));
+  area.addEventListener('drop', async e => {
+    const items = Array.from(e.dataTransfer.items || []);
+    const entries = items.map(it => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
+    if (entries.length){
+      const files = (await Promise.all(entries.map(scanEntry))).flat();
+      addFiles(files);
+    } else {
+      addFiles(e.dataTransfer.files);
+    }
+  });
+})();
+
+fileInput.addEventListener('change', () => addFiles(fileInput.files));
+pickDirBtn.addEventListener('click', () => dirInput.click());
+dirInput.addEventListener('change', () => addFiles(dirInput.files));
+
+// 逐个 AJAX 上传（后端单文件接口复用；page_embed 勾选随每个请求）
+uploadForm = document.getElementById('uploadForm');
+uploadForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!pendingFiles.length || uploadBtn.disabled) return;
+  uploadBtn.disabled = true;
+  const pageEmbed = pageEmbedOpt.checked ? 'on' : '';
+  let okN = 0, failN = 0;
+  for (let i = 0; i < pendingFiles.length; i++){
+    const f = pendingFiles[i];
+    uploadBtn.textContent = `上传中 ${i + 1}/${pendingFiles.length}…`;
+    setQueueState(i, 'run', '上传中…');
+    const fd = new FormData();
+    fd.append('csrfmiddlewaretoken', getCSRFToken());
+    fd.append('file', f);
+    if (pageEmbed) fd.append('page_embed', pageEmbed);
+    try {
+      const r = await fetch(location.href, {
+        method: 'POST', body: fd,
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      });
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('json')){
+        // 会话过期等 → 服务端 302 到登录页（fetch 跟随拿到 HTML）
+        throw new Error('登录已过期，请刷新页面重新登录');
+      }
+      const data = await r.json();
+      if (data.ok === false) throw new Error(data.message || '上传失败');
+      setQueueState(i, 'done', '已提交');
+      okN++;
+    } catch (err) {
+      setQueueState(i, 'fail', err.message || '失败');
+      failN++;
+    }
+  }
+  if (window.fosToast){
+    fosToast(`上传完成：${okN} 个已提交后台处理${failN ? '，' + failN + ' 个失败' : ''}`,
+             failN ? 'warn' : 'ok');
+  }
+  uploadBtn.textContent = '开始上传';
+  uploadBtn.disabled = false;
+  pendingFiles = [];
+  renderQueue();
+  fileName.textContent = '';
+  uploadBtn.style.display = 'none';
+  setTimeout(poll, 1200);  // 触发现有轮询：新文档入列表
 });
 
 /* ---------- 无刷新删除文档（AJAX） ---------- */
@@ -391,12 +589,5 @@ async function poll() {
 // 页面加载时检查是否有处理中的文档
 const hasProcessing = document.querySelectorAll('[data-status="pending"],[data-status="ocr"],[data-status="indexing"]').length > 0;
 if (hasProcessing) setTimeout(poll, 2000);
-
-// 上传后也立即开始轮询（捕捉新文档）
-document.getElementById('uploadForm').addEventListener('submit', () => {
-  const ub = document.getElementById('uploadBtn');   // 防双击：提交后禁用
-  if (ub) { ub.disabled = true; ub.textContent = '上传中…'; }
-  setTimeout(poll, 1500);
-});
 </script>
 {% endblock %}
