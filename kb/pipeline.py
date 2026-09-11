@@ -75,12 +75,14 @@ def _mineru_safe_name(raw: str) -> str:
     return f"{safe}{suffix}{ext}"
 
 
-def _ocr_pdf(pdf_path: Path, on_progress=None) -> tuple[str, dict[str, str]]:
+def _ocr_pdf(pdf_path: Path, on_progress=None) -> tuple[str, dict[str, str], list | None]:
     """调 MinerU API 把 PDF 转为 Markdown。
 
-    返回 (md, images)：images 是 {文件名: data:image/jpeg;base64,...}。
-    MinerU 的图片文件名按内容哈希生成 —— 同一张图重复 OCR 名字不变，
-    因此对已有文档重跑 OCR 可以无损补回图片。
+    返回 (md, images, content_list)：
+    - images 是 {文件名: data:image/jpeg;base64,...}（MinerU 图片名按内容哈希
+      生成，对已有文档重跑 OCR 可以无损补回图片）；
+    - content_list 是 MinerU 的版面条目列表（每条带 page_idx + 归一化 bbox），
+      供 chunk 溯源（定位到第几页/红圈框选）；服务端不支持时为 None。
     on_progress: 可选回调 fn(str) → None，在轮询时调用以更新进度描述。
     """
     api_base = mineru_settings()["api_base"]
@@ -102,6 +104,8 @@ def _ocr_pdf(pdf_path: Path, on_progress=None) -> tuple[str, dict[str, str]]:
                 "lang_list": mineru_settings()["lang"],
                 "return_md": "true",
                 "return_images": "true",
+                # 版面条目（页码 + bbox）：chunk 溯源与证据面板的原料
+                "return_content_list": "true",
             }
             r = client.post(f"{api_base}/tasks", files=files, data=data, headers=_mineru_headers(), timeout=600)
         r.raise_for_status()
@@ -135,7 +139,9 @@ def _ocr_pdf(pdf_path: Path, on_progress=None) -> tuple[str, dict[str, str]]:
         for _fname, payload in results.items():
             md = payload.get("md_content") or payload.get("markdown") or payload.get("md")
             if md:
-                return md, payload.get("images") or {}
+                # content_list 是 JSON 字符串（服务端按原文件读回）；解析交给
+                # provenance.parse_content_list，这里原样透传
+                return md, payload.get("images") or {}, payload.get("content_list")
         raise RuntimeError("MinerU 结果中无 md_content")
 
 
@@ -144,22 +150,24 @@ def run_ocr(file_path: Path, file_type: str, on_progress=None) -> str:
     return run_ocr_with_images(file_path, file_type, on_progress)[0]
 
 
-def run_ocr_with_images(file_path: Path, file_type: str, on_progress=None) -> tuple[str, dict[str, str]]:
-    """提取 Markdown + 文档图片。
+def run_ocr_with_images(file_path: Path, file_type: str, on_progress=None) -> tuple[str, dict[str, str], list | None]:
+    """提取 Markdown + 文档图片 + 版面条目。
 
-    MD/TXT → 直接读取（无图片）；PDF → 调 MinerU（return_images）；
+    MD/TXT → 直接读取（无图片）；PDF → 调 MinerU（return_images + content_list）；
     IMAGE → 直传照片标准化（EXIF 转正 + 缩放）后包装成单图文档。
-    返回 (md, images)；images = {文件名: data:image/...;base64,...}。
+    返回 (md, images, content_list)；images = {文件名: data:image/...;base64,...}，
+    content_list 仅 PDF 有（chunk 溯源用；服务端未返回时为 None）。
     on_progress 仅对 PDF / 大图有效。
     """
     if file_type in ("md", "markdown", "txt"):
         if on_progress:
             on_progress("正在读取文本文件…")
-        return file_path.read_text(encoding="utf-8", errors="ignore"), {}
+        return file_path.read_text(encoding="utf-8", errors="ignore"), {}, None
     elif file_type == "pdf":
         return _ocr_pdf(file_path, on_progress=on_progress)
     elif file_type == "image":
-        return _process_photo(file_path, on_progress=on_progress)
+        md, images = _process_photo(file_path, on_progress=on_progress)
+        return md, images, None
     else:
         raise ValueError(f"不支持的文件类型: {file_type}")
 
@@ -611,11 +619,59 @@ def _chroma_collection_name(kb_slug: str) -> str:
 _IMG_MIN_BYTES = 3072  # 小于 3KB 的多为页眉 logo/装饰线，不入多模态索引
 
 
-def _image_chunks(md_content: str, source_name: str, doc_id) -> list[tuple[Any, Path]]:
-    """从原始 md 里提取图片引用 → (chunk, 图片文件路径) 列表。
+_IMG_CTX_LINES = 4      # caption 缺失时向上下行取上下文的窗口
+_IMG_CTX_MAX_CHARS = 300
 
-    chunk.page_content = 图片所在章节标题 + 附近 caption 文本（供 LLM 引用
-    描述与 rerank 打分）；metadata 携带 type=image 与图片文件名。
+
+def _ctx_valid(s: str) -> bool:
+    """上下文/caption 是否有语义锚定价值：CAD 图纸页的邻近文本常是零散
+    单元格数字（"5 1 4"），无锚定价值反而稀释嵌入。"""
+    return len(re.findall(r"[\u4e00-\u9fff]|[A-Za-z]{2,}", s or "")) >= 3
+
+
+def _image_ctx_text(lines: list[str], idx: int) -> str:
+    """图片引用行 caption 为空时，取前后邻近的文本行做语义锚定。
+
+    图纸类 PDF 的插图常独占一行（行内无图注），但图名/标题栏文字就在
+    上下几行（MinerU 把图注渲染为图片上/下方段落）。无文本锚定的裸图
+    嵌入与文本查询距离实测 1.3+，带锚定 0.6 左右——caption 质量直接
+    决定图片可检索性。跳过标题行（已由 section 承载）与其它图片引用行。
+    """
+    picked: list[str] = []
+
+    def _clean(s: str) -> str:
+        s = re.sub(r"<[^>]+>", " ", s)  # HTML 标签整段剥掉（td/rowspan 等是噪声）
+        s = re.sub(r"!\[[^\]]*\]\([^)]*\)|<img\s[^>]*/?>|images/[0-9a-f]+\.(?:jpg|jpeg|png|webp)",
+                   "", s, flags=re.IGNORECASE)
+        return re.sub(r"[!*\[\]()<>#|]", " ", s).strip()
+
+    for span in (range(idx - 1, max(-1, idx - 1 - _IMG_CTX_LINES), -1),
+                 range(idx + 1, min(len(lines), idx + 1 + _IMG_CTX_LINES))):
+        for j in span:
+            line = lines[j]
+            if "images/" in line and re.search(r"!\[|<img", line, re.IGNORECASE):
+                continue  # 相邻图片行（并排小图）不作上下文
+            if _SECTION_HEADING.match(line.lstrip()):
+                continue
+            txt = _clean(line)
+            if len(txt) < 2:
+                continue
+            picked.append(txt)
+            if sum(len(p) for p in picked) >= _IMG_CTX_MAX_CHARS:
+                return " ".join(picked)[:_IMG_CTX_MAX_CHARS]
+    ctx = " ".join(picked)[:_IMG_CTX_MAX_CHARS].strip()
+    return ctx if _ctx_valid(ctx) else ""
+
+
+def _image_chunks(md_content: str, source_name: str, doc_id,
+                  content_list: list | None = None) -> list[tuple[Any, Path]]:
+    """提取文档图片 → (chunk, 图片文件路径) 列表。
+
+    图片来源 = md 引用 ∪ content_list 的 image/chart 条目：MinerU 对表格
+    截图/图例类插图只在 content_list 给 img_path（md 里用 HTML 表格代替，
+    不放 ![]() 引用）——只扫 md 会漏掉这类图。
+    caption 优先级：md 行内 → content_list 的 image_caption（图内标题，
+    OCR 出的真图注）→ 图片行前后邻近文本 → 章节名 →「文档插图」。
     仅返回磁盘上确实存在且 ≥ _IMG_MIN_BYTES 的图片。
     """
     d = doc_image_dir(doc_id)
@@ -625,34 +681,57 @@ def _image_chunks(md_content: str, source_name: str, doc_id) -> list[tuple[Any, 
     section = ""
     seen: set[str] = set()
     input_version = _embed_input_version("media")
-    for line in (md_content or "").splitlines():
+    lines = (md_content or "").splitlines()
+
+    def _emit(name: str, caption: str, sec: str) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        p = d / name
+        try:
+            if not p.is_file() or p.stat().st_size < _IMG_MIN_BYTES:
+                return
+        except OSError:
+            return
+        ctx = f"【{sec}】" if sec else ""
+        ctx = (ctx + (caption or sec or "文档插图")).strip()
+        chunk = LCDocument(page_content=ctx, metadata={
+            "source": source_name, "section": sec,
+            "type": "image", "image": name,
+            "embedding_input_version": input_version,
+        })
+        out.append((chunk, p))
+
+    for i, line in enumerate(lines):
         head = _SECTION_HEADING.match(line.lstrip())
         if head:
             section = _clean_section_name(head.group(1))
         for m in re.finditer(r"images/([0-9a-f]+\.(?:jpg|jpeg|png|webp))", line, re.IGNORECASE):
-            name = m.group(1)
-            if name in seen:
-                continue
-            seen.add(name)
-            p = d / name
-            try:
-                if not p.is_file() or p.stat().st_size < _IMG_MIN_BYTES:
-                    continue
-            except OSError:
-                continue
             caption = re.sub(
                 r"!\[[^\]]*\]\([^)]*\)|<img\s[^>]*/?>|images/[0-9a-f]+\.(?:jpg|jpeg|png|webp)",
                 "", line, flags=re.IGNORECASE,
             )
             caption = re.sub(r"[!*\[\]()<>#]", "", caption).strip()[:120]
-            ctx = f"【{section}】" if section else ""
-            ctx = (ctx + (caption or section or "文档插图")).strip()
-            chunk = LCDocument(page_content=ctx, metadata={
-                "source": source_name, "section": section,
-                "type": "image", "image": name,
-                "embedding_input_version": input_version,
-            })
-            out.append((chunk, p))
+            if not _ctx_valid(caption):
+                caption = _image_ctx_text(lines, i)
+            _emit(m.group(1), caption[:_IMG_CTX_MAX_CHARS], section)
+
+    # content_list 补充：md 未引用的图（表格截图/图例），caption 用图内标题
+    if content_list:
+        for block in content_list:
+            if not isinstance(block, dict) or block.get("type") not in ("image", "chart"):
+                continue
+            img = block.get("img_path") or ""
+            name = img.rsplit("/", 1)[-1]
+            if not name:
+                continue
+            cap = " ".join(
+                str(c) for c in (block.get("image_caption")
+                                 or block.get("chart_caption") or []) if str(c).strip()
+            ).strip()[:_IMG_CTX_MAX_CHARS]
+            if not _ctx_valid(cap):
+                cap = ""  # 图内标题是零散数字（CAD 图纸）时无锚定价值
+            _emit(name, cap, section)
     return out
 
 
@@ -715,12 +794,179 @@ def _index_image_chunks(vs, img_items: list[tuple[Any, Path]], kb_slug: str,
         return 0
 
 
-def run_indexing(md_content: str, kb_slug: str, source_name: str, doc_id=None) -> int:
+# ------------------------------------------------------------------
+# 视觉文档模式：整页渲染 + 页文本锚定的多模态块（图纸/扫描件用）
+# ------------------------------------------------------------------
+# 渲染边长上限：Qwen 系视觉 patch=16，1024 边 ≈ 64×88 个 patch ≈ 5.6k 视觉
+# token——超出会挤爆嵌入上下文，再大也会被服务端缩回
+_PAGE_RENDER_MAX_SIDE = 1024
+_PAGE_TEXT_CHARS = 400        # 页面文本锚定截断（够语义锚定，不撑爆输入）
+_PAGE_EMBED_BATCH = 4        # 页面图 base64 大，批量压小避免单请求过大
+
+
+def _render_page_jpeg(pdf_path: Path, page_no: int,
+                      max_side: int = _PAGE_RENDER_MAX_SIDE) -> bytes | None:
+    """渲染 PDF 某页为 JPEG（等比缩到 max_side 内）。失败返回 None。"""
+    try:
+        import pymupdf
+        with pymupdf.open(pdf_path) as pdf:
+            if page_no < 0 or page_no >= pdf.page_count:
+                return None
+            page = pdf[page_no]
+            r = page.rect
+            scale = max_side / max(r.width, r.height) if max(r.width, r.height) > 0 else 1.0
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+            return pix.tobytes("jpeg") if hasattr(pix, "tobytes") else pix.tobytes("jpg")
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "页面渲染失败（跳过该页块）page=%s", page_no, exc_info=True)
+        return None
+
+
+def page_texts(content_list: list | None) -> dict[int, str]:
+    """content_list → {页码: 页面文本}。
+
+    表格块用与文本块嵌入同一套 _html_table_to_text 渲染（保证锚定文本与
+    文本块可互相召回）；跳过页眉/页脚。每页截断到 _PAGE_TEXT_CHARS。
+    """
+    if not content_list:
+        return {}
+    out: dict[int, list[str]] = {}
+    for block in content_list:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type") or ""
+        page = block.get("page_idx")
+        if not isinstance(page, int) or btype in ("header", "footer", "page_number"):
+            continue
+        if btype == "table":
+            text = _html_table_to_text(block.get("table_body") or "")[:200]
+        elif btype in ("image", "chart"):
+            caps = block.get("image_caption") or block.get("chart_caption") or []
+            text = " ".join(str(c) for c in caps if str(c).strip())[:120]
+        else:
+            text = str(block.get("text") or "").strip()[:200]
+        if text:
+            out.setdefault(page, []).append(text)
+    return {p: (" ".join(parts))[:_PAGE_TEXT_CHARS] for p, parts in out.items()}
+
+
+def _page_chunks(source_name: str, content_list: list) -> list[tuple[Any, int]]:
+    """整页块：page_content = 【第N页】+ 页面文本（锚定），metadata 带
+    type=image（图片召回道可召回）与 page=N（消费端区分页面块与插图块）。"""
+    from langchain_core.documents import Document as _Doc
+    input_version = _embed_input_version("media")
+    out: list[tuple[Any, int]] = []
+    for page, text in sorted(page_texts(content_list).items()):
+        content = f"【第{page + 1}页】{text or '页面图像'}"
+        out.append((_Doc(page_content=content, metadata={
+            "source": source_name, "section": f"第{page + 1}页",
+            "type": "image", "image": f"page{page}", "page": page,
+            "embedding_input_version": input_version,
+        }), page))
+    return out
+
+
+def _index_page_chunks(vs, doc, kb_slug: str, content_list: list) -> int:
+    """整页块入库：渲染 → WeMM content 图文交错嵌入 → 写 Chroma + 溯源行。
+
+    chunk_id 确定性（page-<doc_id>-<N>），溯源行 blocks 不带 bbox（证据面板
+    只渲染整页不画框）。任何失败只跳过页面块，不影响文本/插图块。
+    """
+    import base64 as b64mod
+    from .models import ChunkProvenance
+
+    log = logging.getLogger(__name__)
+    try:
+        pdf_path = Path(doc.file.path)
+    except (NotImplementedError, ValueError, AttributeError):
+        return 0
+    items = _page_chunks(doc.original_name, content_list)
+    if not items:
+        return 0
+    ef = _embeddings()
+    if not isinstance(ef, WeMMEmbeddings):
+        log.info("当前 embedding 非多模态（%s），跳过 %d 个整页块 kb=%s",
+                 type(ef).__name__, len(items), kb_slug)
+        return 0
+
+    def _data_url(page_no: int) -> str | None:
+        raw = _render_page_jpeg(pdf_path, page_no)
+        if not raw:
+            return None
+        return "data:image/jpeg;base64," + b64mod.b64encode(raw).decode()
+
+    ids, vecs, docs, metas, prov_rows = [], [], [], [], []
+    for i in range(0, len(items), _PAGE_EMBED_BATCH):
+        batch = items[i:i + _PAGE_EMBED_BATCH]
+        urls = [(_data_url(p), c, p) for c, p in batch]
+        usable = [(u, c, p) for u, c, p in urls if u]
+        if not usable:
+            continue
+        try:
+            batch_vecs = ef.embed_contents([
+                [{"type": "text", "text": c.page_content},
+                 {"type": "image", "image": u}]
+                for u, c, _p in usable
+            ])
+        except Exception as e:
+            log.warning("整页块嵌入失败（本批跳过 %d 页）: %s", len(usable), str(e)[:120])
+            continue
+        for (u, c, p), v in zip(usable, batch_vecs):
+            ids.append(f"page-{doc.id}-{p}")
+            vecs.append(v)
+            docs.append(c.page_content)
+            metas.append(c.metadata)
+            prov_rows.append(ChunkProvenance(
+                chunk_id=f"page-{doc.id}-{p}", document=doc, kb_slug=kb_slug,
+                page_start=p, page_end=p,
+                blocks=[{"page": p, "bbox": None, "kind": "page"}],
+            ))
+    if not ids:
+        return 0
+    try:
+        vs._collection.upsert(ids=ids, embeddings=vecs, documents=docs,  # noqa: SLF001
+                               metadatas=metas)
+        ChunkProvenance.objects.bulk_create(prov_rows, batch_size=500,
+                                            ignore_conflicts=True)
+        return len(ids)
+    except Exception:
+        log.exception("整页块写入失败 kb=%s doc=%s", kb_slug, doc.id)
+        return 0
+
+
+def _remove_page_chunks(kb_slug: str, doc_id) -> int:
+    """删除某文档的全部整页块（关闭视觉文档模式时）。返回删除向量数。"""
+    import chromadb
+    from chromadb.config import Settings as CBSettings
+    from .models import ChunkProvenance
+
+    n = ChunkProvenance.objects.filter(document_id=doc_id,
+                                       chunk_id__startswith=f"page-{doc_id}-").delete()[0]
+    try:
+        client = chromadb.PersistentClient(
+            path=str(_kb_persist_dir(kb_slug)),
+            settings=CBSettings(anonymized_telemetry=False))
+        col = client.get_collection(_chroma_collection_name(kb_slug))
+        col.delete(where={"$and": [{"type": "image"},
+                                   {"source": {"$exists": True}},
+                                   {"page": {"$gte": 0}}]})
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "整页块向量删除失败（溯源已清）kb=%s doc=%s", kb_slug, doc_id,
+            exc_info=True)
+    return n
+
+
+def run_indexing(md_content: str, kb_slug: str, source_name: str, doc_id=None,
+                 content_list=None) -> int:
     """切块 + 向量化 → 写入该 KB 的 Chroma。返回 chunk 数。
 
     嵌入前先清洗：把 MinerU 的原始 HTML 表格转成结构化纯文本（仅此路径清洗；
     查看页 md_to_html 仍用原始 md_content 渲染真表格）。
-    doc_id 提供时，PDF 图片作为独立多模态块入同一向量库（需 WeMM）。
+    doc_id 提供时，PDF 图片作为独立多模态块入同一向量库（需 WeMM），
+    且 content_list（MinerU 版面条目）提供时为每个 chunk 写页码/坐标溯源
+    （ChunkProvenance，证据面板与「第 N 页」引用的数据源）。
     """
     clean_md = _md_for_embedding(md_content)
     chunks = _section_aware_chunk(clean_md, source_name)
@@ -731,21 +977,58 @@ def run_indexing(md_content: str, kb_slug: str, source_name: str, doc_id=None) -
         embedding_function=_embeddings(),
         persist_directory=str(_kb_persist_dir(kb_slug)),
     )
+    chunk_ids: list[str] = []
     if chunks:
-        vs.add_documents(chunks)
+        # add_documents 返回每个 chunk 的向量 id —— 溯源表与关键词索引都以
+        # id 关联（重跑入库 id 全换，溯源表先清后写）
+        chunk_ids = list(vs.add_documents(chunks))
     # 混合检索：向量入库成功后同步写关键词索引（失败只降级，不阻断）
     from . import keyword_index
     if chunks:
-        keyword_index.add_chunks(kb_slug, chunks)
+        keyword_index.add_chunks(kb_slug, chunks, ids=chunk_ids)
     n_img = 0
+    img_names: list[str] = []
     if doc_id:
         try:
-            n_img = _index_image_chunks(
-                vs, _image_chunks(md_content, source_name, doc_id),
-                kb_slug, source_name, doc_id=doc_id)
+            from .provenance import parse_content_list as _parse_cl
+            cl = _parse_cl(content_list) if content_list is not None else None
+            img_items = _image_chunks(md_content, source_name, doc_id,
+                                      content_list=cl)
+            n_img = _index_image_chunks(vs, img_items, kb_slug, source_name,
+                                        doc_id=doc_id)
+            img_names = [c.metadata.get("image", "") for c, _p in img_items]
         except Exception:
             logging.getLogger(__name__).exception(
                 "图片块索引失败（不影响文本块）doc=%s", doc_id)
+        # chunk 溯源（页码 + 版面 bbox）：content_list 为空 → 清掉旧行即可
+        # （无溯源，引用退化到原文切片页）
+        if doc_id:
+            try:
+                from . import provenance as _prov
+                _prov.persist_content_list(doc_id, content_list)
+                if content_list:
+                    from .models import Document
+                    _doc = Document.objects.get(id=doc_id)
+                    _prov.save_provenance(
+                        _doc, kb_slug, chunk_ids, chunks, clean_md,
+                        content_list, image_names=img_names)
+                else:
+                    from .models import ChunkProvenance
+                    ChunkProvenance.objects.filter(document_id=doc_id).delete()
+                # 视觉文档模式（用户按文档勾选，图纸/扫描件用）：整页渲染 +
+                # 页文本锚定的多模态块——文本查询可命中纯 CAD 图纸页
+                if cl:
+                    from .models import Document
+                    _doc = Document.objects.get(id=doc_id)
+                    if getattr(_doc, "page_embed", False) and _doc.file_type == "pdf":
+                        try:
+                            n_img += _index_page_chunks(vs, _doc, kb_slug, cl)
+                        except Exception:
+                            logging.getLogger(__name__).exception(
+                                "整页块索引失败（不影响文本块）doc=%s", doc_id)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "chunk 溯源写入失败（不影响向量入库）doc=%s", doc_id)
     _stamp_embedding_model(kb_slug)
     return len(chunks) + n_img
 
@@ -800,7 +1083,7 @@ def process_document(doc_id: str) -> None:
         doc.status = Document.Status.OCR
         doc.stage_detail = "开始 OCR…"
         doc.save(update_fields=["status", "stage_detail", "updated_at"])
-        md, images = run_ocr_with_images(file_path, doc.file_type, on_progress=update_stage)
+        md, images, content_list = run_ocr_with_images(file_path, doc.file_type, on_progress=update_stage)
         try:
             n_img = save_doc_images(doc.id, images)
         except Exception:
@@ -816,7 +1099,8 @@ def process_document(doc_id: str) -> None:
         doc.status = Document.Status.INDEXING
         doc.stage_detail = "正在切块 + 向量化…"
         doc.save(update_fields=["status", "stage_detail", "updated_at"])
-        n_chunks = run_indexing(md, doc.kb.slug, doc.original_name, doc_id=doc.id)
+        n_chunks = run_indexing(md, doc.kb.slug, doc.original_name, doc_id=doc.id,
+                                content_list=content_list)
         doc.chunk_count = n_chunks
 
         # 阶段 3: 完成
@@ -848,6 +1132,43 @@ def process_document(doc_id: str) -> None:
             doc.save(update_fields=["status", "error_msg", "stage_detail", "updated_at"])
         except Exception:
             pass
+
+
+def _page_embed_async(doc_id: str) -> None:
+    """后台补建某文档的整页视觉块（管理页开启视觉模式时触发）。"""
+    def _run():
+        import django
+        django.setup()
+        from .models import Document
+        from .provenance import load_content_list
+        try:
+            doc = Document.objects.get(id=doc_id)
+            if not doc.page_embed or doc.file_type != "pdf":
+                return
+            cl = load_content_list(doc.id)
+            if not cl:
+                doc.page_embed = False
+                doc.save(update_fields=["page_embed", "updated_at"])
+                logging.getLogger(__name__).warning(
+                    "视觉模式需版面数据（content_list）——旧入库文档请重新上传，doc=%s", doc_id)
+                return
+            vs = Chroma(
+                collection_name=_chroma_collection_name(doc.kb.slug),
+                embedding_function=_embeddings(),
+                persist_directory=str(_kb_persist_dir(doc.kb.slug)),
+            )
+            n = _index_page_chunks(vs, doc, doc.kb.slug, cl)
+            if n:
+                doc.chunk_count = doc.chunk_count + n
+                doc.save(update_fields=["chunk_count", "updated_at"])
+                kb = doc.kb
+                kb.chunk_count = sum(
+                    d.chunk_count for d in kb.documents.filter(status=Document.Status.COMPLETED))
+                kb.save(update_fields=["chunk_count", "updated_at"])
+        except Exception:
+            logging.getLogger(__name__).exception("视觉模式页面向量生成失败 doc=%s", doc_id)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def process_document_async(doc_id: str) -> None:

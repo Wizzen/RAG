@@ -106,18 +106,22 @@ def search(kb_slug: str, query: str, k: int | None = None,
     vs = get_kb_vectorstore(kb_slug)
 
     # ---- 向量路 ----
-    vec_docs: list[tuple[Any, float]] = []
+    vec_docs: list[tuple[Any, dict]] = []
     try:
+        if query_embedding is None:
+            query_embedding = vs.embeddings.embed_query(query)
         if query_embedding is not None:
+            # include 不收 "ids"（chromadb 校验拒绝），但 query 结果恒带 ids
             res = vs._collection.query(  # noqa: SLF001 同 fetch_doc 的原生查询模式
                 query_embeddings=[query_embedding], n_results=recall,
                 include=["documents", "metadatas"])
             from langchain_core.documents import Document as _Doc
-            vec_docs = [(_Doc(page_content=d, metadata=m or {}), 0.0)
-                        for d, m in zip((res.get("documents") or [[]])[0] or [],
-                                        (res.get("metadatas") or [[]])[0] or [])]
-        else:
-            vec_docs = vs.similarity_search_with_relevance_scores(query, k=recall)
+            for d, m, cid in zip((res.get("documents") or [[]])[0] or [],
+                                 (res.get("metadatas") or [[]])[0] or [],
+                                 (res.get("ids") or [[]])[0] or []):
+                meta = dict(m or {})
+                meta["chunk_id"] = cid  # 溯源表按向量 id 关联（页码/证据面板）
+                vec_docs.append((_Doc(page_content=d, metadata=meta), meta))
     except Exception as e:
         # 降级为纯关键词检索，但必须留痕——embedding 端点挂掉时运维要能发现
         logging.getLogger(__name__).warning("向量检索失败（降级纯关键词）kb=%s: %s", kb_slug, e)
@@ -130,8 +134,7 @@ def search(kb_slug: str, query: str, k: int | None = None,
     # ---- RRF 融合（同一路内重复文本只计首次——语料里存在内容相同的 chunk） ----
     fused: dict[str, dict[str, Any]] = {}
     seen_vec: set[str] = set()
-    for rank, (doc, _sim) in enumerate(vec_docs, start=1):
-        meta = doc.metadata or {}
+    for rank, (doc, meta) in enumerate(vec_docs, start=1):
         # 图片块以「图+上下文」独立身份参与融合（同名图的上下文与文本块不同，
         # 但 page_content 可能与章节文本块相同 → 融合键必须带上图片名防撞）
         key = _fuse_key(doc.page_content + (meta.get("image") or ""))
@@ -142,6 +145,7 @@ def search(kb_slug: str, query: str, k: int | None = None,
             "text": doc.page_content, "source": meta.get("source", ""),
             "section": meta.get("section") or meta.get("drug_name") or "",
             "score": 0.0, "via": set(),
+            "chunk_id": meta.get("chunk_id", ""),
         })
         if meta.get("type") == "image":
             item["type"] = "image"
@@ -156,7 +160,7 @@ def search(kb_slug: str, query: str, k: int | None = None,
         seen_kw.add(key)
         item = fused.setdefault(key, {
             "text": row["text"], "source": row["source"], "section": row["section"],
-            "score": 0.0, "via": set(),
+            "score": 0.0, "via": set(), "chunk_id": row.get("chunk_id", ""),
         })
         item["score"] += 1.0 / (RRF_K + rank)
         item["via"].add("kw")
@@ -212,7 +216,7 @@ def is_kb_ready(kb_slug: str) -> bool:
 
 
 def _image_lane(slugs: list[str], query_embedding: list[float] | None,
-                limit: int = 8) -> list[dict[str, Any]]:
+                limit: int = 8, max_distance: float = 1.45) -> list[dict[str, Any]]:
     """图片块专用召回道（WeMM 多模态块，type=image）。
 
     实测多模态块与文本查询存在固有模态鸿沟（同查询下文本块余弦≈0.5、
@@ -220,6 +224,9 @@ def _image_lane(slugs: list[str], query_embedding: list[float] | None,
     图纸类文档的图片因此「搜不到」。这里按 where=type=image 独立召回，
     跨库合并后按距离升序取前 limit 张，由调用方并入结果尾部——
     语义命中区的「可命中图片」承诺由此兑现。
+    max_distance：相关性阈值（余弦距离）。相关图（带文本锚定）实测
+    0.5~0.7、弱锚定 CAD 图纸 ≈1.35、无关图（如随手照片对扭矩查询）
+    ≥1.6——1.45 在「滤掉真无关」与「保留弱相关图纸」之间取折中。
     任何失败降级为空列表，不影响文本检索。
     """
     if query_embedding is None:
@@ -236,22 +243,29 @@ def _image_lane(slugs: list[str], query_embedding: list[float] | None,
             docs = (res.get("documents") or [[]])[0] or []
             metas = (res.get("metadatas") or [[]])[0] or []
             dists = (res.get("distances") or [[]])[0] or []
-            for d, m, dist in zip(docs, metas, dists):
+            cids = (res.get("ids") or [[]])[0] or []
+            for d, m, dist, cid in zip(docs, metas, dists, cids):
                 m = m or {}
                 if not m.get("image"):
                     continue
-                ranked.append((float(dist or 1.0), {
+                item = {
                     "text": (d or "").strip() or "文档插图",
                     "source": m.get("source", ""),
                     "section": m.get("section", ""),
                     "score": 0.0, "via": "img",
                     "type": "image", "image": m["image"],
-                }))
+                    "chunk_id": cid or "",
+                    # 原始余弦距离（0=完全相同，2=相反）：供前端换算图文相似度
+                    "distance": round(float(dist), 4) if dist is not None else None,
+                }
+                if isinstance(m.get("page"), int):
+                    item["page_block"] = True  # 整页视觉块（视觉文档模式）
+                ranked.append((float(dist or 1.0), item))
         except Exception:
             logging.getLogger(__name__).warning(
                 "图片召回道失败（跳过该库）kb=%s", slug, exc_info=True)
     ranked.sort(key=lambda t: t[0])
-    out = [item for _dist, item in ranked[:limit]]
+    out = [item for dist, item in ranked[:limit] if dist <= max_distance]
     # doc_id 映射（与 search() 同款：来源出处链接需要 doc_id）
     if out:
         try:
@@ -263,6 +277,10 @@ def _image_lane(slugs: list[str], query_embedding: list[float] | None,
             }
             for r in out:
                 r["doc_id"] = name_to_id.get(r["source"], "")
+                # 图片块 id 规则 img-<doc_id>-<hash>（入库时生成）；老向量库
+                # 查询未带 id 的在这里按同一规则补
+                if r.get("type") == "image" and not r.get("chunk_id"):
+                    r["chunk_id"] = f"img-{r['doc_id']}-{r['image']}"
             out = [r for r in out if r["doc_id"]]
         except Exception:
             logging.getLogger(__name__).warning("图片召回道 doc_id 映射失败", exc_info=True)
@@ -386,7 +404,10 @@ def fetch_doc(
         include=["documents", "metadatas"],
     )
     out: list[dict[str, Any]] = []
-    for doc, meta in zip(res.get("documents") or [], res.get("metadatas") or []):
+    docs = res.get("documents") or []
+    metas = res.get("metadatas") or []
+    ids = list(res.get("ids") or []) + [""] * max(0, len(docs) - len(res.get("ids") or []))
+    for doc, meta, cid in zip(docs, metas, ids):
         text = doc or ""
         if contains and contains not in text:
             continue
@@ -396,5 +417,6 @@ def fetch_doc(
             "source": m.get("source", ""),
             # 优先 section，回退旧向量的 drug_name
             "section": m.get("section") or m.get("drug_name") or "",
+            "chunk_id": cid or "",
         })
     return out[:limit]

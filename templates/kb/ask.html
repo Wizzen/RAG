@@ -51,6 +51,7 @@
 {% block scripts %}
 <script src="{% static 'js/vendor/marked.min.js' %}"></script>
 <script src="{% static 'js/vendor/purify.min.js' %}"></script>
+<script src="{% static 'js/evidence_panel.js' %}"></script>
 <script src="{% static 'js/vendor/jspdf.umd.min.js' %}" defer></script>
 <script src="{% static 'js/vendor/jspdf.plugin.autotable.min.js' %}" defer></script>
 <script>
@@ -650,7 +651,10 @@ pd.DataFrame.to_excel = _patched_to_excel
   newConversation();
   {% endif %}
 
-  /* ---------- 来源出处链接（每文档一个 chip；点击 → 新标签打开 + 批量高亮全部命中块） ---------- */
+  /* ---------- 来源出处链接（每文档一个 chip；有 chunk 溯源 → 证据面板，无 → 切片页） ---------- */
+  function shortPageLabel(label){
+    return String(label || '').replace(/[第\s页]/g, '');
+  }
   function renderCitations(aiMsg, citations){
     if (!citations || !citations.length) return;
     const bubble = aiMsg.querySelector('.bubble');
@@ -663,24 +667,45 @@ pd.DataFrame.to_excel = _patched_to_excel
     let shown = 0;
     citations.forEach((c) => {
       if (!c.doc_id) return;  // 无 doc_id 无法链接
-      const a = document.createElement('a');
-      a.className = 'cite-chip';
-      a.target = '_blank'; a.rel = 'noopener';
       // 文档名：取文件名去扩展名，太长截断
       let name = (c.source || '文档').replace(/\.[^.]+$/, '');
       name = name.replace(/</g,'&lt;').slice(0, 22);
-      // 命中块数徽标（若有多个）
       const cnt = (c.highlights || []).length;
       const badge = cnt > 1 ? ' <span class="cite-cnt">' + cnt + '</span>' : '';
-      // 构造 URL：先看命中切片页（左侧列表 + 右侧内容），整篇文档从该页一键跳转
-      const base = '/kb/doc/' + encodeURIComponent(c.doc_id) + '/slices/';
-      const hls = (c.highlights || []).filter(h => h && h.length >= 3).slice(0, 12);
-      const qs = hls.map(h => 'h=' + encodeURIComponent(h)).join('&');
-      a.href = qs ? base + '?' + qs : base;
-      a.innerHTML = '📄 ' + name + badge;
-      a.title = '查看本次检索命中的切片（' + (hls.length || 0) + ' 个锚点）';
-      row.appendChild(a);
-      shown++;
+      // chunk 级引用（有溯源）：页码徽标 + 点击打开证据面板（原 PDF 页红圈定位）
+      const chunks = (c.chunks || []).filter(ch => ch && ch.chunk_id);
+      if (chunks.length) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'cite-chip has-ev';
+        // 页码徽标去重（同页多 chunk 只显示一个 P 标）
+        const seenPages = new Set();
+        const pageTags = chunks.slice(0, 6).filter(ch => {
+          const p = shortPageLabel(ch.page);
+          if (!p || seenPages.has(p)) return false;
+          seenPages.add(p); return true;
+        }).slice(0, 4).map(ch =>
+          '<span class="cite-page" title="证据定位">P' + shortPageLabel(ch.page) + '</span>').join('');
+        b.innerHTML = '📄 ' + name + badge + ' ' + pageTags;
+        b.title = '查看证据定位：' + chunks.slice(0, 4).map(ch => ch.page).join('、');
+        b.addEventListener('click', () => {
+          if (window.fosEvidencePanel) window.fosEvidencePanel(chunks[0].chunk_id);
+        });
+        row.appendChild(b);
+        shown++;
+      } else {
+        const a = document.createElement('a');
+        a.className = 'cite-chip';
+        a.target = '_blank'; a.rel = 'noopener';
+        const base = '/kb/doc/' + encodeURIComponent(c.doc_id) + '/slices/';
+        const hls = (c.highlights || []).filter(h => h && h.length >= 3).slice(0, 12);
+        const qs = hls.map(h => 'h=' + encodeURIComponent(h)).join('&');
+        a.href = qs ? base + '?' + qs : base;
+        a.innerHTML = '📄 ' + name + badge;
+        a.title = '查看本次检索命中的切片（' + (hls.length || 0) + ' 个锚点）';
+        row.appendChild(a);
+        shown++;
+      }
       // 图片命中：内联缩略图直接展示（点击新标签看原图）
       (c.images || []).forEach((u, idx) => {
         const ia = document.createElement('a');
@@ -752,6 +777,48 @@ pd.DataFrame.to_excel = _patched_to_excel
       row.insertAdjacentHTML('beforeend', CHECK_SVG);
     };
     let pendingThink = [];  // 思考行：下一个动作开始时即视为结束
+
+    /* ---------- 管线阶段条（站点开启 qa_enhance 时由 step 事件驱动） ---------- */
+    const PIPE_STAGES = ['query_plan', 'hybrid_search', 'answer_generation', 'answer_verification'];
+    const PIPE_LABELS = { query_plan: '问题理解', hybrid_search: '检索证据',
+                          answer_generation: '生成回答', answer_verification: '核对结论' };
+    let pipeEl = null;
+    const pipeChips = {};
+    function ensurePipe() {
+      if (pipeEl) return;
+      pipeEl = document.createElement('div');
+      pipeEl.className = 'pipe-line';
+      PIPE_STAGES.forEach(st => {
+        const s = document.createElement('span');
+        s.className = 'pipe-chip';
+        s.textContent = PIPE_LABELS[st];
+        pipeEl.appendChild(s);
+        pipeChips[st] = s;
+      });
+      toolArea.prepend(pipeEl);
+    }
+    function setPipe(stage, cls, title) {
+      const c = pipeChips[stage];
+      if (!c) return;
+      c.className = 'pipe-chip ' + cls;
+      if (title) c.title = title;
+    }
+    let planDetailEl = null;
+    function handleStep(p) {
+      if (!p || !p.stage) return;
+      ensurePipe();
+      if (p.stage === 'query_plan' && p.status === 'done' && p.detail) {
+        if (!planDetailEl) {
+          planDetailEl = document.createElement('div');
+          planDetailEl.className = 'pipe-plan';
+          pipeEl.after(planDetailEl);
+        }
+        planDetailEl.textContent = p.detail.length > 110 ? p.detail.slice(0, 110) + '…' : p.detail;
+      }
+      if (p.status === 'start') setPipe(p.stage, 'run');
+      else if (p.status === 'done') setPipe(p.stage, p.ok === false ? 'fail' : 'done', p.detail || '');
+      else if (p.status === 'skip') setPipe(p.stage, 'skip', p.detail || '跳过');
+    }
 
     try {
       const resp = await fetch(url, {
@@ -831,6 +898,38 @@ pd.DataFrame.to_excel = _patched_to_excel
           } else if (etype === 'citations') {
             // 累积本轮来源出处（流结束后渲染可点击链接）
             turnCitations = turnCitations.concat(payload.citations || []);
+          } else if (etype === 'step') {
+            // 管线阶段（问题理解/检索/生成/核对）
+            handleStep(payload);
+          } else if (etype === 'verify') {
+            // 核实结论三态：fail → 拒答展示；warn → 黄条提示（附带信息未核实）；pass → 绿徽标
+            if (payload.ok === false) {
+              answerEl.classList.remove('thinking');
+              const bubble = am.querySelector('.bubble');
+              const card = document.createElement('div');
+              card.className = 'verify-refused';
+              const issues = (payload.issues || []).map(t =>
+                '<li>' + String(t).replace(/</g, '&lt;') + '</li>').join('');
+              card.innerHTML = '<div class="vr-title">⚠ 本次未能形成已核实的结论</div>' +
+                (issues ? '<ul class="vr-issues">' + issues + '</ul>' : '') +
+                '<details class="vr-draft"><summary>查看未核实草稿（仅供参考）</summary><div class="vr-body"></div></details>';
+              bubble.insertBefore(card, answerEl);
+              card.querySelector('.vr-body').appendChild(answerEl);
+              answerEl.style.display = '';
+              messages.scrollTop = messages.scrollHeight;
+            } else {
+              const vb = document.createElement('div');
+              const warns = payload.warn || [];
+              if (warns.length) {
+                vb.className = 'verify-warn-badge';
+                vb.textContent = '✓ 核心结论已核实 · 附带信息未核实：' +
+                  warns.slice(0, 2).join('；');
+              } else {
+                vb.className = 'verify-ok-badge';
+                vb.textContent = '✓ 结论已对照检索证据核实';
+              }
+              am.querySelector('.bubble').appendChild(vb);
+            }
           } else if (etype === 'usage') {
             // 累加本轮 token 用量到会话总数，并更新顶部显示
             sessionTokens.in += parseInt(payload.input_tokens) || 0;

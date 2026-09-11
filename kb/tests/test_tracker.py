@@ -222,7 +222,7 @@ class TrackerPipelineHookTests(TestCase):
         doc = Document.objects.create(
             kb=kb, original_name="钩子.txt", file="documents/hook.txt",
             file_type="txt", status="pending", md_content="")
-        with patch("kb.pipeline.run_ocr_with_images", return_value=("内容", {})), \
+        with patch("kb.pipeline.run_ocr_with_images", return_value=("内容", {}, None)), \
              patch("kb.pipeline.run_indexing", return_value=1), \
              patch("kb.tracker.run_extraction_async") as m:
             from kb.pipeline import process_document

@@ -14,6 +14,7 @@ urlpatterns = [
     path("manage/<slug:slug>/delete/", views.manage_delete, name="manage_delete"),
     path("manage/<slug:slug>/rename/", views.kb_rename, name="kb_rename"),
     path("manage/<slug:slug>/doc/<uuid:doc_id>/desc/", views.doc_desc_update, name="doc_desc_update"),
+    path("manage/<slug:slug>/doc/<uuid:doc_id>/page-embed/", views.doc_page_embed, name="doc_page_embed"),
     path("manage/<slug:slug>/doc/<uuid:doc_id>/delete/", views.doc_delete, name="doc_delete"),
     path("manage/<slug:slug>/status/", views.doc_status_api, name="doc_status"),
 
@@ -21,6 +22,10 @@ urlpatterns = [
     path("doc/<uuid:doc_id>/html/", views.document_html, name="document_html"),
     path("doc/<uuid:doc_id>/slices/", views.document_slices, name="document_slices"),
     path("doc/<uuid:doc_id>/img/<str:name>", views.doc_image, name="doc_image"),
+
+    # 证据面板（chunk 级定位：预览 JSON + 原 PDF 页渲染 PNG）
+    path("evidence/<str:chunk_id>/preview/", views.evidence_preview, name="evidence_preview"),
+    path("evidence/<str:chunk_id>/page.png", views.evidence_page_png, name="evidence_page"),
 
     # 站点配置（仅 staff）
     path("settings/", views.site_settings, name="settings"),

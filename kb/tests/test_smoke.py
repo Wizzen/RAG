@@ -329,7 +329,7 @@ class PhotoUploadTests(TestCase):
         with tempfile.TemporaryDirectory() as td:
             src = os.path.join(td, "设备照片.png")
             open(src, "wb").write(buf.getvalue())
-            md, images = pipeline.run_ocr_with_images(
+            md, images, _cl = pipeline.run_ocr_with_images(
                 __import__("pathlib").Path(src), "image")
             self.assertTrue(md.startswith("照片上传：设备照片.png"))
             self.assertEqual(len(images), 1)

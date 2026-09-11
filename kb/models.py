@@ -124,6 +124,10 @@ class Document(models.Model):
     md_content = models.TextField("OCR/提取的 Markdown", blank=True, default="")
     html_content = models.TextField("HTML 正文", blank=True, default="")
     html_built_at = models.DateTimeField("HTML 构建时间", null=True, blank=True)
+    # 视觉文档模式（用户按文档勾选，图纸/扫描件用）：PDF 每页渲染成图 +
+    # 页面文本锚定作为多模态块入库（WeMM VisDoc 强项）。纯 CAD 图纸页 OCR
+    # 文本弱，整页视觉表示才能被文本查询命中；普通文本手册无需开启。
+    page_embed = models.BooleanField("整页视觉入库", default=False)
     status = models.CharField(
         "状态", max_length=20, choices=Status.choices, default=Status.PENDING,
     )
@@ -161,8 +165,48 @@ class Document(models.Model):
                 "img": "IMG"}.get(self.badge_kind, "FILE")
 
 
+class ChunkProvenance(models.Model):
+    """chunk 溯源：入库时从 MinerU content_list 解析出的版面定位（页码 + bbox）。
+
+    每个向量块一行，chunk_id = Chroma 里的向量 id（文本块为 uuid，图片块为
+    img-<doc_id>-<hash>）。引用点击后据此打开证据面板：渲染原 PDF 页并把
+    bbox 画成红圈，实现「定位到第几页」。
+
+    blocks 结构：[{"page": 43, "bbox": [x0, y0, x1, y1], "kind": "text|table|image",
+                   "rows": [起行, 止行]  (仅表格)}]
+    bbox 为 MinerU content_list 原生归一化坐标（0-1000，左上原点，整数），
+    前端按渲染尺寸等比缩放即可，无需知道 PDF 页面物理大小。
+    文档重跑入库时 chunk_id 全部重新生成 → 先删该文档旧行再写新行。
+    """
+
+    chunk_id = models.CharField("Chroma 向量 ID", max_length=160, unique=True)
+    document = models.ForeignKey(
+        Document, on_delete=models.CASCADE, related_name="provenance",
+    )
+    kb_slug = models.CharField("所属库 slug", max_length=100, blank=True, default="",
+                               db_index=True)
+    page_start = models.PositiveIntegerField("起始页（0 基）", default=0)
+    page_end = models.PositiveIntegerField("结束页（0 基）", default=0)
+    blocks = models.JSONField("定位块列表", default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "chunk 溯源"
+        verbose_name_plural = "chunk 溯源"
+        indexes = [models.Index(fields=["document", "page_start"])]
+
+    def __str__(self):
+        return f"{self.document.original_name} p{self.page_start}-{self.page_end}"
+
+    def page_label(self) -> str:
+        """人读页码（1 基；跨页显示区间）。"""
+        if self.page_end > self.page_start:
+            return f"第 {self.page_start + 1}-{self.page_end + 1} 页"
+        return f"第 {self.page_start + 1} 页"
+
+
 class KbTracker(models.Model):
-    """知识库追踪表配置（一库一表）：文档入库完成后由 AI 按字段抽取关键信息。
+    """知识库追踪表配置（一库一表）：文档入库完成后由 AI 按字段抽取关键信息登记。
 
     适用场景：定检报告、月度走账等同构工作流文档的持续登记与追溯。
     fields = [{"label": "检验日期"}, ...]（label 即列名即 JSON 键，所见即所得）。
@@ -247,6 +291,10 @@ class SiteConfig(models.Model):
     # 模型是否支持图片输入（视觉）。开启后 kb_search 命中图片时把图以
     # LangChain 多模态内容块随工具结果返回，模型可真正「看图」回答。
     llm_vision = models.BooleanField("LLM 支持图片输入", default=False)
+    # 问答管线增强：回答前先做「问题理解/改写」（query_plan），回答后用
+    # 第二次 LLM 调用对照检索证据核实结论（answer_verification），核实不过
+    # 拒答。代价 = 每个问题多两次 LLM 调用。
+    qa_enhance = models.BooleanField("问答管线增强（规划 + 核实）", default=False)
 
     # ---- Embedding ----
     embedding_base_url = models.CharField("Embedding Base URL", max_length=255, blank=True, default="")
@@ -321,7 +369,7 @@ _SITECONFIG_FIELDS = [
 
 # 分类 → 该分类包含的 SiteConfig 字段名。预设按分类独立保存/加载。
 PRESET_CATEGORIES = {
-    "llm": ["llm_base_url", "llm_api_key", "llm_model", "llm_temperature", "llm_vision"],
+    "llm": ["llm_base_url", "llm_api_key", "llm_model", "llm_temperature", "llm_vision", "qa_enhance"],
     "embedding": ["embedding_base_url", "embedding_api_key", "embedding_model", "embedding_dimensions"],
     "retrieval": ["kb_chunk_size", "kb_chunk_overlap", "kb_top_k"],
     "mineru": ["mineru_api_base", "mineru_api_key", "mineru_backend", "mineru_lang"],

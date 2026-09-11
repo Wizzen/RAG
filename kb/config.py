@@ -57,6 +57,8 @@ def llm_settings() -> dict:
         "temperature": c.llm_temperature if c.llm_temperature is not None else settings.LLM_TEMPERATURE,
         # 视觉能力：开启后检索命中图片时把图发给模型（多模态内容块）
         "vision": bool(vision),
+        # 问答管线增强：回答前问题规划 + 回答后核实（核实不过拒答）
+        "qa_enhance": bool(c.qa_enhance or getattr(settings, "QA_ENHANCE", False)),
     }
 
 

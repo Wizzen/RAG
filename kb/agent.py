@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import traceback
 from functools import lru_cache
+from pathlib import Path
 from typing import AsyncGenerator
 
 from django.conf import settings
@@ -23,6 +24,8 @@ SSE_ERROR = "error"
 SSE_CODE_RUN = "code_run"  # 浏览器 Pyodide 沙箱执行的代码
 SSE_USAGE = "usage"        # 本轮 token 用量统计
 SSE_CITATIONS = "citations"
+SSE_STEP = "step"          # 管线阶段（query_plan/hybrid_search/answer_generation/answer_verification）
+SSE_VERIFY = "verify"      # 核实结论 {ok, issues}——不过则前端拒答展示
 def _pick_anchor(clean_text: str) -> str:
     """从片段正文挑一个「查看页高亮锚点」。
 
@@ -48,17 +51,34 @@ _VISION_MAX_SIDE = 1568  # 缩边上限（主流多模态输入档；与照片�
 
 
 def _image_content_block(doc_id: str, name: str) -> dict | None:
-    """文档插图 → LangChain 图片内容块（base64；超边自动缩放重编码）。"""
+    """文档插图 → LangChain 图片内容块（base64；超边自动缩放重编码）。
+
+    name 形如 page<N>（视觉文档模式的整页块）时按需渲染原 PDF 第 N 页。
+    """
     import base64 as _b64
     import io as _io
     from .pipeline import doc_image_dir
 
-    p = doc_image_dir(doc_id) / name
-    try:
-        data = p.read_bytes()
-    except OSError:
-        return None
-    mime = "image/png" if p.suffix.lower() == ".png" else "image/jpeg"
+    data: bytes | None = None
+    mime = "image/jpeg"
+    if name.startswith("page") and name[4:].isdigit():
+        # 整页块：渲染原 PDF 页（页面渲染图不落盘，按需生成）
+        try:
+            from .models import Document
+            from .pipeline import _render_page_jpeg
+            doc = Document.objects.get(id=doc_id)
+            raw = _render_page_jpeg(Path(doc.file.path), int(name[4:]))
+            if raw:
+                data, mime = raw, "image/jpeg"
+        except Exception:
+            data = None
+    if data is None:
+        p = doc_image_dir(doc_id) / name
+        try:
+            data = p.read_bytes()
+        except OSError:
+            return None
+        mime = "image/png" if p.suffix.lower() == ".png" else "image/jpeg"
     try:
         from PIL import Image
         with Image.open(_io.BytesIO(data)) as im:
@@ -118,6 +138,15 @@ def _get_llm(llm_cfg: dict) -> ChatOpenAI:
         # usage in the final streaming chunk, otherwise UI token counts stay 0.
         stream_usage=True,
     )
+
+
+def _rows_label(prov_blocks) -> str:
+    """溯源块里的表格行区间 → 人读标签（「表第3-9行」）；无行信息返回空。"""
+    for b in prov_blocks or []:
+        rs = b.get("rows") if isinstance(b, dict) else None
+        if isinstance(b, dict) and b.get("kind") == "table" and isinstance(rs, list) and len(rs) == 2:
+            return f"表第{rs[0]}行" if rs[0] == rs[1] else f"表第{rs[0]}-{rs[1]}行"
+    return ""
 
 
 def _kb_tree_text(dept_filter: dict) -> str:
@@ -184,7 +213,8 @@ def _kb_tree_text(dept_filter: dict) -> str:
 
 
 def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkpointer,
-                 citations: list | None = None, department: str = ""):
+                 citations: list | None = None, department: str = "",
+                 evidence: list | None = None):
     """为指定 KB + thread 构建一个 create_agent。
 
     llm_cfg / top_k / department 由调用方在同步上下文中解析后传入，避免在 async
@@ -196,6 +226,9 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 
     citations: 可选的可变列表；kb_search 每次检索会把来源出处追加进去，
     供调用方在流结束后发出 citations 事件。每轮应传入一个全新的空列表。
+
+    evidence: 可选的可变列表；检索工具把带页码的证据片段（供答案核实步
+    对照）追加进去。每轮传入全新空列表。
     """
     from langchain.agents import create_agent
 
@@ -204,6 +237,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 
     kb_slug_default = kb_slug  # 避免在 kb_search 内部与参数名冲突
     cite_sink = citations if citations is not None else []
+    evidence_sink = evidence if evidence is not None else []
 
     # 部门可见范围（空部门 = 不过滤，仅内部调试场景）
     if department:
@@ -234,8 +268,9 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
    - **tracker_lookup**：查**追踪表**——文档入库时 AI 自动登记的结构化台账。**字段由各库管理员自行配置，不同库字段不同**；不确定某库登记了哪些信息时，先留空 query 调一次看字段配置与最近登记，再按字段值查。用户问「某文档登记的某项信息是多少」「登记台账里有没有…」这类**登记信息**问题时优先用它，比检索原文片段更准。单次问题内最多调 2 次。
 3. **检索经济性**：已取到的内容直接用于回答，不要用相近关键词重复检索。若第一次结果不足，换一个实质不同的关键词再查一次。生成 write_analysis 前，确保已取到足够完整的数据。
 4. **如何描述你的依据（重要）**：你的知识来自 kb_search / kb_fetch_doc 取回的**知识库片段**，不是你「打开了 PDF」或「读取了整份文档」。回答时请如实表述为「根据从 XX 文档检索到的内容」「知识库中的相关片段显示」，并标注来源文档名。片段可能不完整或含 OCR 误差——不要假装你看到了完整的原文/整张表格；若已用 kb_fetch_doc 多次仍取不到某部分，明确说明「检索到的片段中未包含该部分」。
-5. 回答须准确、客观，语言专业且易于理解。
-6. 若知识库中无相关内容，如实说明，不得编造（禁止幻觉）。
+5. **页码与行号引用**：检索结果的来源行若带「第 N 页」（或区间），在回答中引用该内容时请一并注明页码（如「见 XX 文档第 43 页」）；表格片段带「表第 X-Y 行」时引用「原表第 X 行」。这些页码来自 OCR 版面定位，直接使用即可，不要自己推算页码。
+6. 回答须准确、客观，语言专业且易于理解。
+7. 若知识库中无相关内容，如实说明，不得编造（禁止幻觉）。
 
 当用户要求数据分析、统计、汇总，或导出 Excel/表格/文件时：
 - 先取数据：若是要某张表/清单的【完整】内容（如「导出受力部件表」「列出全部故障代码」），优先用 kb_fetch_doc（contains=关键词）一次性抓全；若是查某个具体指标，用 kb_search；若是查登记台账信息，用 tracker_lookup。
@@ -303,6 +338,22 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             return f"检索失败（库 {target}）：{e}"
         if not results:
             return f"在库「{target}」中未检索到相关内容。"
+        # 溯源标注：带 chunk_id 的结果补页码/表格行号（ChunkProvenance，
+        # 入库时从 MinerU 版面解析；老文档无溯源则静默跳过）
+        try:
+            from . import provenance as _prov
+            _prov.annotate_results(results)
+        except Exception:
+            pass
+        # 证据收集（供答案核实步对照；每条截断防爆 token）
+        for r in results:
+            if len(evidence_sink) >= 30:
+                break
+            evidence_sink.append({
+                "source": r.get("source", ""),
+                "page": r.get("page_label", ""),
+                "text": (r.get("text") or "")[:600],
+            })
         blocks = []
         img_hits: list[tuple[str, str]] = []  # (doc_id, 图片名)——视觉模式用
         # 记录来源出处（供前端渲染可点击链接 → 文档查看页高亮）。
@@ -318,7 +369,11 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             # 图片命中：不做文本高亮锚点，挂到该文档引用条目的 images 列表
             if r.get("type") == "image" and r.get("image"):
                 entry = by_doc.get(doc_id)
-                img_url = f"/kb/doc/{doc_id}/img/{r['image']}"
+                if r.get("chunk_id") and str(r.get("image", "")).startswith("page"):
+                    # 整页视觉块：缩略图走证据接口按需渲染原 PDF 页
+                    img_url = f"/kb/evidence/{r['chunk_id']}/page.png"
+                else:
+                    img_url = f"/kb/doc/{doc_id}/img/{r['image']}"
                 if entry is None:
                     by_doc[doc_id] = {
                         "doc_id": doc_id, "source": r.get("source", ""),
@@ -345,6 +400,15 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                 continue
             seen_snippets.add(snippet)
 
+            # chunk 级引用（有溯源时）：前端据此开证据面板（原 PDF 页 + 红圈）
+            chunk_meta = None
+            if r.get("chunk_id") and r.get("page_label"):
+                chunk_meta = {
+                    "chunk_id": r["chunk_id"],
+                    "page": r["page_label"],
+                    "is_image": False,
+                }
+
             entry = by_doc.get(doc_id)
             if entry is None:
                 by_doc[doc_id] = {
@@ -352,9 +416,12 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                     "source": r.get("source", ""),
                     "highlights": [snippet],
                     "best_score": r.get("score", 0),
+                    "chunks": [chunk_meta] if chunk_meta else [],
                 }
             else:
                 entry["highlights"].append(snippet)
+                if chunk_meta and len(entry.get("chunks", [])) < 8:
+                    entry["chunks"].append(chunk_meta)
                 if r.get("score", 0) > entry["best_score"]:
                     entry["best_score"] = r.get("score", 0)
         # 按最高相关度排序，合并进 cite_sink（跨多次 kb_search 调用按 doc_id 去重：
@@ -367,9 +434,10 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                     "source": entry["source"],
                     "highlights": list(entry["highlights"]),
                     "images": list(entry.get("images", [])),
+                    "chunks": [c for c in entry.get("chunks", []) if c],
                 })
             else:
-                # 合并 highlights / images（去重）
+                # 合并 highlights / images / chunks（去重）
                 for h in entry["highlights"]:
                     if h not in existing["highlights"]:
                         existing["highlights"].append(h)
@@ -377,11 +445,20 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                     existing.setdefault("images", [])
                     if u not in existing["images"]:
                         existing["images"].append(u)
+                for ch in entry.get("chunks", []):
+                    if ch and ch not in existing.get("chunks", []):
+                        existing.setdefault("chunks", []).append(ch)
         for i, r in enumerate(results, 1):
             # 来源是【文档文件名】；section（所属章节）作为补充上下文，不是来源本身。
             src = r.get("source") or "未知来源"
             section = r.get("section") or ""
             src_full = f"{src}（章节: {section}）" if section else src
+            # 版面溯源：页码 + 表格行区间（有溯源时才有，模型直接引用不要推算）
+            if r.get("page_label"):
+                src_full += f" · {r['page_label']}"
+            rows_txt = _rows_label(r.get("prov_blocks"))
+            if rows_txt:
+                src_full += f" · {rows_txt}"
             if r.get("type") == "image" and r.get("doc_id") and r.get("image"):
                 # 不带图片 URL：图片命中已自动附到回答引用区，给 LLM 看 URL 只会被
                 # 原样抄进答案正文（实测如此）
@@ -491,6 +568,20 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             if section: cond.append(f"章节={section}")
             if contains: cond.append(f"含关键词={contains}")
             return f"在文档库「{target}」中未找到匹配片段（{', '.join(cond) or '无条件'}）。"
+        # 溯源标注（页码/行号）+ 证据收集（供核实步）
+        try:
+            from . import provenance as _prov
+            _prov.annotate_results(results)
+        except Exception:
+            pass
+        for r in results:
+            if len(evidence_sink) >= 30:
+                break
+            evidence_sink.append({
+                "source": r.get("source", ""),
+                "page": r.get("page_label", ""),
+                "text": (r.get("text") or "")[:600],
+            })
 
         # 记录来源出处（与 kb_search 同一 cite_sink 逻辑：按文档去重，合并 highlights）
         import re as _re
@@ -515,28 +606,45 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             snippet = _pick_anchor(clean)
             if snippet.lower() in ("rowspan", "colspan", "cellspacing", "cellpadding", "valign"):
                 snippet = ""
+            chunk_meta = None
+            if r.get("chunk_id") and r.get("page_label"):
+                chunk_meta = {"chunk_id": r["chunk_id"], "page": r["page_label"],
+                              "is_image": False}
             entry = by_doc.get(doc_id)
             if entry is None:
                 by_doc[doc_id] = {"doc_id": doc_id, "source": r.get("source", ""),
                                   "highlights": [snippet] if snippet else [],
-                                  "best_score": 1.0}
-            elif snippet and snippet not in entry["highlights"]:
-                entry["highlights"].append(snippet)
+                                  "best_score": 1.0,
+                                  "chunks": [chunk_meta] if chunk_meta else []}
+            else:
+                if snippet and snippet not in entry["highlights"]:
+                    entry["highlights"].append(snippet)
+                if chunk_meta and len(entry.get("chunks", [])) < 8:
+                    entry["chunks"].append(chunk_meta)
         for entry in by_doc.values():
             existing = next((c for c in cite_sink if c.get("doc_id") == entry["doc_id"]), None)
             if existing is None:
                 cite_sink.append({"doc_id": entry["doc_id"], "source": entry["source"],
-                                  "highlights": list(entry["highlights"])})
+                                  "highlights": list(entry["highlights"]),
+                                  "chunks": [c for c in entry.get("chunks", []) if c]})
             else:
                 for h in entry["highlights"]:
                     if h not in existing["highlights"]:
                         existing["highlights"].append(h)
+                for ch in entry.get("chunks", []):
+                    if ch and ch not in existing.get("chunks", []):
+                        existing.setdefault("chunks", []).append(ch)
 
         blocks = []
         for i, r in enumerate(results, 1):
             src = r.get("source") or "未知来源"
             sec = r.get("section") or ""
             src_full = f"{src}（章节: {sec}）" if sec else src
+            if r.get("page_label"):
+                src_full += f" · {r['page_label']}"
+            rows_txt = _rows_label(r.get("prov_blocks"))
+            if rows_txt:
+                src_full += f" · {rows_txt}"
             blocks.append(f"[{i}] (来源文档: {src_full})\n{r['text']}")
         cond = []
         if source: cond.append(f"文档={source}")
@@ -692,8 +800,39 @@ async def run_agent_stream(
         checkpointer = await _get_checkpointer()
         # 本轮检索的来源出处累积器（kb_search 往里追加；流结束发出 citations 事件）
         citations: list[dict] = []
+        # 本轮检索证据累积器（带页码的命中片段；答案核实步对照用）
+        evidence: list[dict] = []
+        # 本轮 token 用量累计（每次 LLM 调用的 usage_metadata 相加）
+        usage_in = 0
+        usage_out = 0
+        # 本轮单次 LLM 调用的最大 input/output token（用于估测模型所需上下文窗口）
+        max_in = 0
+        max_out = 0
+
+        # ---- 管线增强 · 问题规划（query_plan）----
+        # 改写/拆解问题注入 agent 输入；闲聊或规划失败 → 跳过，不影响主流程
+        agent_input = message
+        enhance = bool(cfg.get("qa_enhance"))
+        if enhance:
+            yield SSE_STEP, {"stage": "query_plan", "status": "start"}
+            from .qa_steps import plan_query
+            plan_text, p_usage = await plan_query(cfg, message)
+            usage_in += p_usage["input_tokens"]
+            usage_out += p_usage["output_tokens"]
+            max_in = max(max_in, p_usage["input_tokens"])
+            max_out = max(max_out, p_usage["output_tokens"])
+            if plan_text:
+                agent_input = (f"【问题理解与检索规划】\n{plan_text}\n\n"
+                               f"【用户问题】\n{message}")
+                yield SSE_STEP, {"stage": "query_plan", "status": "done",
+                                 "detail": plan_text}
+            else:
+                yield SSE_STEP, {"stage": "query_plan", "status": "skip",
+                                 "detail": "无需规划（闲聊）或规划不可用"}
+
         agent = _build_agent(kb_slug, thread_id, cfg, top_k, checkpointer,
-                             citations=citations, department=department)
+                             citations=citations, department=department,
+                             evidence=evidence)
         # recursion_limit 是顶层 key（不在 configurable 内）。
         # 每次工具调用 ≈ 2 个节点（agent + tool）。取完整表格时可能用到
         # list_kb + kb_search×2 + kb_fetch_doc×4 + write_analysis ≈ 8 次调用，
@@ -707,15 +846,13 @@ async def run_agent_stream(
         emitted_reasoning = False
         # run_id -> {"code":..., "filename":...}，捕获 write_analysis 工具的入参
         pending_code: dict[str, dict] = {}
-        # 本轮 token 用量累计（每次 LLM 调用的 usage_metadata 相加）
-        usage_in = 0
-        usage_out = 0
-        # 本轮单次 LLM 调用的最大 input/output token（用于估测模型所需上下文窗口）
-        max_in = 0
-        max_out = 0
+        # 完整回答文本（核实步用）与管线阶段翻转标记
+        full_text: list[str] = []
+        search_step_on = False
+        answer_step_on = False
 
         async for event in agent.astream_events(
-            {"messages": [{"role": "user", "content": message}]},
+            {"messages": [{"role": "user", "content": agent_input}]},
             config=thread_config,
             version="v2",
         ):
@@ -733,6 +870,12 @@ async def run_agent_stream(
                     content = getattr(chunk, "content", None)
                     if isinstance(content, str) and content:
                         pending_reasoning.append(content)
+                        full_text.append(content)
+                        if not answer_step_on:
+                            answer_step_on = True
+                            if search_step_on:
+                                yield SSE_STEP, {"stage": "hybrid_search", "status": "done"}
+                            yield SSE_STEP, {"stage": "answer_generation", "status": "start"}
                         yield SSE_TOKEN, {"text": content}
 
             elif etype == "on_chat_model_end":
@@ -761,6 +904,9 @@ async def run_agent_stream(
                 emitted_reasoning = False
 
             elif etype == "on_tool_start":
+                if not search_step_on:
+                    search_step_on = True
+                    yield SSE_STEP, {"stage": "hybrid_search", "status": "start"}
                 # 捕获 write_analysis 的入参，供 on_tool_end 发出 code_run
                 if name == "write_analysis":
                     serial = data.get("serializable_input") or {}
@@ -797,6 +943,43 @@ async def run_agent_stream(
                     "status": "done",
                     "output_preview": _preview(output),
                 }
+
+        # 生成阶段收尾（无 token 输出的异常路径不补 done）
+        if answer_step_on:
+            yield SSE_STEP, {"stage": "answer_generation", "status": "done"}
+
+        # ---- 管线增强 · 答案核实（answer_verification）----
+        # 核实不过 → SSE_VERIFY{ok:false}，前端拒答展示；核实器不可用 → 放行
+        if enhance:
+            answer_text = "".join(full_text).strip()
+            if not evidence:
+                yield SSE_STEP, {"stage": "answer_verification", "status": "skip",
+                                 "detail": "本轮无检索证据（闲聊/未检索），跳过核实"}
+            elif not answer_text:
+                yield SSE_STEP, {"stage": "answer_verification", "status": "skip",
+                                 "detail": "本轮无文本回答"}
+            else:
+                yield SSE_STEP, {"stage": "answer_verification", "status": "start"}
+                from .qa_steps import verify_answer
+                verdict, v_usage = await verify_answer(cfg, message, answer_text, evidence)
+                usage_in += v_usage["input_tokens"]
+                usage_out += v_usage["output_tokens"]
+                max_in = max(max_in, v_usage["input_tokens"])
+                max_out = max(max_out, v_usage["output_tokens"])
+                if verdict is None:
+                    yield SSE_STEP, {"stage": "answer_verification", "status": "skip",
+                                     "detail": "核实服务不可用，已放行原回答"}
+                else:
+                    v = verdict.get("verdict", "pass")
+                    ok = v != "fail"
+                    yield SSE_STEP, {"stage": "answer_verification", "status": "done",
+                                     "ok": ok}
+                    # 三态：fail=拒答；warn=核心已核实但附带信息未核实（提示不拒答）
+                    yield SSE_VERIFY, {
+                        "ok": ok,
+                        "warn": verdict.get("issues", []) if v == "warn" else [],
+                        "issues": verdict.get("issues", []) if not ok else [],
+                    }
 
         # 流结束：发出本轮来源出处（前端据此渲染可点击的文档链接）
         if citations:

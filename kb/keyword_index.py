@@ -50,8 +50,13 @@ def _conn() -> sqlite3.Connection:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS chunk ("
             " kb_slug TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',"
-            " section TEXT NOT NULL DEFAULT '', text TEXT NOT NULL)"
+            " section TEXT NOT NULL DEFAULT '', text TEXT NOT NULL,"
+            " chunk_id TEXT NOT NULL DEFAULT '')"
         )
+        # 旧库升级：chunk_id 列后加（溯源引入前的库没有）
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(chunk)").fetchall()]
+        if "chunk_id" not in cols:
+            conn.execute("ALTER TABLE chunk ADD COLUMN chunk_id TEXT NOT NULL DEFAULT ''")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_chunk_kb ON chunk(kb_slug)"
         )
@@ -62,20 +67,22 @@ def _conn() -> sqlite3.Connection:
 # ------------------------------------------------------------------
 # 写入 / 删除（与向量库生命周期同步）
 # ------------------------------------------------------------------
-def add_chunks(kb_slug: str, chunks: list) -> None:
-    """向量化成功后同步写入关键词索引。chunks 为 LCDocument 列表。
+def add_chunks(kb_slug: str, chunks: list, ids: list[str] | None = None) -> None:
+    """向量化成功后同步写入关键词索引。chunks 为 LCDocument 列表，
+    ids 为对应的向量 id（与 Chroma 同源，溯源/证据面板按 id 关联；可缺省）。
 
     同 (kb_slug, source) 的旧行先删（同文档重建场景），保证幂等。
     """
     if not chunks:
         return
     rows = []
-    for c in chunks:
+    for i, c in enumerate(chunks):
         meta = getattr(c, "metadata", None) or {}
         text = (getattr(c, "page_content", "") or "").strip()
         if not text:
             continue
-        rows.append((kb_slug, meta.get("source", ""), meta.get("section", ""), text))
+        cid = (ids[i] if ids and i < len(ids) else "") or ""
+        rows.append((kb_slug, meta.get("source", ""), meta.get("section", ""), text, cid))
     if not rows:
         return
     try:
@@ -85,7 +92,7 @@ def add_chunks(kb_slug: str, chunks: list) -> None:
                 (kb_slug, rows[0][1]),
             )
             conn.executemany(
-                "INSERT INTO chunk (kb_slug, source, section, text) VALUES (?,?,?,?)",
+                "INSERT INTO chunk (kb_slug, source, section, text, chunk_id) VALUES (?,?,?,?,?)",
                 rows,
             )
     except Exception:
@@ -100,10 +107,11 @@ def get_chunks(kb_slug: str, source: str) -> list[dict]:
     try:
         with _LOCK, contextlib.closing(_conn()) as conn:
             rows = conn.execute(
-                "SELECT text, section FROM chunk WHERE kb_slug = ? AND source = ? ORDER BY rowid",
+                "SELECT text, section, chunk_id FROM chunk WHERE kb_slug = ? AND source = ? ORDER BY rowid",
                 (kb_slug, source),
             ).fetchall()
-        return [{"text": t, "section": s or ""} for t, s in rows]
+        return [{"text": t, "section": s or "", "chunk_id": c or ""}
+                for t, s, c in rows]
     except Exception:
         logger.exception("关键词索引读取失败（kb=%s source=%s）", kb_slug, source)
         return []
@@ -171,7 +179,7 @@ def search(kb_slug: str, query: str, limit: int = 20) -> list[dict]:
             like_sql = " OR ".join(["text LIKE ? ESCAPE '\\'"] * len(terms))
             esc = [f"%{t.replace(chr(92), chr(92)*2).replace('%', chr(92)+'%').replace('_', chr(92)+'_')}%" for t in terms]
             rows = conn.execute(
-                f"SELECT text, source, section FROM chunk WHERE kb_slug = ? AND ({like_sql})",
+                f"SELECT text, source, section, chunk_id FROM chunk WHERE kb_slug = ? AND ({like_sql})",
                 [kb_slug, *esc],
             ).fetchall()
         if not rows:
@@ -187,7 +195,7 @@ def search(kb_slug: str, query: str, limit: int = 20) -> list[dict]:
         idf = {t: math.log(1 + total / (1 + n_t[t])) for t in terms}
 
         scored = []
-        for (text, source, section), low in zip(rows, low_texts):
+        for (text, source, section, chunk_id), low in zip(rows, low_texts):
             sc = 0.0
             for t in terms:
                 c = low.count(t.lower())
@@ -195,7 +203,8 @@ def search(kb_slug: str, query: str, limit: int = 20) -> list[dict]:
                     sc += c * idf[t]
             if sc > 0:
                 scored.append({"text": text, "source": source,
-                               "section": section, "score": sc})
+                               "section": section, "score": sc,
+                               "chunk_id": chunk_id or ""})
         scored.sort(key=lambda r: r["score"], reverse=True)
         return scored[:limit]
     except Exception:

@@ -63,6 +63,44 @@ def _scope_kb_ids(kb: KnowledgeBase) -> list:
     return [kb.id]
 
 
+@login_required
+@require_http_methods(["POST"])
+def doc_page_embed(request, slug, doc_id):
+    """切换文档的视觉文档模式（图纸/扫描件：整页视觉入库）。
+
+    开启 → 后台线程渲染每页 + 多模态嵌入 + 写溯源；关闭 → 同步删除全部
+    整页块（向量 + 溯源行）。权限与 doc_desc_update 一致。
+    """
+    from . import access as kb_access
+    kb = get_object_or_404(KnowledgeBase, slug=slug)
+    if not kb_access.can_manage_kb(request.user, kb):
+        raise Http404("知识库不存在")
+    doc = get_object_or_404(Document, id=doc_id, kb__in=_scope_kb_ids(kb))
+    enable = (request.POST.get("enable") or "").strip() == "1"
+
+    if doc.file_type != "pdf":
+        return JsonResponse({"ok": False, "message": "仅 PDF 文档支持视觉模式"})
+    if enable == doc.page_embed:
+        return JsonResponse({"ok": True, "message": "状态未变化", "chunk_count": doc.chunk_count})
+
+    doc.page_embed = enable
+    doc.save(update_fields=["page_embed", "updated_at"])
+    if enable:
+        from .pipeline import _page_embed_async
+        _page_embed_async(str(doc.id))
+        return JsonResponse({"ok": True,
+                             "message": "已开启视觉模式，页面向量后台生成中"})
+    # 关闭：同步移除整页块（向量 + 溯源）
+    from .pipeline import _remove_page_chunks
+    n = _remove_page_chunks(doc.kb.slug, doc.id)
+    if n:
+        doc.chunk_count = max(0, doc.chunk_count - n)
+        doc.save(update_fields=["chunk_count", "updated_at"])
+        _recount(doc.kb)
+    return JsonResponse({"ok": True, "message": f"已关闭视觉模式（移除 {n} 个整页块）",
+                         "chunk_count": doc.chunk_count})
+
+
 def _recount(kb: KnowledgeBase) -> None:
     """重算一个（子/顶层）库的 doc_count/chunk_count（仅 completed 文档）。"""
     docs = kb.documents.filter(status=Document.Status.COMPLETED)
@@ -71,8 +109,13 @@ def _recount(kb: KnowledgeBase) -> None:
     kb.save(update_fields=["doc_count", "chunk_count", "updated_at"])
 
 
-def _create_manual_document(kb: KnowledgeBase, upload, user) -> Document:
-    """把手册上传到指定顶层库；文件夹库自动创建隔离的子文档库。"""
+def _create_manual_document(kb: KnowledgeBase, upload, user,
+                            page_embed: bool = False) -> Document:
+    """把手册上传到指定顶层库；文件夹库自动创建隔离的子文档库。
+
+    page_embed：视觉文档模式（图纸/扫描件）——PDF 每页渲染成图入多模态
+    向量库，OCR 文字少的图纸页也能被自然语言搜到。
+    """
     from django.db import transaction
 
     fname = Path(upload.name).name
@@ -103,6 +146,7 @@ def _create_manual_document(kb: KnowledgeBase, upload, user) -> Document:
             original_name=fname,
             file=upload,
             file_type=file_types[ext],
+            page_embed=bool(page_embed) and file_types[ext] == "pdf",
             status=Document.Status.PENDING,
         )
 _is_staff = user_passes_test(lambda u: u.is_staff)
@@ -171,7 +215,9 @@ def manage_list(request):
                 messages.error(request, "没有权限向该手册库上传（仅本部门库可管理）。")
             else:
                 try:
-                    doc = _create_manual_document(kb, upload, request.user)
+                    doc = _create_manual_document(
+                        kb, upload, request.user,
+                        page_embed=request.POST.get("page_embed") == "on")
                     from .pipeline import process_document_async
                     process_document_async(doc.id)
                     messages.success(request, f"已上传手册「{doc.original_name}」，正在后台处理。")
@@ -238,6 +284,7 @@ def manage_detail(request, slug):
     if request.method == "POST" and request.FILES.get("file"):
         upload = request.FILES["file"]
         ext = Path(upload.name).suffix.lower()
+        is_ajax = request.headers.get("x-requested-with") == "XMLHttpRequest"
         try:
             if ext in (".csv", ".tsv", ".xlsx", ".xlsm"):
                 from .structured_data import (
@@ -247,15 +294,25 @@ def manage_detail(request, slug):
                 mapped = "、".join(
                     label for key, label in FIELD_LABELS.items() if key in dataset.mapping
                 ) or "未识别到标准关联字段（原始列已保留）"
-                messages.success(request, (
-                    f"已识别为业务数据并导入「{dataset.source_name}」"
-                    f"（{dataset.get_kind_display()}）：{dataset.row_count} 行；{mapped}。"))
+                msg = (f"已识别为业务数据并导入「{dataset.source_name}」"
+                       f"（{dataset.get_kind_display()}）：{dataset.row_count} 行；{mapped}。")
+                if is_ajax:
+                    return JsonResponse({"ok": True, "message": msg})
+                messages.success(request, msg)
             else:
-                doc = _create_manual_document(kb, upload, request.user)
+                doc = _create_manual_document(
+                    kb, upload, request.user,
+                    page_embed=request.POST.get("page_embed") == "on")
                 from .pipeline import process_document_async
                 process_document_async(doc.id)
-                messages.success(request, f"已上传「{doc.original_name}」，正在后台处理…")
+                msg = f"已上传「{doc.original_name}」，正在后台处理…"
+                if is_ajax:
+                    # 批量上传（AJAX 单文件逐个提交）→ JSON（页面不跳转，队列继续）
+                    return JsonResponse({"ok": True, "doc_id": str(doc.id), "message": msg})
+                messages.success(request, msg)
         except ValueError as exc:
+            if is_ajax:
+                return JsonResponse({"ok": False, "message": str(exc)})
             messages.error(request, str(exc))
         return redirect("kb:manage_detail", slug=slug)
 
@@ -772,6 +829,99 @@ def document_html(request, doc_id):
     })
 
 
+# ------------------------------------------------------------------
+# 证据面板（chunk 级定位：渲染原 PDF 页 + bbox 红圈圈选）
+# ------------------------------------------------------------------
+def _evidence_prov(request, chunk_id):
+    """取 chunk 溯源行并做部门访问控制（不可见 = 404，不泄露存在性）。"""
+    from . import access as kb_access
+    from .models import ChunkProvenance
+
+    prov = (ChunkProvenance.objects.select_related("document", "document__kb")
+            .filter(chunk_id=chunk_id).first())
+    if prov is None or not kb_access.kb_accessible(request.user, prov.document.kb):
+        raise Http404("证据不存在")
+    return prov
+
+
+@login_required
+def evidence_preview(request, chunk_id):
+    """证据预览（JSON）：页码区间 + 归一化 bbox 块列表 + chunk 原文。
+
+    无溯源行（照片直传 / 溯源功能前入库的文档）→ 200 + ok:false，
+    前端提示「暂无定位数据」而非报 404 错误。
+    """
+    from . import access as kb_access
+    from .models import ChunkProvenance
+    from .provenance import get_chunk_text
+
+    prov = (ChunkProvenance.objects.select_related("document", "document__kb")
+            .filter(chunk_id=chunk_id).first())
+    if prov is None:
+        return JsonResponse({"ok": False, "reason": "no_provenance",
+                             "chunk_id": chunk_id})
+    doc = prov.document
+    if not kb_access.kb_accessible(request.user, doc.kb):
+        raise Http404("证据不存在")
+    has_pdf = False
+    if doc.file_type == "pdf" and doc.file and doc.file.name:
+        try:
+            has_pdf = Path(doc.file.path).is_file()
+        except (NotImplementedError, ValueError):
+            has_pdf = False
+    return JsonResponse({
+        "ok": True,
+        "chunk_id": prov.chunk_id,
+        "doc_id": str(doc.id),
+        "source": doc.original_name,
+        "pages": [prov.page_start, prov.page_end],
+        "page_label": prov.page_label(),
+        "blocks": prov.blocks,
+        "has_pdf": has_pdf,
+        "quote": get_chunk_text(prov.kb_slug, prov.chunk_id)[:800],
+    })
+
+
+@login_required
+def evidence_page_png(request, chunk_id):
+    """渲染 chunk 所在的原 PDF 页为 PNG（PyMuPDF 2x）。
+
+    ?page=N 指定页（0 基，跨页 chunk 翻页用），默认 chunk 起始页。
+    """
+    prov = _evidence_prov(request, chunk_id)
+    doc = prov.document
+    if doc.file_type != "pdf" or not doc.file or not doc.file.name:
+        raise Http404("原文不是 PDF 或文件已删除")
+    try:
+        pdf_path = Path(doc.file.path)
+    except (NotImplementedError, ValueError):
+        raise Http404("原文不可用")  # noqa: B904
+    if not pdf_path.is_file():
+        raise Http404("原文文件已删除")
+    try:
+        try:
+            import pymupdf  # PyMuPDF ≥1.28 的推荐导入名
+        except ImportError:
+            import pymupdf as fitz  # noqa: F401 —— 旧版本包名 fitz
+    except ImportError:
+        return HttpResponse("服务端未安装 PyMuPDF，无法渲染原页", status=503)
+
+    try:
+        page_no = int(request.GET.get("page", prov.page_start))
+    except (TypeError, ValueError):
+        page_no = prov.page_start
+    try:
+        with pymupdf.open(pdf_path) as pdf:
+            page_no = max(0, min(page_no, pdf.page_count - 1))
+            pix = pdf[page_no].get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
+            data = pix.tobytes("png")
+    except Exception as e:
+        return HttpResponse(f"渲染失败：{str(e)[:120]}", status=500)
+    resp = HttpResponse(data, content_type="image/png")
+    resp["Cache-Control"] = "private, max-age=86400"
+    return resp
+
+
 @login_required
 def document_slices(request, doc_id):
     """引用切片查看页：左侧命中切片列表，右侧切片内容（带高亮）。
@@ -1010,6 +1160,7 @@ async def chat_stream(request):
         # 收集 AI 回复文本 + 来源出处，流结束后落库
         ai_chunks: list[str] = []
         turn_citations: list[dict] = []
+        turn_verify: dict | None = None
         try:
             # When the UI leaves kb_slug empty, _prepare() has already chosen
             # the best accessible KB (department-filtered) and stored it on the
@@ -1024,11 +1175,20 @@ async def chat_stream(request):
                     ai_chunks.append(payload.get("text", ""))
                 elif event_type == "citations":
                     turn_citations.extend(payload.get("citations") or [])
+                elif event_type == "verify":
+                    turn_verify = payload
                 data = json.dumps(payload, ensure_ascii=False)
                 yield f"event: {event_type}\ndata: {data}\n\n"
             yield "event: done\ndata: {}\n\n"
         finally:
             ai_text = "".join(ai_chunks).strip()
+            if turn_verify and turn_verify.get("ok") is False:
+                # 未通过核实：历史里保留原稿但打上标记（与前端拒答展示一致）
+                issues = "；".join(turn_verify.get("issues") or []) or "存在未核实结论"
+                ai_text = f"> ⚠ 本回答未通过证据核实（{issues}），仅供参考。\n\n{ai_text}"
+            elif turn_verify and turn_verify.get("warn"):
+                warns = "；".join(turn_verify["warn"][:3])
+                ai_text = f"> ⚠ 核心结论已核实；附带信息未核实：{warns}\n\n{ai_text}"
             if ai_text:
                 await sync_to_async(Message.objects.create)(
                     conversation=conv, role=Message.Role.AI,
@@ -1108,12 +1268,27 @@ def _semantic_matches(user, query: str, k: int = 8) -> list[dict]:
         _logging.getLogger(__name__).warning(
             "综合搜索语义检索失败（降级为空）q=%s: %s", query, str(e)[:120])
         return []
+    # 溯源标注：命中片段带页码/行号（老文档无溯源则静默跳过）
+    try:
+        from . import provenance as _prov
+        _prov.annotate_results(results)
+    except Exception:
+        pass
     out = []
     for r in results:
         if not r.get("doc_id"):
             continue
         text = (r.get("text") or "").strip()
         anchor = re.sub(r"^【[^】]*】\s*", "", text)[:16]
+        # chunk_id 只在有溯源（页码存在）时下发——无溯源的命中（照片直传/
+        # 老入库文档）渲染 📍 按钮会点了 404，退化为普通链接
+        has_prov = bool(r.get("page_label"))
+        # 分数：文本块用 rerank 分；图片块无 rerank，按向量距离换算图文相似度。
+        # WeMM 图文存在模态鸿沟（余弦距离常在 1.2~1.7），把相似度区间
+        # [-1,1] 线性归一到 [0,1]（= 1-d/2）：保序、非零有区分度，跨批可比
+        score = r.get("rerank_score")
+        if score is None and r.get("type") == "image" and r.get("distance") is not None:
+            score = round(max(0.0, min(1.0, 1.0 - float(r["distance"]) / 2.0)), 4)
         out.append({
             "doc_id": r["doc_id"],
             "source": r.get("source") or "未知来源",
@@ -1121,10 +1296,15 @@ def _semantic_matches(user, query: str, k: int = 8) -> list[dict]:
             "text": text,
             "anchor": anchor,
             "via": r.get("via", ""),
-            "score": r.get("rerank_score"),
+            "score": score,
             "is_image": r.get("type") == "image",
-            "images": [f"/kb/doc/{r['doc_id']}/img/{r['image']}"]
-                       if r.get("image") else [],
+            # 整页视觉块：缩略图 = 证据接口按需渲染原 PDF 页；插图块 = 落盘图
+            "images": ([f"/kb/evidence/{r['chunk_id']}/page.png"]
+                       if r.get("page_block") and r.get("chunk_id")
+                       else [f"/kb/doc/{r['doc_id']}/img/{r['image']}"]
+                       if r.get("image") else []),
+            "page": r.get("page_label") or "",
+            "chunk_id": r.get("chunk_id") if has_prov else "",
         })
     return out
 
@@ -1143,6 +1323,15 @@ def search_view(request):
 
     user_dept = kb_access.user_department(request.user)
     lookup = lookup_related(q, department=user_dept) if q else None
+    # 手册原文命中（行级字面匹配）对齐 chunk 溯源：chip 直接开证据面板定位
+    if lookup and lookup.get("manual_matches"):
+        try:
+            from .provenance import locate_snippets
+            locate_snippets(lookup["manual_matches"])
+        except Exception:
+            import logging as _lg
+            _lg.getLogger(__name__).warning(
+                "手册原文溯源对齐失败（降级为普通链接）", exc_info=True)
     # 语义命中拆两栏展示：文本块（含 rerank 相关度）与图片块（多模态召回道）
     sem_all = _semantic_matches(request.user, q) if q else []
     semantic_matches = [m for m in sem_all if not m.get("is_image")]
@@ -1271,6 +1460,7 @@ _CONFIG_FIELDS = [
     ("llm_model", "llm_model", "text", "LLM_MODEL"),
     ("llm_temperature", "llm_temperature", "float", "LLM_TEMPERATURE"),
     ("llm_vision", "llm_vision", "bool", "LLM_VISION"),
+    ("qa_enhance", "qa_enhance", "bool", "QA_ENHANCE"),
     ("embedding_base_url", "embedding_base_url", "text", "EMBEDDING_BASE_URL"),
     ("embedding_api_key", "embedding_api_key", "password", "EMBEDDING_API_KEY"),
     ("embedding_model", "embedding_model", "text", "EMBEDDING_MODEL"),
