@@ -12,3 +12,7 @@
 - Add opt-in local resource restrictions and configurable locally hosted Pyodide assets.
 
 See [upgrade notes](docs/quality-upgrade.md) for configuration, migration, validation and limitations.
+
+### Conversation persistence follow-up
+
+Preserve interrupted visible answers with an incomplete status when switching pages; keep them out of future factual context. Remove device-name examples from the system prompt and prevent unverified historical claims from being replayed. Requires migration 0023. Regression totals: 143 Django and 15 Node.

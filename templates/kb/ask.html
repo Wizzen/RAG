@@ -645,6 +645,13 @@ pd.DataFrame.to_excel = _patched_to_excel
             : AI_WHO + '<div class="bubble"><div class="answer">' + (window.marked ? DOMPurify.sanitize(window.marked.parse(m.content||'')) : (m.content||'').replace(/</g,'&lt;')) + '</div></div>';
           div.innerHTML = inner;
           messages.appendChild(div);
+          if (m.role === 'ai' && m.completion_status === 'incomplete') {
+            const note = document.createElement('div');
+            note.className = 'answer-incomplete';
+            note.textContent = '⚠ 回答未完成：已保留生成内容，不能作为完整结论。请重新提问继续核对。';
+            note.style.cssText = 'color:var(--warn);font-size:13px;margin-top:8px';
+            div.querySelector('.bubble').appendChild(note);
+          }
           // AI 消息：若有来源出处则渲染可点击链接
           if (m.role === 'ai' && m.citations && m.citations.length) {
             renderCitations(div, m.citations);
@@ -851,6 +858,7 @@ pd.DataFrame.to_excel = _patched_to_excel
     const stream = FosChatStream.create({onEvent(etype, payload) {
       if (activeTurn !== stream || currentThreadId !== submittedThread) return;
       if (etype === 'heartbeat') {
+        if (!document.querySelector('.conv-item[data-thread="'+submittedThread+'"]')) addConvItem(submittedThread, text.slice(0,30), '');
         const seconds = Number(payload.elapsed);
         const elapsed = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
         progressEl.textContent = String(payload.stage || '正在处理问答') + '… 已等待 ' + elapsed + ' 秒';
@@ -898,7 +906,7 @@ pd.DataFrame.to_excel = _patched_to_excel
         runCodeInSandbox(payload.code || '', payload.filename || 'analysis.xlsx', am);
       } else if (etype === 'citations') {
         // 累积本轮来源出处（流结束后渲染可点击链接）
-        turnCitations = turnCitations.concat(payload.citations || []);
+        turnCitations = Array.from(new Map(turnCitations.concat(payload.citations || []).map(c => [c.doc_id, c])).values());
       } else if (etype === 'step') {
         // 管线阶段（问题理解/检索/生成/核对）
         handleStep(payload);

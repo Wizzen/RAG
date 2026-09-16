@@ -8,11 +8,16 @@ def recent_history(messages, *, enhanced, visible, max_chars=8000, max_pairs=3):
             continue
         if item.role != 'ai' or question is None:
             continue
+        if getattr(item, "completion_status", "complete") != "complete":
+            question = None
+            continue
         if (enhanced and (not item.verified or not item.citations)) or (item.citations and not visible(item.citations)):
             question = None
             pairs = []
             continue
-        pairs.append((question, item.content))
+        # Unverified model prose is not a factual source for future turns.
+        answer = item.content if item.verified else "上轮回答未核实，事实内容已省略；请重新检索原文。"
+        pairs.append((question, answer))
         question = None
     chosen = []
     size = 0

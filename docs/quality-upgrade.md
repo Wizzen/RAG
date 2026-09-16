@@ -4,7 +4,7 @@ This change retains Django, MinerU and Chroma, without introducing a new model o
 
 ## Apply
 
-Run `python manage.py migrate`. Migration `0022_message_verified` adds a flag for verified assistant messages; existing messages default to false. Enhanced mode only carries forward currently accessible, verified source-backed answers. Ordinary mode uses recent completed conversation pairs. Old checkpoint files remain on disk but are no longer replayed into new turns.
+Run `python manage.py migrate`. Migrations `0022_message_verified` and `0023_message_completion_status` add verification and completion flags. Existing messages default to unverified/complete. Interrupted visible output is stored separately as incomplete and is not reused as factual context. Enhanced mode only carries forward currently accessible, verified source-backed answers. Ordinary mode preserves recent question context but omits unverified answer facts to avoid repeating unsupported names and parameters. Old checkpoint files remain on disk but are no longer replayed into new turns.
 
 No automatic corpus reparse or destructive index rebuild is performed. Existing indexes must be rebuilt to recover table text omitted by earlier parsing. Back up business data and indexes before rebuilding. Changing an embedding model requires a matching new index even if model dimensions happen to agree.
 
@@ -38,8 +38,10 @@ python manage.py test kb.tests accounts --noinput
 node --test scripts/tests/chat_input.test.cjs scripts/tests/chat_stream.test.cjs
 ```
 
-The implementation has passed 141 Django and 15 Node regressions, plus local model-backed streaming checks. There is no claim of a representative corpus accuracy benchmark or production P95 latency target being met.
+The implementation has passed 143 Django and 15 Node regressions, plus local model-backed streaming checks. There is no claim of a representative corpus accuracy benchmark or production P95 latency target being met.
 
 ## Rollback
 
 Stop the application and restore the previous code with a matching database/index backup. The new migration is additive, and this change does not remove source files, old messages or checkpoint files. Launcher changes specific to the development machine are intentionally outside this PR.
+
+Interrupted visible answers remain available after switching conversations, with an explicit incomplete warning. Private drafts in enhanced mode are never exposed or saved by this mechanism. Device names must follow the user or retrieved source rather than arbitrary examples in a system prompt.

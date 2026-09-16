@@ -115,7 +115,7 @@ class PublishedHistoryTests(TestCase):
                 return [item async for item in response.streaming_content]
             asyncio.run(consume())
         self.assertNotIn('LEGACY PRIVATE DRAFT', repr(captured['published_history']))
-        self.assertEqual(Message.objects.filter(conversation=conv, role='ai').count(), 1)
+        self.assertEqual(Message.objects.filter(conversation=conv, role='ai', completion_status='complete').count(), 1)
 
 
 class FixedExportTests(SimpleTestCase):

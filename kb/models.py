@@ -472,6 +472,7 @@ class Message(models.Model):
     # AI 消息引用的来源出处（每条含 doc_id/source/highlights），供前端渲染可点击链接
     citations = models.JSONField("来源出处", default=list, blank=True)
     verified = models.BooleanField("已核对发布", default=False)
+    completion_status = models.CharField("回答状态", max_length=12, default="complete", choices=[("complete", "完整"), ("incomplete", "未完成")])
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
