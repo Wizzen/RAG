@@ -45,7 +45,7 @@ class HistoryBudgetTests(SimpleTestCase):
     def test_failed_questions_and_old_tool_context_are_not_replayed(self):
         from types import SimpleNamespace as M
         from kb.history import recent_history
-        def msg(role,text):return M(role=role,content=text,verified=False,citations=[])
+        def msg(role,text):return M(role=role,content=text,verified=True,citations=[])
         rows=recent_history([msg('user','failed'),msg('user','new'),msg('ai','answer'),msg('user','pending')],enhanced=False,visible=lambda c:True)
         self.assertEqual([r['content'] for r in rows],['new','answer'])
 
@@ -55,3 +55,14 @@ class HistoryBudgetTests(SimpleTestCase):
         items=[M(role='user',content='q'),M(role='ai',content='long answer',verified=True,citations=[{}])]
         self.assertEqual(recent_history(items,enhanced=False,visible=lambda c:False),[])
         self.assertEqual(recent_history(items,enhanced=False,visible=lambda c:True,max_chars=4),[])
+
+
+    def test_unverified_alias_is_not_a_source_for_next_answer(self):
+        from types import SimpleNamespace as M
+        from kb.history import recent_history
+        items=[M(role='user',content='设备甲天气'), M(role='ai',content='设备甲 (UNSUPPORTED_NAME)',verified=False,citations=[],completion_status='complete')]
+        history=recent_history(items,enhanced=False,visible=lambda c:True)
+        self.assertNotIn('UNSUPPORTED_NAME',str(history))
+        self.assertIn('设备甲天气',str(history))
+        items[1].completion_status='incomplete'
+        self.assertEqual(recent_history(items,enhanced=False,visible=lambda c:True),[])

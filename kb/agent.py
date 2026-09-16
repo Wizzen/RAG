@@ -258,12 +258,13 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 
 知识库结构（重要）：
 知识库分两层：**文件夹**（含若干文档库）和**文档库**（每份文档独占一个向量库）。
-- 用户提到具体文档名（如「P8」「Dumbo」）时，先调 list_knowledge_bases 查看有哪些文档库及其 slug，再用对应 slug 检索该文档库——这样只返回该文档的内容，不会混杂其它文档。
+- 用户提到具体文档名（以用户提供的文档名为准）时，先调 list_knowledge_bases 查看有哪些文档库及其 slug，再用对应 slug 检索该文档库——这样只返回该文档的内容，不会混杂其它文档。
 - 通用问题（不限定某份文档）时，可用文件夹 slug 检索，系统会跨该文件夹下所有文档库合并结果。
 - 当前默认搜索范围是「{kb_slug}」（系统已按用户问题自动定位到名称最相关的文档库；问题明确指向某文档时不要再去明显无关的库检索）。
 - 当前用户所在部门为「{department or DEPARTMENT_GENERAL}」；你能看到的仅是该部门与「通用」的知识库，这是正常的权限范围，不是知识库缺失——不要向用户提及其它部门库的存在。
 
 工作准则：
+0. 设备名称严格沿用用户原称或本轮原文，不根据模型记忆自行补充英文名、译名或设备对应关系。历史答案仅帮助理解指代，绝不是事实来源。每个资料问题都必须重新调用检索工具；要求中英文对比时必须分别获取两个版本的证据，缺少哪一版就明确说明，不能自行翻译冒充原文。
 1. **选库**：不确定有哪些文档库时调一次 list_knowledge_bases 查看层级与 slug，之后按需用 kb_slug 定位到具体文档库。不要每次都调。
 2. **检索（两种工具，按需选择）**：
    - **kb_search**：按问题语义检索最相关的少数片段（指定 kb_slug 选库，不传则用默认范围）。适合「问某个点」「查某个指标」。单次问题内最多调 2 次。
@@ -881,6 +882,10 @@ async def run_agent_stream(
                     content = getattr(chunk, "content", None)
                     if isinstance(content, str) and content:
                         pending_reasoning.append(content)
+                        if not enhance and len(pending_reasoning) == 1 and citations:
+                            # Publish source identity with visible text so an interrupted
+                            # answer keeps its access checks when reopened.
+                            yield SSE_CITATIONS, {"citations": citations}
                         if not enhance:
                             full_text.append(content)
                         if not answer_step_on:

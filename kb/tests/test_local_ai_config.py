@@ -155,7 +155,7 @@ class StreamPersistenceTests(TransactionTestCase):
         self.user = get_user_model().objects.create_user(username='stream-admin',is_staff=True)
         self.client.force_login(self.user)
 
-    def test_stream_persists_before_done_and_never_saves_failed_draft(self):
+    def test_stream_persists_before_done_and_marks_failed_partial(self):
         import asyncio
         from asgiref.sync import sync_to_async
         from kb.models import KnowledgeBase, Message
@@ -171,5 +171,31 @@ class StreamPersistenceTests(TransactionTestCase):
                     async for raw in response.streaming_content:
                         if b'event: done' in raw:
                             count=await sync_to_async(lambda:Message.objects.filter(conversation__thread_id=thread,role='ai').count())()
-                            self.assertEqual(count,0 if fail else 1)
+                            self.assertEqual(count,1)
+                            status=await sync_to_async(lambda:Message.objects.get(conversation__thread_id=thread,role="ai").completion_status)()
+                            self.assertEqual(status,"incomplete" if fail else "complete")
                 asyncio.run(consume())
+
+
+    def test_switching_page_preserves_visible_partial_as_incomplete(self):
+        import asyncio
+        from kb.models import KnowledgeBase, Message
+        KnowledgeBase.objects.create(name='switch',slug='switch',is_folder=False,chunk_count=1,created_by=self.user)
+        async def events(*args, **kwargs):
+            yield 'token', {'text':'| 对象 | 频率 |\n|---|---|\n| 已生成 | 待核对 |'}
+            await asyncio.sleep(10)
+        with patch('kb.agent.run_agent_stream',side_effect=events):
+            response=self.client.post(reverse('kb:stream'),{'message':'q','thread_id':'switch','kb_slug':'switch'})
+            async def consume():
+                iterator=response.streaming_content
+                async for raw in iterator:
+                    if b'event: token' in raw:
+                        await response._iterator.aclose()
+                        break
+            asyncio.run(consume())
+        row=Message.objects.get(conversation__thread_id='switch',role='ai')
+        self.assertIn('已生成',row.content)
+        self.assertEqual(row.completion_status,'incomplete')
+        data=self.client.get(reverse('kb:conv_messages',args=['switch'])).json()
+        self.assertIn('已生成',data['messages'][-1]['content'])
+        self.assertEqual(data['messages'][-1]['completion_status'],'incomplete')

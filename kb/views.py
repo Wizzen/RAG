@@ -1042,7 +1042,7 @@ def ask(request):
 def _route_kb_by_question(message: str, user):
     """问题文本 → 名称最相关的文档库（词面路由，交给 agent 前的确定性预定位）。
 
-    问题里明确出现某个库名或文档名（如「P8」「Dumbo」「药典」）时直接定位到该库，
+    问题里明确出现某个库名或文档名（如用户提供的完整文档名称）时直接定位到该库，
     避免 agent 在明显无关的库上浪费检索。保守策略：只有唯一强命中才返回，
     歧义（多家同分）或无命中返回 None，由调用方走原有自动挑选。
     """
@@ -1165,7 +1165,9 @@ async def chat_stream(request):
         # 记录用户消息
         Message.objects.create(conversation=conv, role=Message.Role.USER, content=message)
         conv.save(update_fields=["updated_at"])  # 刷新排序
+        answer = Message.objects.create(conversation=conv, role=Message.Role.AI, content="", completion_status="incomplete")
         cfg = {
+            "answer_id": answer.pk,
             "llm": current_llm,
             "published_history": published_history,
             "user_id": request.user.id,
@@ -1191,6 +1193,20 @@ async def chat_stream(request):
         turn_citations = []
         turn_verify = None
         failed = False
+        complete = False
+        import asyncio
+        import time
+        last_save = 0
+        async def save_snapshot():
+            if not ai_chunks and not turn_citations:
+                return  # Empty incomplete row was already created by _prepare.
+            text = "".join(ai_chunks).strip()
+            # Enhanced mode only emits text after verification; never persist a private draft.
+            await sync_to_async(Message.objects.filter(pk=agent_config["answer_id"]).update)(
+                content=text, citations=turn_citations,
+                completion_status="complete" if complete else "incomplete",
+                verified=bool(complete and agent_config["llm"].get("qa_enhance") and turn_verify and turn_verify.get("ok")),
+            )
         effective_kb_slug = agent_config.get("effective_kb_slug") or conv.kb.slug
         try:
             from contextlib import aclosing
@@ -1203,24 +1219,27 @@ async def chat_stream(request):
                     elif event_type == "token":
                         ai_chunks.append(payload.get("text", ""))
                     elif event_type == "citations":
-                        turn_citations.extend(payload.get("citations") or [])
+                        merged = {c.get("doc_id"): c for c in turn_citations}
+                        merged.update({c.get("doc_id"): c for c in (payload.get("citations") or [])})
+                        turn_citations[:] = list(merged.values())
                     elif event_type == "verify":
                         turn_verify = payload
+                    if event_type in ("token", "citations", "error") and (time.monotonic() - last_save >= .5 or event_type != "token"):
+                        await save_snapshot()
+                        last_save = time.monotonic()
                     yield f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            ai_text = "".join(ai_chunks).strip() if not failed else ""
+            complete = not failed and bool("".join(ai_chunks).strip())
             if agent_config["llm"].get("qa_enhance") and not (turn_verify and turn_verify.get("ok")):
-                ai_text = ""
-            if ai_text:
-                # Persist before done: the browser closes its reader upon done.
-                await sync_to_async(Message.objects.create)(
-                    conversation=conv, role=Message.Role.AI,
-                    content=ai_text, citations=turn_citations,
-                    verified=bool(agent_config["llm"].get("qa_enhance") and turn_verify and turn_verify.get("ok")),
-                )
+                complete = False
+            await save_snapshot()
         except Exception:
+            complete = False
             import logging
             logging.getLogger(__name__).exception("Answer stream failed thread=%s", full_thread)
             yield 'event: error\ndata: {"message":"问答服务异常，回答未完成，请重试。"}\n\n'
+        finally:
+            # Also preserve visible text when a page switch cancels the request.
+            await asyncio.shield(save_snapshot())
         yield "event: done\ndata: {}\n\n"
 
     resp = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
@@ -1239,7 +1258,7 @@ def conversation_messages(request, thread_id):
     conv = get_object_or_404(Conversation, thread_id=thread_id, user=request.user)
     if not kb_access.kb_accessible(request.user, conv.kb):
         raise Http404("会话不存在")
-    msgs = list(conv.messages.order_by("created_at").values("role", "content", "citations"))
+    msgs = list(conv.messages.order_by("created_at").values("role", "content", "citations", "completion_status"))
     from .publication import visible_citations
     for msg in msgs:
         if msg["role"] == Message.Role.AI and msg["citations"] and not visible_citations(msg["citations"], request.user):
