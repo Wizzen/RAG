@@ -443,6 +443,7 @@ class Conversation(models.Model):
     kb = models.ForeignKey(KnowledgeBase, on_delete=models.CASCADE, related_name="conversations")
     title = models.CharField("标题", max_length=120, default="新对话")
     thread_id = models.CharField("会话线程", max_length=80, unique=True)
+    last_read_answer_id = models.PositiveBigIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -472,11 +473,13 @@ class Message(models.Model):
     # AI 消息引用的来源出处（每条含 doc_id/source/highlights），供前端渲染可点击链接
     citations = models.JSONField("来源出处", default=list, blank=True)
     verified = models.BooleanField("已核对发布", default=False)
-    completion_status = models.CharField("回答状态", max_length=12, default="complete", choices=[("complete", "完整"), ("incomplete", "未完成")])
+    completion_status = models.CharField("回答状态", max_length=12, default="complete", choices=[("complete", "完整"), ("incomplete", "未完成"), ("queued", "排队中"), ("running", "生成中")])
+    failure_reason = models.CharField("未完成原因", max_length=500, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["created_at"]
+        constraints = [models.UniqueConstraint(fields=["conversation"], condition=models.Q(completion_status__in=["queued", "running"]), name="one_active_answer_per_conversation")]
         verbose_name = "消息"
         verbose_name_plural = "消息"
 

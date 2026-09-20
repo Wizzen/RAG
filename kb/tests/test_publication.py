@@ -3,7 +3,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.contrib.auth import get_user_model
 
 from kb.agent import run_agent_stream
@@ -93,7 +93,7 @@ class SourceSnapshotTests(TestCase):
             self.assertFalse(validate_sources(self.evidence, self.user.pk))
 
 
-class PublishedHistoryTests(TestCase):
+class PublishedHistoryTests(TransactionTestCase):
     def test_legacy_draft_is_not_passed_to_enhanced_agent(self):
         from kb.models import Conversation, Message, SiteConfig
         user = get_user_model().objects.create_user('history-reader')
@@ -110,8 +110,9 @@ class PublishedHistoryTests(TestCase):
             yield 'verify', {'ok':False, 'issues':[]}
         with patch('kb.agent.run_agent_stream', side_effect=fake_stream):
             from django.urls import reverse
-            response = self.client.post(reverse('kb:stream'), {'message':'new question', 'thread_id':conv.thread_id})
             async def consume():
+                self.async_client.cookies = self.client.cookies
+                response = await self.async_client.post(reverse('kb:stream'), {'message':'new question', 'thread_id':conv.thread_id})
                 return [item async for item in response.streaming_content]
             asyncio.run(consume())
         self.assertNotIn('LEGACY PRIVATE DRAFT', repr(captured['published_history']))

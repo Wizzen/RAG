@@ -32,6 +32,11 @@ urlpatterns = [
     path("settings/test/", views.settings_test, name="settings_test"),
     path("eval/", views.eval_panel, name="eval_panel"),
 
+    path("conv/<str:thread_id>/stop/", views.conversation_stop, name="conv_stop"),
+
+    path("conv/states/", views.conversation_states, name="conv_states"),
+    path("conv/<str:thread_id>/read/", views.conversation_read, name="conv_read"),
+
     # 会话历史
     path("conv/<str:thread_id>/messages/", views.conversation_messages, name="conv_messages"),
     path("conv/<str:thread_id>/delete/", views.conversation_delete, name="conv_delete"),
