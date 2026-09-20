@@ -1040,11 +1040,11 @@ def ask(request):
 
 
 def _route_kb_by_question(message: str, user):
-    """问题文本 → 名称最相关的文档库（词面路由，交给 agent 前的确定性预定位）。
+    """问题文本 → 名称最相关的文件夹或文档库（词面路由，交给 agent 前的确定性预定位）。
 
     问题里明确出现某个库名或文档名（如用户提供的完整文档名称）时直接定位到该库，
     避免 agent 在明显无关的库上浪费检索。保守策略：只有唯一强命中才返回，
-    歧义（多家同分）或无命中返回 None，由调用方走原有自动挑选。
+    同一文件夹内同分允许覆盖中英文文档；无关范围同分或无命中返回 None。
     """
     from . import access as kb_access
 
@@ -1052,7 +1052,7 @@ def _route_kb_by_question(message: str, user):
     if not text.strip():
         return None
     scores: list[tuple[int, object]] = []  # (score, kb)
-    for kb in KnowledgeBase.objects.filter(kb_access.kb_q(user), is_folder=False):
+    for kb in KnowledgeBase.objects.filter(kb_access.kb_q(user)).prefetch_related("documents"):
         names = [kb.name] + [d.original_name for d in kb.documents.all()]
         score = 0
         for name in names:
@@ -1086,7 +1086,18 @@ def _route_kb_by_question(message: str, user):
     scores.sort(key=lambda t: t[0], reverse=True)
     top1, top2 = scores[0][0], (scores[1][0] if len(scores) > 1 else 0)
     # 唯一强命中（≥2 字符且严格领先）才定位；平分视为歧义，不干预
-    return scores[0][1] if top1 >= 2 and top1 > top2 else None
+    if top1 < 2:
+        return None
+    if top1 > top2:
+        return scores[0][1]
+    tied = [kb for score, kb in scores if score == top1]
+    roots = {kb.pk if kb.is_folder else (kb.parent_id or kb.pk) for kb in tied}
+    if len(roots) == 1:
+        documents = [kb for kb in tied if not kb.is_folder]
+        if len(documents) == 1:
+            return documents[0]
+        return KnowledgeBase.objects.filter(kb_access.kb_q(user), pk=next(iter(roots))).first()
+    return None
 
 
 @login_required
@@ -1111,15 +1122,19 @@ async def chat_stream(request):
         return HttpResponse("missing 'thread_id'", status=400)
 
     # 在同步上下文里一次性解析配置 + 取/建会话（避免在 async 生成器中访问数据库）
+    from django.db import transaction, IntegrityError
+
+    @transaction.atomic
     def _prepare():
         from . import access as kb_access
 
         user_dept = kb_access.user_department(request.user)
         # kb_slug 可选：未指定时优先选「有向量块的文档库」（文件夹自身无向量），
         # 再退到任意文件夹（可扇出搜索），最后退到任意库——均在用户可见范围内。
-        # agent 仍可通过 list_knowledge_bases + kb_search(kb_slug=...) 自主跨库（同受部门过滤）。
-        kb = None  # ask 页改版后前端不再传 kb_slug，空值是主路径，必须先初始化
-        if kb_slug:
+        # 明确命名的范围由后端传给全部检索工具；模型不能扩大范围。
+        explicit_scope = _route_kb_by_question(message, request.user)
+        kb = explicit_scope  # Named equipment/folder takes precedence over stale UI scope.
+        if kb_slug and not kb:
             kb = KnowledgeBase.objects.filter(slug=kb_slug).first()
             if kb and not kb_access.kb_accessible(request.user, kb):
                 kb = None  # 指定了不可访问的库 → 视为未指定，走自动挑选
@@ -1147,10 +1162,24 @@ async def chat_stream(request):
         # 安全：会话必须属于当前用户
         if conv.user_id != request.user.id:
             return None, None, False, "forbidden"
+        # Retain the last explicitly named scope until the user names a new one.
+        if explicit_scope is None:
+            for previous in conv.messages.filter(role='user').order_by('-created_at')[:12]:
+                explicit_scope = _route_kb_by_question(previous.content, request.user)
+                if explicit_scope:
+                    kb = explicit_scope
+                    break
+        if explicit_scope and conv.kb_id != explicit_scope.pk:
+            conv.kb = explicit_scope
+            conv.save(update_fields=['kb', 'updated_at'])
         # 续聊旧会话：若其 KB 因部门调整已不可访问，回退到自动挑选
         if not kb_access.kb_accessible(request.user, conv.kb):
             conv.kb = kb
             conv.save(update_fields=["kb", "updated_at"])
+        from .answer_tasks import ACTIVE, reconcile
+        reconcile(list(conv.messages.filter(completion_status__in=ACTIVE)))
+        if conv.messages.filter(completion_status__in=ACTIVE).exists():
+            return conv, None, False, "answer active"
         # Enhanced turns rebuild memory from published messages, never failed checkpoints.
         from .publication import visible_citations
         current_llm = llm_settings()
@@ -1165,8 +1194,17 @@ async def chat_stream(request):
         # 记录用户消息
         Message.objects.create(conversation=conv, role=Message.Role.USER, content=message)
         conv.save(update_fields=["updated_at"])  # 刷新排序
-        answer = Message.objects.create(conversation=conv, role=Message.Role.AI, content="", completion_status="incomplete")
+        answer = Message.objects.create(conversation=conv, role=Message.Role.AI, content="", completion_status="queued")
+        allowed_slugs = None
+        if explicit_scope:
+            scoped = KnowledgeBase.objects.filter(kb_access.kb_q(request.user))
+            allowed_slugs = [explicit_scope.slug]
+            if explicit_scope.is_folder:
+                allowed_slugs += list(scoped.filter(parent=explicit_scope).values_list('slug', flat=True))
+            # Discard prior topics when the user names a new document/equipment.
+            published_history = [] if _route_kb_by_question(message, request.user) else published_history
         cfg = {
+            "allowed_kb_slugs": allowed_slugs,
             "answer_id": answer.pk,
             "llm": current_llm,
             "published_history": published_history,
@@ -1178,8 +1216,13 @@ async def chat_stream(request):
         }
         return conv, cfg, created, None
 
-    prepared = await sync_to_async(_prepare)()
+    try:
+        prepared = await sync_to_async(_prepare)()
+    except IntegrityError:
+        return JsonResponse({"message": "该会话已有回答任务，请等待或停止后再提问。"}, status=409)
     conv, agent_config, _created, prep_err = prepared
+    if prep_err == "answer active":
+        return JsonResponse({"message": "该会话已有回答任务，请等待或停止后再提问。"}, status=409)
     if prep_err == "no knowledge base available":
         return HttpResponse("暂无知识库，请先上传文档。", status=400)
     if conv is None:
@@ -1197,14 +1240,15 @@ async def chat_stream(request):
         import asyncio
         import time
         last_save = 0
+        failure_reason = ""
+        finalized = False
         async def save_snapshot():
-            if not ai_chunks and not turn_citations:
-                return  # Empty incomplete row was already created by _prepare.
             text = "".join(ai_chunks).strip()
             # Enhanced mode only emits text after verification; never persist a private draft.
             await sync_to_async(Message.objects.filter(pk=agent_config["answer_id"]).update)(
                 content=text, citations=turn_citations,
-                completion_status="complete" if complete else "incomplete",
+                failure_reason="" if complete else failure_reason[:500],
+                completion_status=("complete" if complete else "incomplete") if finalized else "running",
                 verified=bool(complete and agent_config["llm"].get("qa_enhance") and turn_verify and turn_verify.get("ok")),
             )
         effective_kb_slug = agent_config.get("effective_kb_slug") or conv.kb.slug
@@ -1216,6 +1260,7 @@ async def chat_stream(request):
                 async for event_type, payload in events:
                     if event_type == "error":
                         failed = True
+                        failure_reason = payload.get("message") or "问答服务返回错误。"
                     elif event_type == "token":
                         ai_chunks.append(payload.get("text", ""))
                     elif event_type == "citations":
@@ -1228,21 +1273,35 @@ async def chat_stream(request):
                         await save_snapshot()
                         last_save = time.monotonic()
                     yield f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            finalized = True
             complete = not failed and bool("".join(ai_chunks).strip())
             if agent_config["llm"].get("qa_enhance") and not (turn_verify and turn_verify.get("ok")):
                 complete = False
+            if not complete and not failure_reason:
+                failure_reason = "答案未通过核对。" if agent_config["llm"].get("qa_enhance") else "模型结束了请求，但没有返回答案正文。"
             await save_snapshot()
+            if not complete and not failed:
+                yield f"event: error\ndata: {json.dumps({'message': failure_reason}, ensure_ascii=False)}\n\n"
         except Exception:
+            finalized = True
             complete = False
+            failure_reason = "问答服务异常，请重试。"
             import logging
             logging.getLogger(__name__).exception("Answer stream failed thread=%s", full_thread)
             yield 'event: error\ndata: {"message":"问答服务异常，回答未完成，请重试。"}\n\n'
         finally:
-            # Also preserve visible text when a page switch cancels the request.
+            finalized = True
+            # Only an explicit stop or process shutdown cancels generation.
+            if not complete and not failure_reason:
+                failure_reason = "回答任务已停止。"
+            import logging
+            logging.getLogger(__name__).info("Answer ended thread=%s complete=%s chars=%s reason=%s", full_thread, complete, sum(map(len, ai_chunks)), failure_reason)
             await asyncio.shield(save_snapshot())
         yield "event: done\ndata: {}\n\n"
 
-    resp = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+    from .answer_tasks import start
+    run = start(agent_config["answer_id"], event_stream)
+    resp = StreamingHttpResponse(run.subscribe(), content_type="text/event-stream")
     resp["Cache-Control"] = "no-cache"
     resp["X-Accel-Buffering"] = "no"
     return resp
@@ -1258,14 +1317,67 @@ def conversation_messages(request, thread_id):
     conv = get_object_or_404(Conversation, thread_id=thread_id, user=request.user)
     if not kb_access.kb_accessible(request.user, conv.kb):
         raise Http404("会话不存在")
-    msgs = list(conv.messages.order_by("created_at").values("role", "content", "citations", "completion_status"))
+    from .answer_tasks import ACTIVE, reconcile, state
+    reconcile(list(conv.messages.filter(completion_status__in=ACTIVE)))
+    active = conv.messages.filter(completion_status__in=ACTIVE).first()
+    msgs = list(conv.messages.order_by("created_at").values("role", "content", "citations", "completion_status", "failure_reason"))
     from .publication import visible_citations
     for msg in msgs:
         if msg["role"] == Message.Role.AI and msg["citations"] and not visible_citations(msg["citations"], request.user):
             msg["content"] = "此回答的来源已不可访问或已变化，请重新检索。"
             msg["citations"] = []
     return JsonResponse({"thread_id": conv.thread_id, "title": conv.title,
-                         "kb_slug": conv.kb.slug, "messages": msgs})
+                         "kb_slug": conv.kb.slug, "messages": msgs,
+                         "active_answer": ({"id": active.pk, **(state(active.pk) or {})} if active else None)})
+
+
+@login_required
+def conversation_states(request):
+    from django.db.models import Max, Q
+    from . import access as kb_access
+    from .answer_tasks import ACTIVE, reconcile
+    conversations = Conversation.objects.filter(user=request.user, kb__in=KnowledgeBase.objects.filter(kb_access.kb_q(request.user)))
+    reconcile(list(Message.objects.filter(conversation__in=conversations, completion_status__in=ACTIVE)))
+    rows = conversations.annotate(
+        latest_answer=Max('messages__id', filter=Q(messages__role='ai', messages__completion_status='complete')),
+        active_answer=Max('messages__id', filter=Q(messages__completion_status__in=ACTIVE)),
+    )
+    return JsonResponse({'conversations': [
+        {'thread_id': row.thread_id, 'title': row.title,
+         'running': bool(row.active_answer), 'answer_id': row.latest_answer or 0,
+         'unread': bool(row.latest_answer and row.latest_answer > row.last_read_answer_id)}
+        for row in rows
+    ]})
+
+
+@login_required
+@require_http_methods(["POST"])
+def conversation_read(request, thread_id):
+    from . import access as kb_access
+    conv = get_object_or_404(Conversation, thread_id=thread_id, user=request.user)
+    if not kb_access.kb_accessible(request.user, conv.kb):
+        raise Http404("会话不存在")
+    try:
+        answer_id = int(request.POST.get('answer_id', '0'))
+    except (ValueError, TypeError):
+        return JsonResponse({'error': 'invalid answer_id'}, status=400)
+    if not conv.messages.filter(pk=answer_id, role='ai', completion_status='complete').exists():
+        return JsonResponse({'error': 'answer not complete'}, status=400)
+    # A stale click cannot mark a newer completion as read or move the cursor back.
+    Conversation.objects.filter(pk=conv.pk, last_read_answer_id__lt=answer_id).update(last_read_answer_id=answer_id)
+    return JsonResponse({'ok': True, 'answer_id': answer_id})
+
+
+@login_required
+@require_http_methods(["POST"])
+def conversation_stop(request, thread_id):
+    from . import access as kb_access
+    from .answer_tasks import ACTIVE, stop
+    conv = get_object_or_404(Conversation, thread_id=thread_id, user=request.user)
+    if not kb_access.kb_accessible(request.user, conv.kb):
+        raise Http404("会话不存在")
+    count = sum(stop(row.pk) for row in conv.messages.filter(completion_status__in=ACTIVE))
+    return JsonResponse({"ok": True, "stopping": bool(count)})
 
 
 @login_required
@@ -1282,6 +1394,9 @@ def conversation_delete(request, thread_id):
                                  "message": "会话不存在或已被删除。"})
         messages.info(request, "该会话不存在或已被删除。")
         return redirect("kb:ask")
+    from .answer_tasks import ACTIVE, stop
+    for answer in conv.messages.filter(completion_status__in=ACTIVE):
+        stop(answer.pk)
     conv.delete()
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
         return JsonResponse({"ok": True, "thread_id": thread_id})
