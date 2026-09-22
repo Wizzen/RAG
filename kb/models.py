@@ -290,6 +290,7 @@ class SiteConfig(models.Model):
     llm_temperature = models.FloatField("LLM 温度", null=True, blank=True)
     # 模型是否支持图片输入（视觉）。开启后 kb_search 命中图片时把图以
     # LangChain 多模态内容块随工具结果返回，模型可真正「看图」回答。
+    llm_remote_enabled = models.BooleanField("允许远程回答 API", default=False)
     llm_vision = models.BooleanField("LLM 支持图片输入", default=False)
     # 问答管线增强：回答前先做「问题理解/改写」（query_plan），回答后用
     # 第二次 LLM 调用对照检索证据核实结论（answer_verification），核实不过
@@ -354,6 +355,8 @@ class SiteConfig(models.Model):
     def apply(self, data: dict, fields: list[str] | None = None) -> None:
         """从 dict 批量写入指定字段（默认全部）（用于从预设加载）。"""
         fl = fields or [f for f, _t in _SITECONFIG_FIELDS]
+        if "llm_remote_enabled" in fl and "llm_remote_enabled" not in data:
+            self.llm_remote_enabled = False
         for f in fl:
             if f in data:
                 setattr(self, f, data[f])
@@ -361,6 +364,7 @@ class SiteConfig(models.Model):
 
 # SiteConfig 的 (字段名, 类型) 列表，供 snapshot/apply 与预设共用
 _SITECONFIG_FIELDS = [
+    ("llm_remote_enabled", "bool"),
     ("llm_base_url", "text"), ("llm_api_key", "text"), ("llm_model", "text"), ("llm_temperature", "float"),
     ("embedding_base_url", "text"), ("embedding_api_key", "text"), ("embedding_model", "text"), ("embedding_dimensions", "int"),
     ("kb_chunk_size", "int"), ("kb_chunk_overlap", "int"), ("kb_top_k", "int"),
@@ -369,7 +373,7 @@ _SITECONFIG_FIELDS = [
 
 # 分类 → 该分类包含的 SiteConfig 字段名。预设按分类独立保存/加载。
 PRESET_CATEGORIES = {
-    "llm": ["llm_base_url", "llm_api_key", "llm_model", "llm_temperature", "llm_vision", "qa_enhance"],
+    "llm": ["llm_remote_enabled", "llm_base_url", "llm_api_key", "llm_model", "llm_temperature", "llm_vision", "qa_enhance"],
     "embedding": ["embedding_base_url", "embedding_api_key", "embedding_model", "embedding_dimensions"],
     "retrieval": ["kb_chunk_size", "kb_chunk_overlap", "kb_top_k"],
     "mineru": ["mineru_api_base", "mineru_api_key", "mineru_backend", "mineru_lang"],

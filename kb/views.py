@@ -1622,6 +1622,7 @@ def index(request):
 # ------------------------------------------------------------------
 # 字段定义：(表单字段名, 模型字段名, 类型, .env 默认占位)
 _CONFIG_FIELDS = [
+    ("llm_remote_enabled", "llm_remote_enabled", "bool", "LLM_REMOTE_ENABLED"),
     ("llm_base_url", "llm_base_url", "text", "LLM_BASE_URL"),
     ("llm_api_key", "llm_api_key", "password", "LLM_API_KEY"),
     ("llm_model", "llm_model", "text", "LLM_MODEL"),
@@ -1928,10 +1929,11 @@ def settings_test(request):
                 "max_tokens": 64,
                 "stream": False,
             }
-            payload.update(settings.LLM_EXTRA_BODY)
+            cfg_mod.validate_answer_endpoint(llm)
+            payload.update(cfg_mod.answer_extra_body(llm))
             r = httpx.post(
                 base_url.rstrip("/") + "/chat/completions",
-                headers=_headers(api_key), json=payload, timeout=60,
+                headers=_headers(api_key), json=payload, timeout=60, trust_env=False, follow_redirects=False,
             )
             r.raise_for_status()
             body = r.json()
