@@ -127,6 +127,9 @@ async def _get_checkpointer():
 
 
 def _get_llm(llm_cfg: dict) -> ChatOpenAI:
+    import httpx
+    from .config import validate_answer_endpoint, answer_extra_body
+    validate_answer_endpoint(llm_cfg)
     return ChatOpenAI(
         model=llm_cfg["model"],
         # OpenAI's client requires a non-empty credential even when a local
@@ -136,9 +139,11 @@ def _get_llm(llm_cfg: dict) -> ChatOpenAI:
         temperature=llm_cfg["temperature"],
         # Ask OpenAI-compatible local servers (LM Studio included) to include
         # usage in the final streaming chunk, otherwise UI token counts stay 0.
-        stream_usage=True,
+        stream_usage=not llm_cfg.get("remote_enabled", False),
         max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-        extra_body=settings.LLM_EXTRA_BODY,
+        extra_body=answer_extra_body(llm_cfg),
+        http_client=httpx.Client(trust_env=False, follow_redirects=False),
+        http_async_client=httpx.AsyncClient(trust_env=False, follow_redirects=False),
         timeout=180,
         max_retries=0,
     )
