@@ -349,9 +349,8 @@ def manage_delete(request, slug):
             slugs += list(kb.children.values_list("slug", flat=True))
         from . import keyword_index
         for s in slugs:
-            chroma_dir = Path(settings.CHROMA_ROOT) / s
-            if chroma_dir.exists():
-                shutil.rmtree(chroma_dir, ignore_errors=True)
+            from .retriever import reset_kb_collection
+            reset_kb_collection(s)
             md_dir = Path(settings.MD_ROOT) / s
             if md_dir.exists():
                 shutil.rmtree(md_dir, ignore_errors=True)
@@ -429,6 +428,26 @@ def doc_desc_update(request, slug, doc_id):
     return JsonResponse({"ok": True, "description": doc.description})
 
 
+@_is_manager
+@login_required
+@require_http_methods(["POST"])
+def doc_retry(request, slug, doc_id):
+    from . import access as kb_access
+    from django.utils import timezone
+    kb = get_object_or_404(KnowledgeBase, slug=slug)
+    if not kb_access.can_manage_kb(request.user, kb):
+        raise Http404("知识库不存在")
+    doc = get_object_or_404(Document, id=doc_id, kb__in=_scope_kb_ids(kb))
+    changed = Document.objects.filter(id=doc.id, status=Document.Status.FAILED).update(
+        status=Document.Status.PENDING, error_msg="", stage_detail="排队中，等待从保存进度继续", updated_at=timezone.now())
+    if not changed:
+        return JsonResponse({"ok": False, "message": "文档已在处理或已完成，请勿重复重试"}, status=409)
+    from .pipeline import process_document_async
+    process_document_async(doc.id)
+    messages.success(request, "已加入队列，将从保存进度继续处理。")
+    return redirect("kb:manage_detail", slug=slug)
+
+
 def doc_delete(request, slug, doc_id):
     """删除某知识库下的一份文档（文件夹则跨其所有子库查找）。
 
@@ -484,9 +503,8 @@ def doc_delete(request, slug, doc_id):
     #    否则重算该子库的缓存。
     child_purged = False
     if kb.is_folder and doc_kb.parent_id == kb.id and not doc_kb.documents.exists():
-        chroma_dir = Path(settings.CHROMA_ROOT) / doc_kb.slug
-        if chroma_dir.exists():
-            shutil.rmtree(chroma_dir, ignore_errors=True)
+        from .retriever import reset_kb_collection
+        reset_kb_collection(doc_kb.slug)
         doc_kb.delete()
         child_purged = True
 
@@ -748,6 +766,12 @@ def doc_status_api(request, slug):
     kb = get_object_or_404(KnowledgeBase, slug=slug)
     if not kb_access.can_manage_kb(request.user, kb):
         raise Http404("知识库不存在")
+    def document_progress(doc):
+        if doc.status == "indexing":
+            match = re.search(r"正在向量化 (\d+)/(\d+)", doc.stage_detail or "")
+            if match and int(match[2]):
+                return min(95, 30 + int(65 * int(match[1]) / int(match[2])))
+        return PROGRESS_MAP.get(doc.status, 0)
     docs_data = [
         {
             "id": str(d.id),
@@ -756,7 +780,7 @@ def doc_status_api(request, slug):
             "status": d.status,
             "status_display": d.get_status_display(),
             "stage_detail": d.stage_detail or "",
-            "progress": PROGRESS_MAP.get(d.status, 0),
+            "progress": document_progress(d),
             "chunk_count": d.chunk_count,
             "error": d.error_msg[:100] if d.error_msg else "",
             "desc": d.description or "",
@@ -1063,6 +1087,12 @@ def _route_kb_by_question(message: str, user):
                 score = max(score, len(n))
                 continue
             stem = re.sub(r"\.[a-z0-9]+$", "", n)
+            # A model prefix and a document suffix are not part of the device
+            # name: FL-8B漂流 使用说明书 -> 漂流. No equipment alias dictionary.
+            for phrase in re.findall(r"[\u4e00-\u9fff]+", stem):
+                subject = re.sub(r"(?:使用说明书|操作手册|维护手册|说明书|手册)$", "", phrase)
+                if len(subject) >= 2 and subject not in {"使用", "操作", "维护", "测试", "通用"} and subject in text:
+                    score = max(score, min(len(subject), 8))
             for tok in re.split(r"[^0-9a-z\u4e00-\u9fff]+", stem):
                 if not tok:
                     continue
@@ -1731,6 +1761,38 @@ def site_settings(request):
 
     if request.method == "POST":
         action = request.POST.get("action", "save")
+
+        if action == "all_remote_toggle":
+            value = request.POST.get("enabled")
+            if value not in {"0", "1"}:
+                return JsonResponse({"ok": False, "message": "开关值无效"}, status=400)
+            cfg.all_remote_apis_enabled = value == "1"
+            cfg.save(update_fields=["all_remote_apis_enabled"])
+            get_config()  # Apply the new allowlist immediately in this process.
+            msg = "全部远程 API 已开启。" if cfg.all_remote_apis_enabled else "总开关已关闭；LLM 恢复使用独立开关，其他服务恢复本机限制。"
+            if is_ajax:
+                return _json_response(True, msg)
+            messages.success(request, msg)
+            return redirect("kb:settings")
+
+        if action == "llm_remote_toggle":
+            if cfg.all_remote_apis_enabled:
+                return JsonResponse({"ok": False, "message": "请先关闭页面顶部的全部 API 总开关"}, status=400)
+            value = request.POST.get("enabled")
+            if value not in {"0", "1"}:
+                return JsonResponse({"ok": False, "message": "开关值无效"}, status=400)
+            cfg.llm_remote_enabled = value == "1"
+            # Editing only this switch must not overwrite endpoints or keys,
+            # or silently mutate a named reusable preset.
+            cfg.active_preset_llm = ""
+            cfg.save(update_fields=["llm_remote_enabled", "active_preset_llm"])
+            from .config import llm_settings
+            llm_settings()  # Refresh the process network boundary immediately.
+            msg = "远程／局域网 API 已" + ("开启" if cfg.llm_remote_enabled else "关闭") + "，已保存为当前自定义配置。"
+            if is_ajax:
+                return _json_response(True, msg)
+            messages.success(request, msg)
+            return redirect("kb:settings")
 
         # ---- 保存为预设（按分类）：只存该分类的字段 ----
         if action == "preset_save":

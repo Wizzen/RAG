@@ -7,25 +7,35 @@ import threading
 from urllib.parse import urlsplit
 
 _lock = threading.RLock()
-_endpoint = None
+_endpoints = frozenset()
 _addresses = set()
 
-def configure_answer_endpoint(url, enabled=False):
-    """Opt in to one server-side answer endpoint; all other egress stays blocked."""
-    global _endpoint
-    parsed = urlsplit(url or "")
-    endpoint = None
-    if enabled and parsed.scheme in {"http", "https"} and parsed.hostname:
-        endpoint = (parsed.hostname.lower(), parsed.port or (443 if parsed.scheme == "https" else 80))
+
+def configure_api_endpoints(urls):
+    """Replace the process allowlist with explicitly configured API endpoints."""
+    global _endpoints
+    endpoints = set()
+    for url in urls:
+        try:
+            parsed = urlsplit(url or "")
+            if parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username and not parsed.password:
+                endpoints.add((parsed.hostname.lower(), parsed.port or (443 if parsed.scheme == "https" else 80)))
+        except ValueError:
+            continue
+    endpoints = frozenset(endpoints)
     with _lock:
-        if endpoint != _endpoint:
-            _endpoint = endpoint
+        if endpoints != _endpoints:
+            _endpoints = endpoints
             _addresses.clear()
+
+
+def configure_answer_endpoint(url, enabled=False):
+    configure_api_endpoints([url] if enabled else [])
+
 
 def _allowed(host, port):
     with _lock:
-        return (host, port) == _endpoint or (host, port) in _addresses
-
+        return (host, port) in _endpoints or (host, port) in _addresses
 
 
 def _host(value):
@@ -65,17 +75,17 @@ def install():
         name = _host(host)
         port = args[0] if args else kwargs.get("port")
         with _lock:
-            endpoint = _endpoint
-        approved = endpoint is not None and (name, port) == endpoint
+            endpoints = _endpoints
+        approved = (name, port) in endpoints
         if name not in {None, "", "localhost"} and not approved:
             try:
                 ipaddress.ip_address(name)
             except ValueError as exc:
-                raise PermissionError("离线运行：禁止查询外部域名；请先启用远程回答 API") from exc
+                raise PermissionError("离线运行：禁止查询外部域名；请先启用远程 API") from exc
         records = getaddrinfo(host, *args, **kwargs)
         if approved:
             with _lock:
-                if endpoint == _endpoint:
+                if endpoints == _endpoints:
                     _addresses.update((record[4][0], record[4][1]) for record in records)
         return records
 

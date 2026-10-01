@@ -224,7 +224,8 @@ def _kb_tree_text(dept_filter: dict) -> str:
 
 def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkpointer,
                  citations: list | None = None, department: str = "",
-                 evidence: list | None = None, allowed_kb_slugs: list | None = None):
+                 evidence: list | None = None, allowed_kb_slugs: list | None = None,
+                 overview: bool = False):
     """为指定 KB + thread 构建一个 create_agent。
 
     llm_cfg / top_k / department 由调用方在同步上下文中解析后传入，避免在 async
@@ -538,7 +539,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 
     def kb_fetch_doc(
         kb_slug: str = "", source: str = "", section: str = "",
-        contains: str = "", limit: int = 40,
+        contains: str = "", limit: int = 40, overview: bool = False,
     ) -> str:
         """按条件提取一个文档库的全部匹配片段（不做相似度检索，按文档顺序返回）。
 
@@ -558,6 +559,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             contains: 只保留正文含该子串的片段。例如 contains='受力部件' 可抓全一张
                       散落多块的表（即便某些块的 section 元数据缺失也能命中）。
             limit: 最多返回片段数（控制 token 用量，默认 40）。
+            overview: 整本手册概览时按章节均衡取证，避免只读取开头或相似度命中。
         """
         from .retriever import fetch_doc as _fetch_doc
         target = kb_slug or kb_slug_default
@@ -574,8 +576,25 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                     f"请先用 list_knowledge_bases 找到其下的文档库 slug，再用该 slug 调用本工具。")
 
         try:
-            results = _fetch_doc(target, source=source, section=section,
-                                 contains=contains, limit=limit)
+            coverage = []
+            if overview:
+                from .keyword_index import get_chunks
+                from .manual_overview import select_overview
+                from .models import Document
+                results = []
+                for doc in Document.objects.filter(kb=target_kb, status=Document.Status.COMPLETED):
+                    if source and doc.original_name != source:
+                        continue
+                    rows = [dict(row, source=doc.original_name, doc_id=str(doc.pk))
+                            for row in get_chunks(target, doc.original_name)]
+                    selected, headings = select_overview(rows)
+                    results.extend(selected)
+                    import re as _re
+                    original_headings = _re.findall(r'^#{1,6}\s+(.+)$', doc.md_content or '', _re.M)
+                    coverage.append(doc.original_name + '：' + ' / '.join(dict.fromkeys(original_headings or headings)))
+            else:
+                results = _fetch_doc(target, source=source, section=section,
+                                     contains=contains, limit=limit)
         except Exception as e:
             return f"提取失败（库 {target}）：{e}"
         if not results:
@@ -667,6 +686,10 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             f"（整段提取，非相似度排序；按文档原序拼接，可能含 OCR 噪声）。"
             f"\n筛选: {', '.join(cond) or '全部'}"
         )
+        if overview:
+            header += ('\n章节索引（仅标题，不能据此推断具体要求）：\n' + '\n'.join(coverage) +
+                       '\n这是目录与章节代表片段，不是全文。逐章介绍涵盖内容，不罗列未经核对的数值；'
+                       '不得把分别适用于不同对象的上限改写成通用范围。未覆盖章节只列标题并说明未展开。')
         return header + "\n\n" + "\n\n".join(blocks)
 
     def tracker_lookup(query: str = "", kb_slug: str = "") -> str:
@@ -791,10 +814,26 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 
     # 复用进程级持久化 checkpointer；thread_id（在 thread_config 里）区分不同会话
     from .agent_budget import RetrievalBudget
+    if overview:
+        from .models import KnowledgeBase
+        target = KnowledgeBase.objects.get(slug=kb_slug_default)
+        slugs = target.child_doc_slugs() if target.is_folder else [target.slug]
+        # A folder may contain many manuals; do not silently exceed model
+        # context. Ask for a particular document instead of a partial overview.
+        if len(slugs) > 1:
+            system_prompt += '\n本轮请求手册概览，但当前文件夹有多份资料。先列出可见文档名，请用户指定一本；不要混合生成一本手册的总结。'
+        preload = [kb_fetch_doc(kb_slug=slug, overview=True) for slug in slugs if len(slugs) == 1
+                   if allowed_scope is None or slug in allowed_scope]
+        system_prompt += ('\n本轮为整本手册概览，以下由后端预取的原文证据已计入出处及核对。'
+                          '回答聚焦“手册包含哪些内容”，按主题简要介绍，覆盖前后章节，约500字。'
+                          '不要罗列具体设备参数、使用年限、维护频率或厂家地址联系方式；'
+                          '这些需要专项问题逐项核对，OCR错位数字不可用于概览。'
+                          '只按所列目录与原文介绍主题，不自行展开未获取的条款，禁止用其他手册替代：\n' + '\n'.join(preload))
     return create_agent(
         middleware=[RetrievalBudget()],
         model=_get_llm(llm_cfg),
-        tools=([list_knowledge_bases, kb_search, kb_fetch_doc, tracker_lookup, request_verified_export]
+        tools=([] if overview and len(slugs) == 1 else
+               [list_knowledge_bases, kb_search, kb_fetch_doc, tracker_lookup, request_verified_export]
                if llm_cfg.get("qa_enhance") else
                [list_knowledge_bases, kb_search, kb_fetch_doc, tracker_lookup, write_analysis]),
         system_prompt=system_prompt + ("\n增强模式：必须检索原文；历史回答只帮助理解，不是事实依据。展示有出处的文本或 Markdown 表格。需导出时调用 request_verified_export 并在最终回答给出一个完整表格。仅在核对通过后生成 CSV，不得声称文件已经生成。此模式不执行自由生成脚本。台账建议和视觉推断须回原文检索核对。" if llm_cfg.get("qa_enhance") else ""),
@@ -820,6 +859,12 @@ async def run_agent_stream(
             cfg = config["llm"]
             top_k = config["top_k"]
             department = config.get("department") or ""
+        from .manual_overview import is_manual_overview
+        overview = is_manual_overview(message)
+        # A whole-manual answer spans many sections: verify the bounded draft
+        # even if ordinary explanatory streaming is enabled in site settings.
+        if overview:
+            cfg = dict(cfg, qa_enhance=True)
         enhance = bool(cfg.get("qa_enhance"))
         # Rebuild each turn from bounded published history. Old checkpoints can
         # retain tens of thousands of tool tokens and resume interrupted work.
@@ -839,7 +884,9 @@ async def run_agent_stream(
         # 改写/拆解问题注入 agent 输入；闲聊或规划失败 → 跳过，不影响主流程
         agent_input = message
         enhance = bool(cfg.get("qa_enhance"))
-        if enhance:
+        from .manual_overview import is_manual_overview
+        overview = is_manual_overview(message)
+        if enhance and not overview:
             yield SSE_STEP, {"stage": "query_plan", "status": "start"}
             from .qa_steps import plan_query
             plan_text, p_usage = await plan_query(cfg, message, history=(config or {}).get("published_history", []))
@@ -856,9 +903,11 @@ async def run_agent_stream(
                 yield SSE_STEP, {"stage": "query_plan", "status": "skip",
                                  "detail": "无需规划（闲聊）或规划不可用"}
 
-        agent = _build_agent(kb_slug, thread_id, cfg, top_k, checkpointer,
+        from asgiref.sync import sync_to_async
+        agent = await sync_to_async(_build_agent)(kb_slug, thread_id, cfg, top_k, checkpointer,
                              citations=citations, department=department,
-                             evidence=evidence, allowed_kb_slugs=(config or {}).get("allowed_kb_slugs"))
+                             evidence=evidence, allowed_kb_slugs=(config or {}).get("allowed_kb_slugs"),
+                             overview=overview)
         # recursion_limit 是顶层 key（不在 configurable 内）。
         # 每次工具调用 ≈ 2 个节点（agent + tool）。取完整表格时可能用到
         # list_kb + kb_search×2 + kb_fetch_doc×4 + write_analysis ≈ 8 次调用，
@@ -1021,6 +1070,15 @@ async def run_agent_stream(
                 max_out = max(max_out, v_usage["output_tokens"])
             source_ok = source_ok and await sync_to_async(validate_sources)(evidence, (config or {}).get("user_id"))
             ok = source_ok and verdict is not None and verdict.get("verdict") == "pass"
+            if overview and source_ok and not ok:
+                # A rejected semantic draft is never published. A useful,
+                # deterministic chapter inventory can still be sourced exactly
+                # from the currently visible manual, without model inference.
+                from .manual_overview import outline_answer
+                fallback = await sync_to_async(outline_answer)(evidence)
+                if fallback:
+                    answer_text = fallback
+                    ok = True
             yield SSE_STEP, {"stage": "answer_verification", "status": "done", "ok": ok}
             # Never return verifier prose: it may repeat the rejected parameter.
             yield SSE_VERIFY, {"ok": ok, "issues": [] if ok else ["证据不足、来源已变化或核对未通过，未发布草稿。"]}

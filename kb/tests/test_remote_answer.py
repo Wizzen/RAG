@@ -90,3 +90,74 @@ class RemoteAnswerTests(TestCase):
         check_connection(("192.168.1.100", 1234))
         with self.assertRaises(PermissionError):
             check_connection(("192.168.1.100", 1235))
+
+    def test_visible_switch_saves_only_permission_and_preserves_preset(self):
+        from kb.models import ConfigPreset
+        cfg = self.config(False)
+        c = SiteConfig.get()
+        c.active_preset_llm = "saved-remote"
+        c.save()
+        preset = ConfigPreset.objects.create(name="saved-remote", category="llm", data={"llm_remote_enabled": False})
+        user = get_user_model().objects.create_user("toggle-admin", is_staff=True)
+        self.client.force_login(user)
+        for enabled in ("1", "0"):
+            response = self.client.post(reverse("kb:settings"), {"action": "llm_remote_toggle", "enabled": enabled}, follow=True)
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, 'class="cfg-remote-control"')
+            self.assertContains(response, 'aria-pressed="' + ("true" if enabled == "1" else "false") + '"')
+            c.refresh_from_db()
+            self.assertEqual(c.llm_remote_enabled, enabled == "1")
+            self.assertEqual(c.llm_base_url, cfg["base_url"])
+            self.assertEqual(c.llm_api_key, cfg["api_key"])
+            self.assertEqual(c.llm_model, cfg["model"])
+            self.assertEqual(c.active_preset_llm, "")
+        preset.refresh_from_db()
+        self.assertFalse(preset.data["llm_remote_enabled"])
+        bad = self.client.post(reverse("kb:settings"), {"action": "llm_remote_toggle", "enabled": "invalid"})
+        self.assertEqual(bad.status_code, 400)
+
+    def test_visible_switch_cannot_be_changed_by_nonstaff(self):
+        self.config(False)
+        user = get_user_model().objects.create_user("regular-user")
+        self.client.force_login(user)
+        self.client.post(reverse("kb:settings"), {"action": "llm_remote_toggle", "enabled": "1"})
+        self.assertFalse(SiteConfig.get().llm_remote_enabled)
+
+    def test_all_api_switch_permissions_and_revocation(self):
+        from kb.config import embedding_settings, rerank_settings, mineru_settings
+        c = SiteConfig.get()
+        c.llm_remote_enabled = False
+        c.llm_base_url = 'http://192.168.1.10:8080/v1'
+        c.embedding_base_url = 'https://192.168.1.11:8081/v1'
+        c.rerank_base_url = 'http://192.168.1.12:8766/rerank'
+        c.mineru_api_base = 'http://192.168.1.13:8083'
+        c.save()
+        admin = get_user_model().objects.create_user('all-api-admin', is_staff=True)
+        self.client.force_login(admin)
+        response = self.client.post(reverse('kb:settings'), {'action': 'all_remote_toggle', 'enabled': '1'}, follow=True)
+        self.assertContains(response, '允许全部远程／局域网 API：已开启')
+        self.assertContains(response, '由顶部总开关开启')
+        self.assertTrue(llm_settings()['remote_enabled'])
+        for getter in (embedding_settings, rerank_settings, mineru_settings):
+            getter()
+            for address in [('192.168.1.10',8080), ('192.168.1.11',8081), ('192.168.1.12',8766), ('192.168.1.13',8083)]:
+                check_connection(address)
+        with self.assertRaises(PermissionError):
+            check_connection(('192.168.1.14', 8083))
+        self.assertEqual(self.client.post(reverse('kb:settings'), {'action': 'llm_remote_toggle', 'enabled': '0'}).status_code, 400)
+        self.client.post(reverse('kb:settings'), {'action': 'all_remote_toggle', 'enabled': '0'})
+        for address in [('192.168.1.10',8080), ('192.168.1.11',8081), ('192.168.1.12',8766), ('192.168.1.13',8083)]:
+            with self.assertRaises(PermissionError):
+                check_connection(address)
+        c.refresh_from_db()
+        self.assertEqual(c.mineru_api_base, 'http://192.168.1.13:8083')
+        self.assertFalse(c.llm_remote_enabled)
+        self.assertEqual(self.client.post(reverse('kb:settings'), {'action': 'all_remote_toggle', 'enabled': 'oops'}).status_code, 400)
+        self.client.logout()
+        self.client.post(reverse('kb:settings'), {'action': 'all_remote_toggle', 'enabled': '1'})
+        self.assertFalse(SiteConfig.get().all_remote_apis_enabled)
+
+    def test_master_off_preserves_explicit_llm_permission(self):
+        self.config(True)
+        self.assertTrue(llm_settings()['remote_enabled'])
+        check_connection(('api.example.com', 443))
