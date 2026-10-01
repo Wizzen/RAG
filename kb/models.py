@@ -290,6 +290,7 @@ class SiteConfig(models.Model):
     llm_temperature = models.FloatField("LLM 温度", null=True, blank=True)
     # 模型是否支持图片输入（视觉）。开启后 kb_search 命中图片时把图以
     # LangChain 多模态内容块随工具结果返回，模型可真正「看图」回答。
+    all_remote_apis_enabled = models.BooleanField("允许全部远程 API", default=False)
     llm_remote_enabled = models.BooleanField("允许远程回答 API", default=False)
     llm_vision = models.BooleanField("LLM 支持图片输入", default=False)
     # 问答管线增强：回答前先做「问题理解/改写」（query_plan），回答后用
