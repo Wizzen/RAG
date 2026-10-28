@@ -1185,6 +1185,7 @@ def process_document(doc_id: str) -> None:
         kb.save(update_fields=["doc_count", "chunk_count", "updated_at"])
 
         # 追踪表：库（或其父文件夹）启用了追踪 → 后台抽取关键信息登记
+        # 图谱提取由用户指定单一关注方面后启动，避免无方向的全书抽取。
         try:
             from . import tracker as _tracker
             _tracker.run_extraction_async(doc.id)

@@ -2,11 +2,16 @@
 from django.contrib.auth.decorators import login_required
 from django.urls import path
 
-from . import views
+from . import graph_views, views
 
 app_name = "kb"
 
 urlpatterns = [
+    path("graph/", graph_views.graph_view, name="graph"),
+    path("graph/action/", graph_views.graph_action, name="graph_action"),
+    path("graph/extraction/<int:job_id>/events/", graph_views.graph_events, name="graph_events"),
+    path("graph/fact/<int:relation_id>/", graph_views.graph_fact, name="graph_fact"),
+    path("graph/relation/<int:relation_id>/", graph_views.graph_relation, name="graph_relation"),
     # 管理页面（仅 staff）
     path("manage/", views.manage_list, name="manage_list"),
     path("manage/<slug:slug>/", views.manage_detail, name="manage_detail"),

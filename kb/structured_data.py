@@ -216,7 +216,12 @@ def guess_kind(combined_mapping: dict[str, list[str]]) -> str:
     return StructuredDataset.Kind.OTHER
 
 
-def import_structured_dataset(upload, kind: str, user=None) -> StructuredDataset:
+@transaction.atomic
+def import_structured_dataset(upload, kind: str, user=None, kb=None) -> StructuredDataset:
+    if kb is not None:
+        from .access import can_manage_kb
+        if not can_manage_kb(user, kb):
+            raise StructuredDataError("没有管理该知识库的权限。")
     valid_kinds = {value for value, _label in StructuredDataset.Kind.choices}
     if kind and kind not in valid_kinds:
         raise StructuredDataError("请选择正确的数据类型。")
@@ -227,16 +232,6 @@ def import_structured_dataset(upload, kind: str, user=None) -> StructuredDataset
 
     source_name = Path(upload.name).name[:255]
     checksum = hashlib.sha256(payload).hexdigest()
-    duplicate = StructuredDataset.objects.filter(
-        kind=kind, checksum=checksum, active=True,
-    ).first()
-    if duplicate:
-        raise StructuredDataError(f"相同文件已经导入：{duplicate.source_name}")
-
-    StructuredDataset.objects.filter(
-        kind=kind, source_name=source_name, active=True,
-    ).update(active=False)
-
     combined_mapping: dict[str, list[str]] = defaultdict(list)
     for _sheet, _row_number, _data, mapping in rows:
         for canonical, header in mapping.items():
@@ -246,6 +241,15 @@ def import_structured_dataset(upload, kind: str, user=None) -> StructuredDataset
     if not kind:
         kind = guess_kind(combined_mapping)
 
+    duplicate = StructuredDataset.objects.filter(
+        kind=kind, checksum=checksum, active=True, kb=kb,
+    ).first()
+    if duplicate:
+        raise StructuredDataError(f"相同文件已经导入：{duplicate.source_name}")
+    StructuredDataset.objects.filter(
+        kind=kind, source_name=source_name, active=True, kb=kb,
+    ).update(active=False)
+
     dataset = StructuredDataset.objects.create(
         name=Path(source_name).stem[:160],
         kind=kind,
@@ -253,6 +257,7 @@ def import_structured_dataset(upload, kind: str, user=None) -> StructuredDataset
         checksum=checksum,
         row_count=len(rows),
         mapping=dict(combined_mapping),
+        kb=kb,
         imported_by=user if getattr(user, "is_authenticated", False) else None,
     )
 
@@ -279,6 +284,9 @@ def import_structured_dataset(upload, kind: str, user=None) -> StructuredDataset
             raw_data=data,
         ))
     StructuredRecord.objects.bulk_create(records, batch_size=1000)
+    if kb is not None:
+        from .knowledge_graph import seed_dataset
+        seed_dataset(dataset)
     return dataset
 
 
@@ -314,6 +322,10 @@ def lookup_related(query_text: str, department: str = "") -> dict[str, Any]:
         }
 
     base = StructuredRecord.objects.filter(dataset__active=True).select_related("dataset")
+    if department:
+        from .models import DEPARTMENT_GENERAL
+        base = base.filter(Q(dataset__kb__isnull=True) | Q(
+            dataset__kb__department__in=[DEPARTMENT_GENERAL, department]))
     records = list(base.filter(_direct_lookup_query(normalized))[:500])
     match_mode = "exact"
     if not records:

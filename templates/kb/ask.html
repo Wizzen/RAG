@@ -798,6 +798,14 @@ except ImportError:
     imgRow.className = 'cite-imgs';
     let shown = 0;
     citations.forEach((c) => {
+      if (c.kind === 'graph' && c.relation_id && c.fact_digest) {
+        const link = document.createElement('a');
+        link.className = 'cite-chip'; link.target = '_blank'; link.rel = 'noopener';
+        link.href = '/kb/graph/fact/' + encodeURIComponent(c.relation_id) + '/?v=' + encodeURIComponent(c.fact_digest);
+        link.textContent = '◇ ' + (c.source || '图谱原始依据').slice(0, 45);
+        link.title = c.label || '查看已核对的关系与原始来源';
+        row.appendChild(link); shown++; return;
+      }
       if (!c.doc_id) return;  // 无 doc_id 无法链接
       // 文档名：取文件名去扩展名，太长截断
       let name = (c.source || '文档').replace(/\.[^.]+$/, '');
@@ -1020,7 +1028,9 @@ except ImportError:
         runCodeInSandbox(payload.code || '', payload.filename || 'analysis.xlsx', am, payload.aid || '');
       } else if (etype === 'citations') {
         // 累积本轮来源出处（流结束后渲染可点击链接）
-        turnCitations = Array.from(new Map(turnCitations.concat(payload.citations || []).map(c => [c.doc_id, c])).values());
+        turnCitations = Array.from(new Map(turnCitations.concat(payload.citations || []).map(c => [
+          c.kind === 'graph' ? 'graph:' + c.relation_id + ':' + c.fact_digest : 'document:' + c.doc_id, c
+        ])).values());
       } else if (etype === 'step') {
         // 管线阶段（问题理解/检索/生成/核对）
         handleStep(payload);

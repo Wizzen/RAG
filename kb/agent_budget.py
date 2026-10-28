@@ -27,7 +27,7 @@ class RetrievalBudget(AgentMiddleware):
         if rounds < self.max_rounds and not repeated:
             return request
         original = request.system_message.content if request.system_message else ''
-        instruction = ('\n检索阶段已结束。只能使用本轮工具返回的原文证据回答当前问题；'
+        instruction = ('\n检索阶段已结束。只能使用本轮工具返回的原文证据或已核对的图谱事实回答当前问题；'
                        '禁止继续调用工具、补写不存在的数据或把旧答案当事实。'
                        '若当前对象不明确，直接请求用户确认；若资料不足，明确列出缺失项。'
                        '不要声称已完成完整比较，除非各方资料都支持；请用简洁中文给出最终回答。')

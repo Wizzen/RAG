@@ -252,6 +252,11 @@ def manage_list(request):
     kbs = list(_kb_qs)
     from .models import StructuredDataset
     datasets = StructuredDataset.objects.filter(active=True).order_by("kind", "-created_at")
+    if not kb_access.is_global_admin(request.user):
+        from django.db.models import Q
+        from .models import DEPARTMENT_GENERAL
+        datasets = datasets.filter(Q(kb__isnull=True) | Q(
+            kb__department__in=[DEPARTMENT_GENERAL, kb_access.user_department(request.user)]))
     # 部门池（用户 ∪ 知识库；新部门唯一入口 = 用户管理页），表单只能从中选
     departments = kb_access.all_departments()
     return render(request, "kb/manage_list.html", {
@@ -290,7 +295,7 @@ def manage_detail(request, slug):
                 from .structured_data import (
                     FIELD_LABELS, StructuredDataError, import_structured_dataset,
                 )
-                dataset = import_structured_dataset(upload, "", request.user)
+                dataset = import_structured_dataset(upload, "", request.user, kb=kb)
                 mapped = "、".join(
                     label for key, label in FIELD_LABELS.items() if key in dataset.mapping
                 ) or "未识别到标准关联字段（原始列已保留）"
@@ -1291,8 +1296,9 @@ async def chat_stream(request):
                     elif event_type == "token":
                         ai_chunks.append(payload.get("text", ""))
                     elif event_type == "citations":
-                        merged = {c.get("doc_id"): c for c in turn_citations}
-                        merged.update({c.get("doc_id"): c for c in (payload.get("citations") or [])})
+                        from .publication import citation_key
+                        merged = {citation_key(c): c for c in turn_citations}
+                        merged.update({citation_key(c): c for c in (payload.get("citations") or [])})
                         turn_citations[:] = list(merged.values())
                     elif event_type == "verify":
                         turn_verify = payload
@@ -1534,6 +1540,9 @@ def search_view(request):
         StructuredDataset.objects.filter(active=True)
         .select_related("imported_by").order_by("kind", "-created_at")
     )
+    from django.db.models import Q
+    from .models import DEPARTMENT_GENERAL
+    datasets = datasets.filter(Q(kb__isnull=True) | Q(kb__department__in=[DEPARTMENT_GENERAL, user_dept]))
     return render(request, "kb/asset_lookup.html", {
         "q": q,
         "lookup": lookup,

@@ -13,6 +13,25 @@ from kb.models import Document, KnowledgeBase
 
 
 class PublicationStreamTests(SimpleTestCase):
+    def test_graph_tool_forces_private_draft_even_when_enhance_off(self):
+        class FakeAgent:
+            async def astream_events(self, *args, **kwargs):
+                yield {'event': 'on_tool_start', 'name': 'kb_graph_search', 'data': {}}
+                yield {'event': 'on_chat_model_start', 'data': {}}
+                yield {'event': 'on_chat_model_stream', 'data': {'chunk': SimpleNamespace(content='PRIVATE GRAPH FACT')}}
+                yield {'event': 'on_chat_model_end', 'data': {'output': SimpleNamespace(
+                    content='PRIVATE GRAPH FACT', tool_calls=[], response_metadata={'finish_reason': 'stop'})}}
+        def build(*args, **kwargs):
+            kwargs['evidence'].append({'kind': 'graph', 'text': 'source'})
+            return FakeAgent()
+        async def collect():
+            return [ev async for ev in run_agent_stream('E-1?', 'graph', 'graph',
+                {'llm': {'qa_enhance': False}, 'top_k': 5, 'user_id': 1})]
+        with patch('kb.agent._build_agent', side_effect=build), patch('kb.publication.validate_sources', return_value=False):
+            events = asyncio.run(collect())
+        self.assertNotIn('PRIVATE GRAPH FACT', repr(events))
+        self.assertTrue(any(kind == 'verify' and not body['ok'] for kind, body in events))
+
     async def collect(self, verdict='pass', *, enhance=True, truncated=False, revoked=False, question='value?'):
         class FakeAgent:
             async def astream_events(self, *args, **kwargs):

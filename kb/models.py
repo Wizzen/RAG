@@ -512,6 +512,10 @@ class StructuredDataset(models.Model):
     row_count = models.PositiveIntegerField("数据行数", default=0)
     mapping = models.JSONField("识别到的字段映射", default=dict, blank=True)
     active = models.BooleanField("当前版本", default=True, db_index=True)
+    kb = models.ForeignKey(
+        KnowledgeBase, on_delete=models.CASCADE, null=True, blank=True,
+        related_name="structured_datasets", verbose_name="所属知识库",
+    )
     imported_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="structured_datasets",
@@ -560,3 +564,99 @@ class StructuredRecord(models.Model):
     def __str__(self):
         key = self.drawing_no or self.part_no or self.g_code or self.equipment
         return key or f"{self.dataset.source_name}:{self.row_number}"
+
+
+class GraphExtraction(models.Model):
+    """文档自动抽取的进度与版本；失败可重试，已有审核结论保留。"""
+
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="graph_extractions")
+    focus = models.TextField("本次关注方面", blank=True, default="")
+    source_digest = models.CharField(max_length=64, blank=True)
+    status = models.CharField(max_length=20, default="pending")
+    done = models.PositiveIntegerField(default=0)
+    total = models.PositiveIntegerField(default=0)
+    created_relations = models.PositiveIntegerField(default=0)
+    rejected = models.PositiveIntegerField(default=0)
+    error = models.TextField(blank=True)
+    coverage = models.JSONField("正文扫描覆盖情况", default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class GraphExtractionEvent(models.Model):
+    """自动抽取的可重放活动记录；模型文本仅作未审核输出展示。"""
+
+    extraction = models.ForeignKey(GraphExtraction, on_delete=models.CASCADE, related_name="events")
+    kind = models.CharField("事件类型", max_length=24)
+    payload = models.JSONField("事件内容", default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+        indexes = [models.Index(fields=["extraction", "id"], name="graph_event_cursor")]
+        verbose_name = "图谱抽取活动"
+        verbose_name_plural = "图谱抽取活动"
+
+
+class GraphEntity(models.Model):
+    """领域无关实体；知识库、类型和业务作用域共同限定身份。"""
+
+    kb = models.ForeignKey(KnowledgeBase, on_delete=models.CASCADE, related_name="graph_entities")
+    kind = models.CharField("实体类型", max_length=60)
+    namespace = models.CharField("业务作用域", max_length=255, default="")
+    key = models.CharField("规范编号", max_length=255)
+    label = models.CharField("显示名称", max_length=255)
+    aliases = models.JSONField("别名", default=list, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["kb", "kind", "namespace", "key"], name="graph_entity_identity")]
+        verbose_name = "图谱实体"
+        verbose_name_plural = "图谱实体"
+
+    def __str__(self):
+        return self.label
+
+
+class GraphRelation(models.Model):
+    """带审核状态的有向关系；独立于 embedding 和 chunk 身份。"""
+
+    class Status(models.TextChoices):
+        CANDIDATE = "candidate", "待核对"
+        VERIFIED = "verified", "已核对"
+        REJECTED = "rejected", "已拒绝"
+
+    subject = models.ForeignKey(GraphEntity, on_delete=models.CASCADE, related_name="outgoing")
+    predicate = models.CharField("关系类型", max_length=60)
+    object = models.ForeignKey(GraphEntity, on_delete=models.CASCADE, related_name="incoming")
+    identity = models.CharField("来源身份", max_length=64, unique=True)
+    extraction = models.ForeignKey(GraphExtraction, on_delete=models.SET_NULL, null=True, blank=True)
+    qualifiers = models.JSONField("适用条件", default=dict, blank=True)
+    origin_record = models.ForeignKey(StructuredRecord, on_delete=models.CASCADE, null=True, blank=True)
+    status = models.CharField("审核状态", max_length=20, choices=Status.choices, default=Status.CANDIDATE)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["status", "subject"])]
+        verbose_name = "图谱关系"
+        verbose_name_plural = "图谱关系"
+
+
+class GraphEvidence(models.Model):
+    """关系的原始证据；重建向量无需重建事实，来源变更则失效。"""
+
+    relation = models.ForeignKey(GraphRelation, on_delete=models.CASCADE, related_name="evidence")
+    record = models.ForeignKey(StructuredRecord, on_delete=models.CASCADE, null=True, blank=True)
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, null=True, blank=True)
+    quote = models.TextField("原文证据")
+    chunks = models.JSONField("原文定位", default=list, blank=True)
+    source_digest = models.CharField("来源版本", max_length=64)
+
+    class Meta:
+        constraints = [models.CheckConstraint(
+            condition=(models.Q(record__isnull=False, document__isnull=True)
+                       | models.Q(record__isnull=True, document__isnull=False)),
+            name="graph_evidence_one_source")]
+        verbose_name = "图谱证据"
+        verbose_name_plural = "图谱证据"

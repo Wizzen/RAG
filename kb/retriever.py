@@ -132,6 +132,31 @@ def _fuse_key(text: str) -> str:
 RRF_K = 60
 
 
+def _result_key(row: dict) -> str:
+    """保留库、文档和块身份，不能把不同文档的相同文字合并成一份证据。"""
+    return "\0".join((row.get("kb_slug", ""), row.get("source", ""),
+                       row.get("chunk_id") or _fuse_key(row.get("text", "")),
+                       row.get("image", "")))
+
+
+def _merge_graph(fused: dict, scope_slugs: list[str], document_slugs: list[str],
+                 query: str, limit: int) -> None:
+    """图谱作为可降级的第三路召回，共享 RRF；只返回真实原文块。"""
+    try:
+        from .knowledge_graph import retrieve_passages
+        rows = retrieve_passages(scope_slugs, document_slugs, query, limit=limit)
+        for rank, row in enumerate(rows, 1):
+            item = fused.setdefault(_result_key(row), {**row, "score": 0.0, "via": set()})
+            via = item["via"]
+            via = set(via.split("+")) if isinstance(via, str) else via
+            if "graph" not in via:
+                item["score"] += 1.0 / (RRF_K + rank)
+            item["via"] = via | {"graph"}
+            item["graph_paths"] = list(dict.fromkeys(item.get("graph_paths", []) + row["graph_paths"]))
+    except Exception:
+        logging.getLogger(__name__).warning("图谱召回失败（继续常规检索）", exc_info=True)
+
+
 def search(kb_slug: str, query: str, k: int | None = None,
            query_embedding: list[float] | None = None,
            rerank_enabled: bool = True) -> list[dict[str, Any]]:
@@ -147,11 +172,11 @@ def search(kb_slug: str, query: str, k: int | None = None,
     """
     k = k or retrieval_settings()["top_k"]
     recall = max(k * 3, 15)
-    vs = get_kb_vectorstore(kb_slug)
 
     # ---- 向量路 ----
     vec_docs: list[tuple[Any, dict]] = []
     try:
+        vs = get_kb_vectorstore(kb_slug)
         if query_embedding is None:
             query_embedding = vs.embeddings.embed_query(query)
         if query_embedding is not None:
@@ -181,7 +206,7 @@ def search(kb_slug: str, query: str, k: int | None = None,
     for rank, (doc, meta) in enumerate(vec_docs, start=1):
         # 图片块以「图+上下文」独立身份参与融合（同名图的上下文与文本块不同，
         # 但 page_content 可能与章节文本块相同 → 融合键必须带上图片名防撞）
-        key = _fuse_key(doc.page_content + (meta.get("image") or ""))
+        key = _result_key({**meta, "text": doc.page_content, "kb_slug": kb_slug})
         if key in seen_vec:
             continue
         seen_vec.add(key)
@@ -190,6 +215,7 @@ def search(kb_slug: str, query: str, k: int | None = None,
             "section": meta.get("section") or meta.get("drug_name") or "",
             "score": 0.0, "via": set(),
             "chunk_id": meta.get("chunk_id", ""),
+            "kb_slug": kb_slug,
         })
         if meta.get("type") == "image":
             item["type"] = "image"
@@ -198,17 +224,19 @@ def search(kb_slug: str, query: str, k: int | None = None,
         item["via"].add("vec")
     seen_kw: set[str] = set()
     for rank, row in enumerate(kw_rows, start=1):
-        key = _fuse_key(row["text"])
+        key = _result_key({**row, "kb_slug": kb_slug})
         if key in seen_kw:
             continue
         seen_kw.add(key)
         item = fused.setdefault(key, {
             "text": row["text"], "source": row["source"], "section": row["section"],
             "score": 0.0, "via": set(), "chunk_id": row.get("chunk_id", ""),
+            "kb_slug": kb_slug,
         })
         item["score"] += 1.0 / (RRF_K + rank)
         item["via"].add("kw")
 
+    _merge_graph(fused, [kb_slug], [kb_slug], query, recall)
     results = sorted(fused.values(), key=lambda r: r["score"], reverse=True)[:k]
 
     # ---- 重排序（可选）：RRF 融合序取前若干 → cross-encoder 精排 → 取 top_k。
@@ -247,7 +275,7 @@ def search(kb_slug: str, query: str, k: int | None = None,
         pass
 
     for r in results:
-        r["doc_id"] = name_to_id.get(r["source"], "")
+        r["doc_id"] = r.get("doc_id") or name_to_id.get(r["source"], "")
     return results
 
 
@@ -333,7 +361,8 @@ def _image_lane(slugs: list[str], query_embedding: list[float] | None,
 
 
 def search_folder(child_slugs: list[str], query: str, k: int | None = None,
-                  include_images: bool = False) -> list[dict[str, Any]]:
+                  include_images: bool = False,
+                  graph_scope_slugs: list[str] | None = None) -> list[dict[str, Any]]:
     """跨多个子文档库扇出检索：查询向量只嵌一次，各库本地召回（不精排）
     后合并去重，再对融合序做一次全局 rerank。
 
@@ -367,11 +396,13 @@ def search_folder(child_slugs: list[str], query: str, k: int | None = None,
     # 跨库去重：同一块（含图片块）只保留一次，RRF 分累加后统一排序
     fused: dict[str, dict[str, Any]] = {}
     for r in all_results:
-        key = _fuse_key(r.get("text", "") + (r.get("image") or ""))
+        key = _result_key(r)
         if key in fused:
             fused[key]["score"] = (fused[key].get("score", 0) or 0) + (r.get("score", 0) or 0)
         else:
             fused[key] = r
+    _merge_graph(fused, list(dict.fromkeys(child_slugs + (graph_scope_slugs or []))),
+                 child_slugs, query, max(k * 3, 15))
     results = sorted(fused.values(), key=lambda r: r["score"], reverse=True)[:k]
 
     # ---- 全局单次精排（失败/未启用降级融合序）----

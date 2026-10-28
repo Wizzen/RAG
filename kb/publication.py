@@ -8,6 +8,13 @@ def digest(text):
     return hashlib.sha256((text or '').encode('utf-8')).hexdigest()
 
 
+def citation_key(citation):
+    """文档和图谱引用使用独立身份，多个结构化来源不能因缺少 doc_id 被折叠。"""
+    if citation.get('kind') == 'graph':
+        return ('graph', str(citation.get('relation_id')), citation.get('fact_digest'))
+    return ('document', citation.get('doc_id'))
+
+
 def bind_evidence(results, kb_slug):
     from .models import ChunkProvenance, Document
     bound = []
@@ -48,6 +55,11 @@ def validate_sources(evidence, user_id):
     if user is None or not evidence:
         return False
     for ev in evidence:
+        if ev.get('kind') == 'graph':
+            from .knowledge_graph import validate_fact
+            if not validate_fact(ev, user):
+                return False
+            continue
         if not ev.get('doc_id') or not ev.get('chunk_id') or ev.get('kind') != 'text':
             return False
         doc = Document.objects.select_related('kb').filter(pk=ev['doc_id'], status=Document.Status.COMPLETED).first()
@@ -65,6 +77,15 @@ def visible_citations(citations, user):
     from django.core.exceptions import ValidationError
     from .keyword_index import get_chunks
     for citation in citations:
+        if citation.get('kind') == 'graph':
+            from .knowledge_graph import validate_fact
+            snapshot = citation.get('graph_snapshot')
+            if (not isinstance(snapshot, dict)
+                    or str(citation.get('relation_id')) != str(snapshot.get('relation_id'))
+                    or citation.get('fact_digest') != snapshot.get('fact_digest')
+                    or not validate_fact(snapshot, user)):
+                return False
+            continue
         try:
             doc = Document.objects.select_related('kb').filter(pk=citation.get('doc_id'), status=Document.Status.COMPLETED).first()
         except (ValueError, TypeError, ValidationError):

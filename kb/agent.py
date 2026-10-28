@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import traceback
 from functools import lru_cache
 from pathlib import Path
@@ -541,6 +542,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
     kb_slug_default = kb_slug  # 避免在 kb_search 内部与参数名冲突
     cite_sink = citations if citations is not None else []
     evidence_sink = evidence if evidence is not None else []
+    graph_used = False
 
     # 部门可见范围（空部门 = 不过滤，仅内部调试场景）
     if department:
@@ -599,6 +601,16 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 - 调用 write_analysis 后，简要说明你生成了什么、如何查看/下载。
 """
 
+    system_prompt += (
+        "\n知识图谱：用户询问明确编号的设备、部件、图纸之间的关系时，优先调用 kb_graph_search。"
+        "它返回人工核对的结构化关系及原始行，可直接回答该关系，无需为了有 chunk 再做向量检索。"
+        "只有返回的关系及适用条件已核对，原始行的其它字段不自动视为已核对事实；关系不代表永久或绝对真理。"
+        "ambiguous=true 时请用户指定设备，truncated=true 时明确结果不完整；没有命中不能推断关系不存在。"
+        "检修步骤、参数解释或图谱未覆盖的问题继续用 kb_search / kb_fetch_doc。"
+        "引用结构化事实时写来源文件、工作表和原始行号，不编造手册页码。"
+        "调用图谱后回答须核对通过才发布；导出只能使用 request_verified_export，不能调用 write_analysis。"
+    )
+
     def list_knowledge_bases() -> str:
         """列出所有可用的知识库（层级结构），供判断该检索哪个文档库。
 
@@ -607,6 +619,37 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         用文件夹的 slug 可跨其下所有文档库合并检索。
         """
         return _kb_tree_text(_dept_filter)
+
+    def kb_graph_search(query: str, kb_slug: str = "") -> str:
+        """查询已人工核对的明确关系和来源行；支持设备、部件、图纸编号及两跳路径。
+
+        未命中并不表示不存在；实体有歧义时请指定设备。维修步骤仍须查手册。
+        kb_slug 留空使用当前知识库，文件夹只包含权限范围内的子库。
+        """
+        nonlocal graph_used
+        graph_used = True
+        from .knowledge_graph import lookup_facts
+        from .models import KnowledgeBase
+        target = KnowledgeBase.objects.filter(slug=kb_slug or kb_slug_default).first()
+        if target is None or not _dept_allowed(target):
+            return "知识库不存在，请用 list_knowledge_bases 查看可选项。"
+        scopes = [target.slug]
+        if target.is_folder:
+            scopes.extend(child.slug for child in target.children.all() if _dept_allowed(child))
+        result = lookup_facts(scopes, query)
+        for snapshot in result["facts"]:
+            if snapshot not in evidence_sink:
+                evidence_sink.append(snapshot)
+            if not any(c.get("kind") == "graph" and c.get("relation_id") == snapshot["relation_id"]
+                       and c.get("fact_digest") == snapshot["fact_digest"] for c in cite_sink):
+                cite_sink.append({"kind": "graph", "relation_id": snapshot["relation_id"],
+                                  "fact_digest": snapshot["fact_digest"], "source": snapshot["source"],
+                                  "label": snapshot["label"], "graph_snapshot": snapshot})
+        return json.dumps({
+            "facts": [{"id": fact["relation_id"], "text": fact["text"]} for fact in result["facts"]],
+            "paths": result["paths"], "ambiguous": result["ambiguous"], "truncated": result["truncated"],
+            "notice": "仅关系与适用条件已人工核对。缺失不是否定证明；所有引用均为当前原始来源。",
+        }, ensure_ascii=False)
 
     def kb_search(query: str, k: int = 0, kb_slug: str = "") -> str:
         """检索知识库，返回带来源标注的相关片段（多模态：含文本与图片）。
@@ -647,7 +690,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                 child_slugs = list(KnowledgeBase.objects.filter(slug__in=child_slugs, **({"department__in": [DEPARTMENT_GENERAL, department]} if department else {})).values_list("slug", flat=True))
                 if not child_slugs:
                     return f"文件夹「{target}」下暂无文档库。"
-                results = _search_folder(child_slugs, query, k=k)
+                results = _search_folder(child_slugs, query, k=k, graph_scope_slugs=[target])
             else:
                 results = _search(target, query, k=k)
         except Exception as e:
@@ -781,7 +824,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
             blocks.append(f"[{i}] (来源文档: {src_full})\n{body}")
         header = (
             f"已从知识库「{target}」检索到 {len(results)} 条相关片段"
-            f"（向量相似度检索，非原文直读；片段可能不完整或含 OCR 噪声）。"
+            f"（向量、关键词及已核对图谱辅助召回；片段可能不完整或含 OCR 噪声）。"
         )
         text_out = header + "\n\n" + "\n\n".join(blocks)
         # 视觉模式补一道图片专用召回：图片块与文本查询存在模态鸿沟，混排时
@@ -1138,6 +1181,9 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         """
         import os as _os
 
+        if graph_used:
+            return "图谱事实须核对后发布；请改用 request_verified_export 请求受控 CSV 导出。"
+
         from . import analysis_runs
         aid = "an" + _os.urandom(4).hex()
         analysis_runs.register(aid)
@@ -1210,10 +1256,10 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         middleware=[RetrievalBudget()],
         model=_get_llm(llm_cfg),
         tools=([] if overview and len(slugs) == 1 else
-               [list_knowledge_bases, kb_search, kb_image_search, kb_fetch_doc, kb_neighbor_chunk, tracker_lookup, request_verified_export]
+               [list_knowledge_bases, kb_graph_search, kb_search, kb_image_search, kb_fetch_doc, kb_neighbor_chunk, tracker_lookup, request_verified_export]
                if llm_cfg.get("qa_enhance") else
-               [list_knowledge_bases, kb_search, kb_image_search, kb_fetch_doc, kb_neighbor_chunk, tracker_lookup, write_analysis, check_analysis]),
-        system_prompt=system_prompt + ("\n增强模式：必须检索原文；历史回答只帮助理解，不是事实依据。展示有出处的文本或 Markdown 表格。需导出时调用 request_verified_export 并在最终回答给出一个完整表格。仅在核对通过后生成 CSV，不得声称文件已经生成。此模式不执行自由生成脚本。台账建议和视觉推断须回原文检索核对。" if llm_cfg.get("qa_enhance") else ""),
+               [list_knowledge_bases, kb_graph_search, kb_search, kb_image_search, kb_fetch_doc, kb_neighbor_chunk, tracker_lookup, write_analysis, check_analysis, request_verified_export]),
+        system_prompt=system_prompt + ("\n增强模式：必须获取原文或已核对的图谱事实；历史回答只帮助理解，不是事实依据。展示有出处的文本或 Markdown 表格。需导出时调用 request_verified_export 并在最终回答给出一个完整表格。仅在核对通过后生成 CSV，不得声称文件已经生成。此模式不执行自由生成脚本。台账建议和视觉推断须回原文检索核对。" if llm_cfg.get("qa_enhance") else ""),
         checkpointer=checkpointer,
         name=f"kb_agent_{kb_slug}",
     )
@@ -1382,6 +1428,12 @@ async def run_agent_stream(
                 emitted_reasoning = False
 
             elif etype == "on_tool_start":
+                if name in ("kb_graph_search", "request_verified_export") and not enhance:
+                    # 结构化事实也需要发布闸门；站点关闭增强不代表可流出未核对的图谱草稿。
+                    enhance = True
+                    cfg = dict(cfg, qa_enhance=True)
+                    full_text = []
+                    public_text = AnswerText()
                 if not search_step_on:
                     search_step_on = True
                     yield SSE_STEP, {"stage": "hybrid_search", "status": "start"}
@@ -1471,7 +1523,10 @@ async def run_agent_stream(
                     yield SSE_VERIFY, {"ok": False, "issues": ["来源权限或内容已变化，请重新检索。"]}
             if ok:
                 for citation in citations:
-                    source = next((ev for ev in evidence if ev.get("doc_id") == citation.get("doc_id")), None)
+                    if citation.get("kind") == "graph":
+                        continue
+                    source = next((ev for ev in evidence if ev.get("doc_id")
+                                   and ev.get("doc_id") == citation.get("doc_id")), None)
                     if source:
                         citation["document_digest"] = source["document_digest"]
                 yield SSE_TOKEN, {"text": answer_text}
@@ -1533,6 +1588,7 @@ def _tool_label(name: str) -> str:
     return {
         "list_knowledge_bases": "查看可用知识库…",
         "kb_search": "检索知识库…",
+        "kb_graph_search": "查询已核对的图谱关系…",
         "kb_fetch_doc": "提取文档片段…",
         "write_analysis": "生成分析脚本…",
     }.get(name, f"调用工具 {name}…")

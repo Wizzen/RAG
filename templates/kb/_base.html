@@ -24,7 +24,6 @@
   :root{
     --bg:var(--paper);--panel:var(--paper);--card:var(--surface);--elev:var(--surface);
     --border:var(--rule-soft);--border-hi:var(--rule);
-    --text:var(--text);--dim:var(--dim);--mute:var(--mute);
     --accent:var(--brand);--accent2:var(--warn);--soft:var(--brand-soft);
     --green:var(--ok);--red:var(--danger);--amber:var(--warn);
   }
@@ -37,6 +36,7 @@
   <nav id="nav" aria-label="主导航">
     {% if user_is_staff or user_is_manager %}<a href="/kb/manage/">资料上传</a>{% endif %}
     <a href="/kb/search/">综合搜索</a>
+    <a href="/kb/graph/">知识图谱</a>
     <a href="/kb/ask/">检索</a>
     <a href="/dashboard/">日志</a>
     {% if user_is_staff or user_is_manager %}<a href="/accounts/users/">用户</a>{% endif %}

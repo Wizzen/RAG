@@ -1,0 +1,21 @@
+{% extends "kb/_base.html" %}
+{% block title %}图谱事实依据 · SHDR RAG{% endblock %}
+{% block content %}
+<h1>图谱事实依据</h1>
+<div class="fos-tag">
+  <div class="th ok">已人工核对 · 当前来源有效</div>
+  <div class="tb">
+    <h2>{{ fact.label }}</h2>
+    <p>知识库：{{ relation.subject.kb.name }} · 核对时间：{{ relation.reviewed_at|date:"Y-m-d H:i" }}</p>
+    {% if fact.qualifiers %}<dl>{% for name,value in fact.qualifiers.items %}<dt>{% if name == 'equipment' %}设备范围{% else %}{{ name }}{% endif %}</dt><dd>{{ value|default:"未明确" }}</dd>{% endfor %}</dl>{% endif %}
+    <p>核对范围是上述关系及其适用条件。来源中的其它字段、延伸解释和维修建议仍需分别核对。</p>
+  </div>
+</div>
+{% for source in fact.sources %}
+<section class="fos-tag" style="margin-top:16px">
+  <div class="th">{{ source.source }}</div>
+  <div class="tb"><pre style="white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--fm)">{{ source.quote }}</pre></div>
+</section>
+{% endfor %}
+<p><a class="btn outline" href="{% url 'kb:graph' %}?kb={{ fact.kb_slug|urlencode }}&amp;q={{ fact.subject.label|urlencode }}">查看关联关系</a></p>
+{% endblock %}
