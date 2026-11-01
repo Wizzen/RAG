@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import time
 
+from django.utils import timezone
+
 from .graph_progress import GraphProgress, visible_text
 from .models import Document, GraphExtraction
 from .publication import digest
@@ -16,8 +18,10 @@ MAX_PAGES = 4
 MAX_READ_CHUNKS = 24
 MAX_READ_CHARS = 24000
 MAX_INPUT_CHARS = 160000
-MAX_OUTPUT_CHARS = 32000
+MAX_OUTPUT_CHARS = 131072
 MAX_SECONDS = 600
+MAX_REQUEST_SECONDS = 180
+MAX_CONNECTION_RETRIES = 1
 
 
 class FocusLimit(RuntimeError):
@@ -36,6 +40,11 @@ class FocusBudget:
         self.read_ids: set[str] = set()
         self.chunks_total = 0
         self.stage = 'retrieve'
+        self.retries = 0
+        self.tables_built = self.table_candidates = 0
+        self.request_started = None
+        self.request_started_at = None
+        self.request_in_flight = False
 
     def checkpoint(self) -> None:
         """复用覆盖记录保存主题任务范围，不能将读取段数标成全文覆盖率。"""
@@ -46,10 +55,14 @@ class FocusBudget:
             'input_chars': self.input_chars, 'output_chars': self.output_chars,
             'input_tokens': self.input_tokens, 'output_tokens': self.output_tokens,
             'usage_calls': self.usage_calls,
+            'connection_retries': self.retries, 'request_started_at': self.request_started_at,
+            'tables_built': self.tables_built, 'table_candidates': self.table_candidates,
+            'request_in_flight': self.request_in_flight,
             'limits': {'model_calls': MAX_CALLS, 'tool_calls': MAX_TOOLS, 'pages': MAX_PAGES,
                        'chunks_read': MAX_READ_CHUNKS, 'read_chars': MAX_READ_CHARS,
                        'input_chars': MAX_INPUT_CHARS, 'output_chars': MAX_OUTPUT_CHARS,
-                       'seconds': MAX_SECONDS},
+                       'seconds': MAX_SECONDS, 'request_seconds': MAX_REQUEST_SECONDS,
+                       'connection_retries': MAX_CONNECTION_RETRIES},
         }
         self.job.save(update_fields=['coverage', 'updated_at'])
         self.progress.emit('coverage', **self.job.coverage)
@@ -83,19 +96,34 @@ class FocusBudget:
             raise FocusLimit('已达到本次任务的模型调用或累计输入预算；已有候选保留，不自动重做。')
         self.calls += 1
         self.input_chars += chars
+        self.request_started = time.monotonic()
+        self.request_started_at = timezone.now().isoformat()
+        self.request_in_flight = True
         self.stage = 'generate'
         self.checkpoint()
+
+    def retry_call(self, messages: list) -> bool:
+        """整个任务只允许一次连接重试；仍扣除调用、输入和总耗时预算。"""
+        if self.retries >= MAX_CONNECTION_RETRIES:
+            return False
+        self.before_call(messages)
+        self.retries += 1
+        self.checkpoint()
+        return True
 
     def stream(self, chunk) -> None:
         """流式生成中检查时间与累计输出量，展示截断上限不能代替消费上限。"""
         if time.monotonic() - self.started >= MAX_SECONDS:
             raise FocusLimit('已达到本次任务的时间预算；已保存候选保留。')
+        if self.request_started is not None and time.monotonic() - self.request_started >= MAX_REQUEST_SECONDS:
+            raise TimeoutError(f'本轮模型请求超过 {MAX_REQUEST_SECONDS} 秒，已停止等待。')
         self.output_chars += len(visible_text(chunk.content))
         if self.output_chars > MAX_OUTPUT_CHARS:
             raise FocusLimit('已达到本次任务的累计输出预算；已保存候选保留，不自动重做。')
 
     def after_call(self, response) -> None:
         """记录服务端实际回报的 token；缺失用量不能显示成零消耗。"""
+        self.request_in_flight = False
         usage = getattr(response, 'usage_metadata', None) or {}
         if usage:
             self.input_tokens += int(usage.get('input_tokens') or 0)
@@ -116,6 +144,9 @@ def build_focused_graph(model, job: GraphExtraction, progress: GraphProgress) ->
     """召回少量正文，由模型决定补读；逐页保存候选，失败不会触发全篇重做。"""
     from .graph_extraction import extract_focused, persist_relations
     from .graph_build import fact_key
+    hierarchy = job.schema_version >= 2
+    if hierarchy:
+        from .knowledge_hierarchy import assertion_key, candidate_event, persist_assertions
 
     budget = FocusBudget(job, progress)
     emitted = set()
@@ -123,19 +154,27 @@ def build_focused_graph(model, job: GraphExtraction, progress: GraphProgress) ->
     job.save(update_fields=['done', 'total', 'updated_at'])
     budget.checkpoint()
 
-    def save_page(rows: list[dict], rejected: int) -> None:
+    def save_rows(rows: list[dict], rejected: int, *, table=False) -> None:
         budget.check()
-        job.created_relations += persist_relations(job.document, job.source_digest, rows, extraction=job, merge_facts=True)
+        job.created_relations += (persist_assertions(job.document,job.source_digest,rows,extraction=job) if hierarchy
+                                 else persist_relations(job.document, job.source_digest, rows, extraction=job, merge_facts=True))
         job.rejected += rejected
         job.save(update_fields=['created_relations', 'rejected', 'updated_at'])
-        budget.pages += 1
+        if table:
+            budget.tables_built += 1
+            budget.table_candidates += len(rows)
+        else:
+            budget.pages += 1
         budget.checkpoint()
         from .knowledge_graph import PREDICATES
         for row in rows:
-            key = fact_key(row)
+            key = assertion_key(row) if hierarchy else fact_key(row)
             if key in emitted:
                 continue
             emitted.add(key)
+            if hierarchy:
+                progress.emit('candidate',**candidate_event(row))
+                continue
             progress.emit('candidate', subject=row['subject']['name'], predicate=PREDICATES.get(row['predicate'], row['predicate']),
                           object=row['object']['name'], conditions=row.get('conditions', {}),
                           quote=row['quote'], chunks=row.get('_chunks', []))
@@ -143,7 +182,9 @@ def build_focused_graph(model, job: GraphExtraction, progress: GraphProgress) ->
     try:
         progress.emit('notice', message=f'按关注主题先召回最多 {SEED_CHUNKS} 段正文，模型按需补读邻文；'
                       f'本次最多 {MAX_CALLS} 轮模型调用、{MAX_TOOLS} 次工具补查，不自动扫描全篇或另做查漏。')
-        extract_focused(model, job.document, job.focus, progress, on_page=save_page, budget=budget)
+        extract_focused(model, job.document, job.focus, progress,
+                        on_page=lambda rows,rejected:save_rows(rows,rejected),
+                        on_table=lambda rows,rejected:save_rows(rows,rejected,table=True),budget=budget)
         budget.check()
         job.done, job.status = 1, 'completed'
         budget.stage = 'complete'
@@ -154,6 +195,7 @@ def build_focused_graph(model, job: GraphExtraction, progress: GraphProgress) ->
         job.save(update_fields=['done', 'status', 'updated_at'])
     except Exception as exc:
         job.status, job.error = 'failed', str(exc)[:1000]
+        budget.request_in_flight = False
         budget.stage = 'limited' if isinstance(exc, FocusLimit) else 'failed'
         budget.checkpoint()
         job.save(update_fields=['status', 'error', 'updated_at'])

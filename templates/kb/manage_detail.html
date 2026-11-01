@@ -1,16 +1,21 @@
 {% extends "kb/_base.html" %}
 {% block title %}{{ kb.name }} · 知识库管理{% endblock %}
 {% block content %}
-<div style="display:flex;gap:8px;flex-wrap:wrap">
-  <a class="btn sm outline" href="/kb/manage/">← 返回资料上传中心</a>
-  <a class="btn sm outline" href="/kb/inspection/">检查项提取</a>
-  {% if kb.tracker.enabled %}<a class="btn sm outline" id="trkEntry" href="/kb/manage/{{ kb.slug }}/tracker/">追踪表</a>{% endif %}
-</div>
-<h1>{{ kb.name }} <span class="dept-badge">{{ kb.department }}</span>{% if kb.embedding_label %} <span class="emb-badge">🧬 {{ kb.embedding_label }}</span>{% endif %}</h1>
-<p class="fos-sub"><span id="kbDescText">{% if kb.description %}{{ kb.description }}{% else %}（无描述）{% endif %}</span>
-  · 文档 <span id="kbDocCount">{{ docs_total }}</span>
-  · 向量块 <span id="kbChunkCount">{{ chunks_total }}</span>
-  <button type="button" id="descEditBtn" class="btn sm outline" style="margin-left:6px">编辑</button></p>
+<header class="page-head">
+  <div class="page-head-main">
+    <a class="page-back" href="/kb/manage/">资料上传中心</a>
+    <h1>{{ kb.name }} <span class="dept-badge">{{ kb.department }}</span>{% if kb.embedding_label %} <span class="emb-badge">🧬 {{ kb.embedding_label }}</span>{% endif %}</h1>
+    <p class="page-desc"><span id="kbDescText">{% if kb.description %}{{ kb.description }}{% else %}（无描述）{% endif %}</span>
+      · 文档 <span id="kbDocCount">{{ docs_total }}</span>
+      · 向量块 <span id="kbChunkCount">{{ chunks_total }}</span></p>
+  </div>
+  <div class="page-actions">
+    <a class="btn outline" href="/kb/inspection/">检查项提取</a>
+    {% if kb.is_folder %}<a class="btn outline" href="{% url 'kb:feeds' %}?kb={{ kb.slug|urlencode }}">自动更新数据源</a>{% endif %}
+    {% if kb.tracker.enabled %}<a class="btn outline" id="trkEntry" href="/kb/manage/{{ kb.slug }}/tracker/">追踪表</a>{% endif %}
+    <button type="button" id="descEditBtn" class="btn outline">编辑</button>
+  </div>
+</header>
 <style>
 .doc-desc{margin-left:8px;color:var(--mute);font-size:11px}
 /* 药丸开关（编辑知识库弹窗 · 启用追踪表） */
@@ -45,11 +50,13 @@
 </dialog>
 
 
-<h2 style="font-weight:700;font-size:14px;margin-bottom:10px">上传</h2>
+<div class="section-bar">
+  <div><h2>上传</h2><p>多选文件或拖入整个文件夹，入库进度会实时显示在下方列表。</p></div>
+</div>
 <div class="upload-area">
   <form method="post" enctype="multipart/form-data" id="uploadForm">
     {% csrf_token %}
-    <label class="upload-label" for="fileInput">点击选择文件（可按住 Shift/Cmd 多选；或把整个文件夹拖到这里）PDF / Markdown / TXT / CSV / XLSX / 图片 JPG·PNG·WebP，业务表自动识别</label>
+    <label class="upload-label" for="fileInput">点击选择文件<span class="upload-hint">可按住 Shift/Cmd 多选，或把整个文件夹拖到这里 · PDF / Markdown / TXT / CSV / XLSX / 图片 JPG·PNG·WebP，业务表自动识别</span></label>
     <input type="file" name="file" id="fileInput" multiple
            accept=".pdf,.md,.markdown,.txt,.csv,.tsv,.xlsx,.xlsm,.jpg,.jpeg,.png,.webp">
     <input type="file" id="dirInput" webkitdirectory multiple hidden>
@@ -66,13 +73,13 @@
   </form>
 </div>
 
-<h2 style="font-family:var(--fd);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;margin:20px 0 10px;display:flex;align-items:center;gap:10px">
-  文档列表
+<div class="section-bar">
+  <div><h2>文档列表</h2></div>
   <span class="doc-view-toggle" role="group" aria-label="视图模式">
     <button type="button" class="dvt-btn on" id="dvtList" title="列表视图">☰ 列表</button>
     <button type="button" class="dvt-btn" id="dvtGrid" title="网格视图">▦ 网格</button>
   </span>
-</h2>
+</div>
 <div class="doc-list" id="docList">
   {% for doc in docs %}
   <div class="doc-item" data-doc-id="{{ doc.id }}" data-status="{{ doc.status }}">

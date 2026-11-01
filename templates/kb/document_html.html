@@ -2,11 +2,15 @@
 {% block title %}{{ doc.original_name }} · 文档查看{% endblock %}
 
 {% block content %}
-<div class="doc-viewer-head">
-  <a class="btn sm outline" href="/kb/manage/{{ doc.kb.slug }}/">← 返回管理</a>
-  <span class="dv-title" title="{{ doc.original_name }}">{{ doc.original_name }}</span>
-  <span class="dv-meta">{{ doc.kb.name }}</span>
-</div>
+<header class="page-head">
+  <div class="page-head-main">
+    <a class="page-back" href="/kb/manage/{{ doc.kb.slug }}/">{{ doc.kb.name }}</a>
+    <h1 class="dv-title" title="{{ doc.original_name }}">{{ doc.original_name }}</h1>
+  </div>
+</header>
+
+{% if doc.status == 'superseded' %}<p class="fos-sub">此文档是历史版本，已不参与当前检索。</p>{% endif %}
+{% if feed_record %}<p class="fos-sub">自动更新数据源：{{ feed_record.feed.name }}{% if feed_record.upstream_updated_at %} · 上游更新时间：{{ feed_record.upstream_updated_at }}{% endif %}{% if feed_record.source_url %} · <a href="{{ feed_record.source_url }}" target="_blank" rel="noopener noreferrer">查看原始报告</a>{% endif %}</p>{% endif %}
 
 {% if html_body %}
 <div class="doc-viewer" id="docViewer">{{ html_body|safe }}</div>

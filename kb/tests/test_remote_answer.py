@@ -135,7 +135,8 @@ class RemoteAnswerTests(TestCase):
         admin = get_user_model().objects.create_user('all-api-admin', is_staff=True)
         self.client.force_login(admin)
         response = self.client.post(reverse('kb:settings'), {'action': 'all_remote_toggle', 'enabled': '1'}, follow=True)
-        self.assertContains(response, '允许全部远程／局域网 API：已开启')
+        self.assertContains(response, '允许全部远程／局域网 API')
+        self.assertContains(response, '<span class="state-pill on">已开启</span>', html=True)
         self.assertContains(response, '由顶部总开关开启')
         self.assertTrue(llm_settings()['remote_enabled'])
         for getter in (embedding_settings, rerank_settings, mineru_settings):

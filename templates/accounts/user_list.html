@@ -1,17 +1,22 @@
 {% extends "kb/_base.html" %}
 {% block title %}用户与部门 · SHDR RAG{% endblock %}
 {% block content %}
-<h1>用户管理</h1>
+<header class="page-head">
+  <div class="page-head-main">
+    <h1>用户管理</h1>
+    <p class="page-desc">管理账号的部门归属与级别{% if viewer_global %}，以及决定可见范围的部门{% endif %}。</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn primary" type="button" id="openUserAdd">＋ 添加账号</button>
+  </div>
+</header>
 
 {# ── 板块一：用户（添加账号 + 列表） ── #}
 <div class="section-bar">
-  <div><h2>用户</h2><p>账号的部门归属与级别 · 共 {{ rows|length }} 人</p></div>
-  <div class="section-actions">
-    <button class="btn primary" type="button" id="openUserAdd">＋ 添加账号</button>
-  </div>
+  <div><h2>用户</h2><p>共 {{ rows|length }} 人</p></div>
 </div>
-<div class="user-table-wrap">
-<table class="user-table">
+<div class="table-wrap user-table-wrap">
+<table class="data-table user-table">
   <thead>
     <tr>
       <th>用户名</th>
@@ -138,22 +143,18 @@
 </div>
 {% endif %}
 <style>
-.user-table-wrap{background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;overflow-x:auto}
-.user-table{width:100%;border-collapse:collapse;font-size:13px}
-.user-table th{font-family:var(--fd);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);text-align:left;padding:10px 14px;border-bottom:1.5px solid var(--rule-soft)}
-.user-table td{padding:8px 14px;border-bottom:1px solid var(--rule-soft);vertical-align:middle}
-.user-table tr:last-child td{border-bottom:0}
-.user-table .uname{font:600 13px var(--fm)}
+.user-table td{padding:9px 16px}
+.user-table .uname{font-weight:600;color:var(--text)}
+.user-table .fos-sub{margin:0}
 .dept-edit{display:flex;gap:6px;align-items:center}
-.dept-edit select[name=department]{width:130px;flex-shrink:0}
-.dept-edit select{padding:4px 6px;font:500 12px var(--fm);border:1.5px solid var(--rule-soft);border-radius:6px;background:var(--paper);color:var(--text)}
-.dept-mgr{display:flex;flex-direction:column;gap:0;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;padding:4px 14px}
-.dept-item{display:flex;gap:14px;align-items:center;padding:9px 0;border-bottom:1px solid var(--rule-soft)}
+.dept-edit select{min-height:30px;padding:4px 8px;font-size:12.5px;width:auto}
+.dept-edit select[name=department]{width:140px;flex-shrink:0}
+.dept-mgr{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);padding:2px 18px}
+.dept-item{display:flex;gap:14px;align-items:center;padding:11px 0;border-bottom:1px solid var(--rule-soft)}
 .dept-item:last-child{border-bottom:0}
 .dept-item .fos-sub{margin-bottom:0}  /* 覆盖 .fos-sub 全局的 margin-bottom，否则 flex 居中会错位 */
-.dept-name{font:600 13px var(--fm);min-width:120px}
+.dept-name{font-weight:600;font-size:13.5px;min-width:120px;display:inline-flex;align-items:center;gap:6px}
 .dept-item-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
-.dept-section{margin-top:30px}
 .row-inactive{opacity:.5}
 </style>
 <script>

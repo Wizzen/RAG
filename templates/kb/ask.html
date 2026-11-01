@@ -10,6 +10,14 @@
 @media (prefers-reduced-motion:reduce) {.conv-item.is-generating .conv-title,.answer.thinking,.turn-progress {animation:none}}
 </style>
 {{ pyodide_index_url|json_script:"pyodideIndexURL" }}
+{% if chat_embedded %}
+<link rel="stylesheet" href="{% static 'css/assistant_embedded.css' %}?v=1">
+<template id="ragChatWelcomeTemplate"><div class="rag-chat-welcome">
+  <div class="rag-chat-welcome-icon">{% include 'kb/_assistant_avatar.html' %}</div><h2>有什么可以帮你？</h2>
+  <p>查找知识与原文依据，梳理要求，分析追踪表数据。</p>
+  <div class="rag-chat-prompts"><button type="button" data-rag-prompt="帮我查找资料中的判断条件，并给出原文依据">查找要求与原文依据</button><button type="button" data-rag-prompt="帮我对比资料中不同等级的要求和参数">对比等级、条件与参数</button><button type="button" data-rag-prompt="帮我查看知识库中的追踪表，并分析其中的数据">分析追踪表数据</button></div>
+</div></template>
+{% endif %}
 <div class="qa-layout">
   <!-- 左侧：会话历史（手机上收进抽屉） -->
   <div class="conv-scrim" id="convScrim"></div>
@@ -290,11 +298,15 @@ except ImportError:
       .then(() => setSbStatus('ready', '✓ 沙箱就绪'))
       .catch((e) => setSbStatus('err', '✗ 沙箱失败'));
   };
+  {% if chat_embedded %}
+  setSbStatus('ready','数据分析按需加载');
+  {% else %}
   if ('requestIdleCallback' in window) {
     requestIdleCallback(startPreload, { timeout: 3000 });
   } else {
     setTimeout(startPreload, 1500);
   }
+  {% endif %}
   let busy = false;
 
   // Enter 发送：桌面快捷键。两个例外——中文输入法选词的 Enter（isComposing）
@@ -648,10 +660,14 @@ except ImportError:
     sessionMax = { in: 0, out: 0 };
     if (convTitleEl) convTitleEl.textContent = '新对话';
     messages.innerHTML = AI_WHO + '<div class="msg ai"><div class="bubble"><div class="answer">输入问题。</div></div></div>';
+    const welcome=document.getElementById('ragChatWelcomeTemplate');
+    if(welcome)messages.replaceChildren(welcome.content.cloneNode(true));
+    input.value='';input.dispatchEvent(new Event('input'));
     // 取消侧边栏高亮
     document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));
   }
   document.getElementById('newChatBtn').addEventListener('click', newConversation);
+  window.FosAsk={newConversation,openConversation(thread){restoreConversation(thread);},focusInput(){input.focus();}};
 
   /* ---------- 删除会话历史 ---------- */
   // 从 cookie 取 CSRF token（Django 默认 csrftoken cookie 对 JS 可见）
@@ -774,8 +790,9 @@ except ImportError:
   // 若 URL 指定了 conv，进入时自动加载该会话
   {% if active_thread %}
   (async () => {
-    const el = document.querySelector('.conv-item[data-thread="{{ active_thread }}"]');
-    if (el) el.click();
+    const thread='{{ active_thread|escapejs }}';
+    const el = document.querySelector('.conv-item[data-thread="'+thread+'"]');
+    if (el) el.click();else restoreConversation(thread);
   })();
   {% else %}
   const rememberedThread = FosAnswerRecovery.recalled(recoveryKey);
@@ -875,9 +892,11 @@ except ImportError:
     if (recovery) recovery.stop();
     FosAnswerRecovery.remember(recoveryKey, currentThreadId);
     input.value = '';
+    input.dispatchEvent(new Event('input'));
     busy = true; sendBtn.disabled = true; stopBtn.hidden = false; stopBtn.style.display = '';
     historyRevision++;
     const submittedThread = currentThreadId;
+    messages.querySelector('.rag-chat-welcome')?.remove();
 
     // user msg
     const um = document.createElement('div'); um.className = 'msg user';
@@ -1133,4 +1152,5 @@ except ImportError:
   }
 })();
 </script>
+{% if chat_embedded %}<script src="{% static 'js/assistant_embedded.js' %}?v=1" data-user="{{ user.pk }}" defer></script>{% endif %}
 {% endblock %}

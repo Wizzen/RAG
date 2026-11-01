@@ -14,10 +14,17 @@
     t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
   }
   document.documentElement.dataset.theme = t;
+  if (!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+    document.documentElement.classList.add('fx-enter');
+  }
 })();
 </script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%233B82F6'/%3E%3Cstop offset='1' stop-color='%234338CA'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Cg fill='none' stroke='%23fff' stroke-width='4.2'%3E%3Ccircle cx='23' cy='24' r='8'/%3E%3Ccircle cx='41' cy='24' r='8'/%3E%3Ccircle cx='32' cy='38' r='12.5'/%3E%3C/g%3E%3C/svg%3E">
 <title>{% block title %}SHDR RAG{% endblock %}</title>
-<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20260920-balanced">
+<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20261101-harmony2">
+<link rel="stylesheet" href="{% static 'css/fos_shell.css' %}?v=1">
+<link rel="stylesheet" href="{% static 'css/fos_fx.css' %}?v=1">
+<script src="{% static 'js/fos_vibe.js' %}?v=1" defer></script>
 <style>
   /* Back-compat aliases so existing child templates keep working.
      Child pages use the old variable names; we map them to the new tokens. */
@@ -27,32 +34,61 @@
     --accent:var(--brand);--accent2:var(--warn);--soft:var(--brand-soft);
     --green:var(--ok);--red:var(--danger);--amber:var(--warn);
   }
-  h1{font-weight:700;font-size:22px;margin-bottom:16px}
 </style>
 </head>
-<body>
-<div class="fos-topbar" style="position:relative">
-  <a class="brand" href="/"><svg class="brand-mark" viewBox="0 0 460 352" aria-hidden="true"><circle cx="166" cy="146" r="46"/><circle cx="294" cy="146" r="46"/><circle cx="230" cy="214" r="74"/></svg>SHDR<span class="dot">·</span>RAG</a>
+<body{% if chat_embedded %} class="rag-chat-embedded"{% endif %}>
+<div class="fx-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+<aside class="fos-sidebar" id="sidebar" aria-label="侧边栏">
+  <span class="side-stars" aria-hidden="true"><i></i></span>
+  <a class="side-brand" href="/">
+    <span class="side-logo"><svg class="brand-mark" viewBox="0 0 460 352" aria-hidden="true"><circle cx="166" cy="146" r="46"/><circle cx="294" cy="146" r="46"/><circle cx="230" cy="214" r="74"/></svg></span>
+    <span class="side-name"><span>SHDR<span class="dot">·</span>RAG</span><small>知识库工作台</small></span>
+  </a>
   <nav id="nav" aria-label="主导航">
-    {% if user_is_staff or user_is_manager %}<a href="/kb/manage/">资料上传</a>{% endif %}
-    <a href="/kb/search/">综合搜索</a>
-    <a href="/kb/graph/">知识图谱</a>
-    <a href="/kb/ask/">检索</a>
-    <a href="/dashboard/">日志</a>
-    {% if user_is_staff or user_is_manager %}<a href="/accounts/users/">用户</a>{% endif %}
-    {% if user_is_staff %}<a href="/kb/settings/">设置</a><a href="/kb/eval/">评估</a><a href="/admin/">后台</a>{% endif %}
+    <div class="nav-group" data-group="工作台">
+      <div class="nav-label">工作台</div>
+      {% if user_is_staff or user_is_manager %}<a class="nav-item" href="/kb/manage/" data-tone="blue" data-nav-also="/kb/feeds/ /kb/inspection/ /kb/doc/"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"/><path d="M12 15.5v-5M9.8 12.6 12 10.4l2.2 2.2"/></svg><span>资料上传</span></a>{% endif %}
+      <a class="nav-item" href="/kb/search/" data-tone="cyan" data-nav-also="/kb/assets/"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg><span>综合搜索</span></a>
+      <a class="nav-item" href="/kb/graph/" data-tone="violet"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.4 7.6 15.6 6.4M7.2 9.2l3.6 6.6M16.9 8.3l-3.7 7.5"/></svg><span>知识图谱</span></a>
+      <button type="button" class="nav-item rag-chat-nav" data-tone="pink" data-rag-chat-open><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 13.9 8l4.6 1.9-4.6 1.9L12 16.3l-1.9-4.5L5.5 9.9 10.1 8z"/><path d="M18.5 15.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/></svg><span>AI 助手</span></button>
+    </div>
+    <div class="nav-group" data-group="运营">
+      <div class="nav-label">运营</div>
+      <a class="nav-item" href="/dashboard/" data-tone="green"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M7 16v-5M12 16V6M17 16v-8"/></svg><span>运行日志</span></a>
+      {% if user_is_staff or user_is_manager %}<a class="nav-item" href="/accounts/users/" data-tone="amber"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 5a3.5 3.5 0 0 1 0 7M21 20c0-2.5-1.5-4.6-3.7-5.5"/></svg><span>用户管理</span></a>{% endif %}
+    </div>
+    {% if user_is_staff %}
+    <div class="nav-group" data-group="系统">
+      <div class="nav-label">系统</div>
+      <a class="nav-item" href="/kb/settings/" data-tone="indigo"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span>站点配置</span></a>
+      <a class="nav-item" href="/kb/eval/" data-tone="teal"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg><span>检索评估</span></a>
+      <a class="nav-item" href="/admin/" data-tone="rose"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 19 6v5.6c0 4.2-2.9 7.6-7 8.9-4.1-1.3-7-4.7-7-8.9V6z"/></svg><span>后台管理</span></a>
+    </div>
+    {% endif %}
   </nav>
-  <span class="sp"></span>
-  <button class="theme-btn" id="themeBtn" type="button" aria-label="切换亮暗主题" title="切换亮暗主题">
-    <svg class="ico-sun" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M15.7 4.3l-1.4 1.4M5.7 14.3l-1.4 1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="10" r="3.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-    <svg class="ico-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.4A7 7 0 0 1 7.6 3.5a7 7 0 1 0 8.9 8.9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-  </button>
-  <span class="auth">
-    <span class="who{% if user.is_authenticated %} pw-open{% endif %}"{% if user.is_authenticated %} title="修改密码"{% endif %}>{{ user.username }}{% if user_department and user_department != '通用' %} <span class="topbar-dept" title="我的部门">{{ user_department }}</span>{% endif %}</span>
-    {% if user.is_authenticated %}<form class="logout-form" method="post" action="{% url 'accounts:logout' %}">{% csrf_token %}<button type="submit">退出</button></form>{% else %}<a href="/accounts/login/">登录</a>{% endif %}
-  </span>
-  <button class="fos-nav-toggle" id="navToggle" aria-label="菜单" aria-expanded="false">☰</button>
-</div>
+  <div class="side-foot">
+    {% if user.is_authenticated %}
+    <button type="button" class="side-user pw-open" title="修改密码">
+      <span class="side-ava" aria-hidden="true">{{ user.username|first|upper }}</span>
+      <span class="side-who"><b>{{ user.username }}</b><small>{% if user_department %}{{ user_department }}{% else %}已登录{% endif %}</small></span>
+    </button>
+    {% else %}
+    <a class="side-user" href="/accounts/login/"><span class="side-ava" aria-hidden="true">?</span><span class="side-who"><b>登录</b><small>访问知识库</small></span></a>
+    {% endif %}
+    <div class="side-tools">
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换亮暗主题" title="切换亮暗主题">
+        <svg class="ico-sun" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M15.7 4.3l-1.4 1.4M5.7 14.3l-1.4 1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="10" r="3.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+        <svg class="ico-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.4A7 7 0 0 1 7.6 3.5a7 7 0 1 0 8.9 8.9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      {% if user.is_authenticated %}<form class="logout-form" method="post" action="{% url 'accounts:logout' %}">{% csrf_token %}<button type="submit" class="side-icon-btn" aria-label="退出登录" title="退出登录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h3.5A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5H14M10 16l-4-4 4-4M6 12h10"/></svg></button></form>{% endif %}
+    </div>
+  </div>
+</aside>
+<div class="fos-scrim" id="navScrim" hidden></div>
+<header class="fos-topbar">
+  <button class="fos-nav-toggle" id="navToggle" aria-label="菜单" aria-expanded="false" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+  <a class="brand" href="/"><svg class="brand-mark" viewBox="0 0 460 352" aria-hidden="true"><circle cx="166" cy="146" r="46"/><circle cx="294" cy="146" r="46"/><circle cx="230" cy="214" r="74"/></svg>SHDR<span class="dot">·</span>RAG</a>
+</header>
 <div class="fos-container">
   {% block content %}{% endblock %}
 </div>
@@ -206,15 +242,62 @@ window.fosToast = function(text, type, opts){
 })();
 </script>
 <script>
-// mobile nav toggle
-(function(){var t=document.getElementById('navToggle'),n=document.getElementById('nav');if(!t||!n)return;t.addEventListener('click',function(){var o=n.classList.toggle('open');t.setAttribute('aria-expanded',o?'true':'false');});})();
+// 窄屏侧栏抽屉
+(function(){
+  var t=document.getElementById('navToggle'),s=document.getElementById('navScrim');if(!t)return;
+  function set(o){document.body.classList.toggle('nav-open',o);t.setAttribute('aria-expanded',o?'true':'false');if(s)s.hidden=!o;}
+  t.addEventListener('click',function(){set(!document.body.classList.contains('nav-open'));});
+  if(s)s.addEventListener('click',function(){set(false);});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')set(false);});
+  document.querySelectorAll('#nav .nav-item').forEach(function(a){a.addEventListener('click',function(){set(false);});});
+})();
+// 当前页导航高亮：按最长路径前缀匹配 href 与 data-nav-also
+(function(){
+  var path=location.pathname,best=null,bestLen=0;
+  document.querySelectorAll('#nav a[href]').forEach(function(a){
+    var prefixes=[a.getAttribute('href')].concat((a.dataset.navAlso||'').split(' ').filter(Boolean));
+    prefixes.forEach(function(p){if(p!=='/'&&path.indexOf(p)===0&&p.length>bestLen){best=a;bestLen=p.length;}});
+  });
+  if(best){best.classList.add('active');best.setAttribute('aria-current','page');}
+  var main=document.querySelector('.fos-container .page-head .page-head-main');
+  if(best&&main&&!main.querySelector('.page-back')){
+    var g=best.closest('.nav-group'),eb=document.createElement('div');
+    eb.className='page-eyebrow';
+    eb.textContent=(g?g.dataset.group+' / ':'')+best.textContent.trim();
+    main.insertBefore(eb,main.firstChild);
+  }
+  // 页头徽章：复用当前导航项的图标与色相（无匹配时用品牌标记）
+  var head=main&&main.parentElement;
+  if(head&&!head.querySelector(':scope>.page-emblem')){
+    var src=best&&best.querySelector('.ni')||document.querySelector('.side-logo .brand-mark');
+    if(src){
+      var em=document.createElement('span'),orbit=document.createElement('i'),tile=document.createElement('span'),ico=src.cloneNode(true);
+      em.className='page-emblem';em.setAttribute('aria-hidden','true');
+      orbit.className='pe-orbit';tile.className='pe-tile';
+      if(ico.classList.contains('ni'))ico.removeAttribute('class');
+      tile.appendChild(ico);em.appendChild(orbit);em.appendChild(tile);
+      head.insertBefore(em,head.firstChild);
+      head.dataset.tone=(best&&best.dataset.tone)||'blue';
+    }
+  }
+})();
 // theme toggle（亮暗互切，localStorage 持久化）
 (function(){
   var b=document.getElementById('themeBtn');if(!b)return;
   b.addEventListener('click',function(){
-    var cur=document.documentElement.dataset.theme==='dark'?'light':'dark';
-    document.documentElement.dataset.theme=cur;
-    try{localStorage.setItem('fos-theme',cur);}catch(e){}
+    var root=document.documentElement,cur=root.dataset.theme==='dark'?'light':'dark';
+    function apply(){root.dataset.theme=cur;try{localStorage.setItem('fos-theme',cur);}catch(e){}}
+    if(!document.startViewTransition||matchMedia('(prefers-reduced-motion: reduce)').matches){apply();return;}
+    // 从按钮位置圆形展开新主题
+    var r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2,
+        R=Math.hypot(Math.max(x,innerWidth-x),Math.max(y,innerHeight-y));
+    root.classList.add('fx-theme-vt');
+    var vt=document.startViewTransition(apply);
+    vt.ready.then(function(){
+      root.animate({clipPath:['circle(0px at '+x+'px '+y+'px)','circle('+R+'px at '+x+'px '+y+'px)']},
+        {duration:620,easing:'cubic-bezier(.4,0,.2,1)',pseudoElement:'::view-transition-new(root)'});
+    }).catch(function(){});
+    vt.finished.finally(function(){root.classList.remove('fx-theme-vt');});
   });
 })();
 </script>
@@ -280,5 +363,6 @@ document.addEventListener('click', function(e){
 })();
 </script>
 {% endif %}
+{% if user.is_authenticated and not chat_embedded %}{% include 'kb/_assistant_widget.html' %}{% endif %}
 </body>
 </html>

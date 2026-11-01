@@ -1,0 +1,4 @@
+{% extends "kb/_base.html" %}{% load static %}
+{% block title %}知识内容与原文依据{% endblock %}
+{% block content %}<link rel="stylesheet" href="{% static 'css/knowledge_hierarchy.css' %}"><header class="page-head"><div class="page-head-main"><a class="page-back" href="{% url 'kb:graph' %}">知识图谱</a><h1>已确认的知识内容</h1><p class="page-desc">每条内容都附有原文依据，可点击查看出处。</p></div></header>{% include "kb/_knowledge_assertion.html" %}{% endblock %}
+{% block scripts %}<script src="{% static 'js/evidence_panel.js' %}"></script><script>document.addEventListener('click',event=>{const button=event.target.closest('[data-graph-chunk]');if(button)window.fosEvidencePanel?.(button.dataset.graphChunk);});</script>{% endblock %}

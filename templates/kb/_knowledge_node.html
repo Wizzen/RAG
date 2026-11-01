@@ -1,0 +1,2 @@
+{% for card in cards %}{% include "kb/_knowledge_assertion.html" %}{% endfor %}
+{% if truncated %}<p class="graph-stale">当前节点内容较多，请使用状态或本次批次筛选继续查看。</p>{% endif %}

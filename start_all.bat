@@ -2,16 +2,17 @@
 setlocal EnableExtensions
 title FOS-RAG Local Deployment
 
-set "PROJECT_DIR=D:\Codex\RAG"
-set "VENV_DIR=%PROJECT_DIR%\.venv"
+REM 自动使用脚本所在目录作为项目根目录，可在任意机器双击部署。
+set "PROJECT_DIR=%~dp0"
+set "VENV_DIR=%PROJECT_DIR%.venv"
 set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
 set "MINERU_EXE=%VENV_DIR%\Scripts\mineru-api.exe"
-set "REQUIREMENTS=%PROJECT_DIR%\requirements.txt"
+set "REQUIREMENTS=%PROJECT_DIR%requirements.txt"
 
 set "MINERU_MODEL_SOURCE=modelscope"
-set "MODELSCOPE_CACHE=D:\Codex\.cache\modelscope"
-set "HF_HOME=D:\Codex\.cache\huggingface"
-set "PIP_CACHE_DIR=D:\Codex\.cache\pip"
+set "MODELSCOPE_CACHE=%USERPROFILE%\.cache\modelscope"
+set "HF_HOME=%USERPROFILE%\.cache\huggingface"
+set "PIP_CACHE_DIR=%USERPROFILE%\.cache\pip"
 
 echo ============================================================
 echo   FOS-RAG Local Deployment

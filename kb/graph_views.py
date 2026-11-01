@@ -37,7 +37,8 @@ def _extraction_events(user_id: int, job_id: int, slug: str, cursor: int) -> tup
         raise Http404('任务不存在')
     snapshot = {'id':job.pk, 'status':job.status, 'document':job.document.original_name, 'focus':job.focus,
                 'created':job.created_relations, 'rejected':job.rejected, 'done':job.done,
-                'total':job.total, 'error':job.error, 'coverage':job.coverage}
+                'total':job.total, 'error':job.error, 'coverage':job.coverage,
+                'updated_at':job.updated_at.isoformat()}
     events = [{'id':event.pk, 'kind':event.kind, 'payload':event.payload, 'at':event.created_at.isoformat()}
               for event in job.events.filter(pk__gt=cursor).order_by('pk')[:100]]
     return snapshot, events
@@ -148,6 +149,12 @@ def graph_relation(request, relation_id: int):
 @login_required
 def graph_fact(request, relation_id: int):
     """引用页按快照版本重验，已撤回或来源变化时不显示旧关系为当前事实。"""
+    if isinstance(relation_id,str) and relation_id.startswith('k') and relation_id[1:].isascii() and relation_id[1:].isdecimal():
+        from .hierarchy_views import fact
+        if len(relation_id)>19:raise Http404('内容不存在')
+        return fact(request,int(relation_id[1:]))
+    if not str(relation_id).isascii() or not str(relation_id).isdecimal() or len(str(relation_id))>18:
+        raise Http404('关系不存在')
     relation = get_object_or_404(relation_queryset(), pk=relation_id,
                                  subject__kb__in=_libraries(request.user), object__kb__in=_libraries(request.user))
     snapshot = fact_snapshot(relation)
@@ -270,7 +277,8 @@ def graph_view(request):
                          "label": {"pending": "等待抽取", "running": "正在抽取", "completed": "抽取完成", "failed": "抽取失败"}.get(job.status, job.status)}
                         for job in runs],
     }
-    context['live_jobs'] = [{'id':run.pk, 'status':run.status,
+    context['live_jobs'] = [{'id':run.pk, 'status':run.status, 'error':run.error,
+                             'created':run.created_relations, 'focus':run.focus,
                              'label':f'#{run.pk} · {run.focus or "旧版全书抽取"} · {run.document.original_name}'}
                             for run in context['runs'] if manager and access.can_manage_kb(request.user, run.document.kb)]
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
@@ -279,6 +287,13 @@ def graph_view(request):
                              "runs": [{'id': run.pk, 'label': f'#{run.pk} · {run.focus or "旧版全书抽取"} · {run.document.original_name}'}
                                       for run in context['runs']]})
     context['documents'] = documents
+    parent=kb.parent if kb and kb.parent_id else kb
+    context['hierarchy_scope']=parent if parent and parent.pk in visible_library_ids else kb
+    from .models import KnowledgeObject
+    from .knowledge_hierarchy import visible_assertions
+    from itertools import islice
+    visible_object_ids={item.node.object_id for item in islice(visible_assertions(request.user,list(libraries.values_list('slug',flat=True))),2000)}
+    context['knowledge_objects']=KnowledgeObject.objects.filter(pk__in=visible_object_ids).order_by('label')
     groups = {}
     for document in documents:
         group = document.kb.parent.name if document.kb.parent_id else document.kb.name
@@ -300,10 +315,10 @@ def graph_action(request):
         raise Http404("知识库不存在")
     action = request.POST.get("action", "")
     try:
-        if action not in {"bind", "backfill", "review", "attach", "extract"}:
+        if action not in {"bind", "backfill", "review", "attach", "extract", "retry_extract"}:
             raise ValueError("未知操作。")
-        if action in {"review", "attach", "bind"}:
-            field = "dataset" if action == "bind" else "relation"
+        if action in {"review", "attach", "bind", "retry_extract"}:
+            field = "dataset" if action == "bind" else "extraction" if action == "retry_extract" else "relation"
             value = request.POST.get(field, "").strip()
             if not value.isascii() or not value.isdecimal() or not 0 < int(value) <= 9223372036854775807:
                 raise ValueError("请先选择要归入的业务数据集。" if field == "dataset"
@@ -330,19 +345,45 @@ def graph_action(request):
         if action == "backfill":
             count = sum(seed_dataset(ds) for ds in StructuredDataset.objects.filter(kb=kb, active=True))
             return JsonResponse({"ok": True, "message": f"已生成 {count} 条新候选，已有审核结论保持不变。"})
-        if action == "extract":
+        if action in {"extract", "retry_extract"}:
             from .graph_extraction import schedule_document
-            focus = request.POST.get('focus', '').strip()
+            previous = None
+            if action == 'retry_extract':
+                scopes = _libraries(request.user).filter(Q(pk=kb.pk) | Q(parent=kb))
+                previous = get_object_or_404(GraphExtraction.objects.select_for_update().select_related('document__kb'),
+                                             pk=request.POST.get('extraction'), document__kb__in=scopes)
+                if previous.status != 'failed':
+                    raise ValueError('只有已失败的抽取任务可以重试；正在运行的任务无需重复提交。')
+            focus = previous.focus if previous else request.POST.get('focus', '').strip()
             if not 2 <= len(focus) <= 1000:
                 raise ValueError('请填写一个关注方面（2–1000字），例如“检测人员的资质和视力要求”。')
             docs = Document.objects.filter(Q(kb=kb) | Q(kb__parent=kb), kb__in=_libraries(request.user), status="completed").exclude(md_content="")
-            document = get_object_or_404(docs, pk=request.POST.get('document') or None)
+            document = get_object_or_404(docs, pk=previous.document_id if previous else request.POST.get('document') or None)
             if not access.can_manage_kb(request.user,document.kb):
                 raise Http404('资料不可管理')
-            count = int(schedule_document(document, retry=True, focus=focus))
+            if previous:
+                from .publication import digest
+                if digest(document.md_content) != previous.source_digest:
+                    raise ValueError('资料已变化，请在上方重新指定关注方面并开始构建。')
+            target=None
+            if previous:
+                target=previous.target_object
+            elif request.POST.get('target_object'):
+                from .models import KnowledgeObject
+                target_id=request.POST['target_object']
+                if not target_id.isascii() or not target_id.isdecimal() or len(target_id)>18:
+                    raise ValueError('请选择有效的已有对象。')
+                target=get_object_or_404(KnowledgeObject.objects.filter(nodes__assertions__document__kb__in=_libraries(request.user)).distinct(),pk=target_id)
+            if target:
+                from .knowledge_hierarchy import visible_assertions
+                from itertools import islice
+                if target.pk not in {item.node.object_id for item in islice(visible_assertions(request.user,list(_libraries(request.user).values_list('slug',flat=True))),2000)}:
+                    raise Http404('对象不存在')
+            count = int(schedule_document(document, retry=True, focus=focus,schema_version=2,target_object=target))
             job = GraphExtraction.objects.filter(document=document).order_by('-pk').first()
             return JsonResponse({"ok": True, "job_id":job.pk if job else None,
-                                 "message": "已开始构建，可在下方查看进度。" if count else "这份资料已有任务正在构建，已显示当前进度。"})
+                                 "message": ("已新建重试任务，原有候选保留，仍需逐条确认。" if previous else "已开始构建，可在下方查看进度。") if count
+                                             else "这份资料已有任务正在构建，已显示当前进度。"})
         scopes = _libraries(request.user).filter(Q(pk=kb.pk) | Q(parent=kb))
         relation = get_object_or_404(relation_queryset().select_for_update(),
                                      pk=request.POST.get("relation"), subject__kb__in=scopes, object__kb__in=scopes)

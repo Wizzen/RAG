@@ -10,13 +10,32 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from kb.graph_extraction import parse_relations, persist_relations, schedule_document, windows, run_extraction
+from kb.graph_extraction import graph_payload, truncated_graph_payload, parse_relations, persist_relations, schedule_document, windows, run_extraction
 from kb.knowledge_graph import relation_current, relation_queryset
 from kb.models import Document, GraphExtraction, GraphRelation, KnowledgeBase
 from kb.publication import digest
 
 
 class AutomaticGraphTests(TestCase):
+    def test_json_errors_explain_empty_non_json_or_invalid_shape_without_accepting_them(self):
+        for text,message in [('', '未返回公开'), ('<tool_call>test</tool_call>', '工具调用协议'),
+                             ('not JSON','JSON 格式无效'), ('{"relations":[','JSON 格式无效'),
+                             ('[]','JSON 对象')]:
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError,message):
+                graph_payload(text)
+        self.assertEqual(graph_payload('\ufeff```JSON\n{"relations":[],"has_more":false}\n```'),
+                         {'relations':[],'has_more':False})
+
+    def test_truncated_json_only_recovers_complete_array_elements_and_respects_quoted_braces(self):
+        row={'quote':'原文包含括号 } ] 和 "relations"，不作为 JSON 结构。'}
+        body='{"has_more":false,"metadata":{"relations":["ignore"]},"relations":['+json.dumps(row)+',{"subject":{"name":"unfinished'
+        result=truncated_graph_payload(body)
+        self.assertEqual(result,{'relations':[row],'has_more':True})
+        self.assertEqual(truncated_graph_payload('{"relations":['),{'relations':[],'has_more':True})
+        for broken in ['text {"relations":[{}]}','{"quote":"relations: []"','{"relations":{}','{"nested":{"relations":[{}]}}']:
+            with self.subTest(broken=broken),self.assertRaises(ValueError):
+                truncated_graph_payload(broken)
+
     @patch('kb.provenance.annotate_results')
     @patch('kb.keyword_index.search')
     @patch('kb.keyword_index.get_chunks')

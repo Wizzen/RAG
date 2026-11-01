@@ -3,6 +3,9 @@ from __future__ import annotations
 """验证真正的增量输出、工具分片、日志重放与未审核数据的权限边界。"""
 
 import json
+import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import Mock, patch
 
 from asgiref.sync import async_to_sync
@@ -10,6 +13,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 from langchain_core.messages import AIMessageChunk
+from langchain_core.runnables import Runnable
 
 from kb.graph_extraction import extract_focused, run_extraction
 from kb.graph_progress import GraphProgress, call_model, visible_text
@@ -123,6 +127,57 @@ class GraphProgressTests(TestCase):
         self.assertEqual(next(data['text'] for kind,data in self.events() if kind=='token'),'abcd')
         self.assertIn('notice',[kind for kind,data in self.events()])
 
+    def test_silent_async_model_is_cancelled_at_deadline_and_its_stream_is_closed(self):
+        closed=[]
+        class SilentModel(Runnable):
+            def invoke(self, *_args, **_kwargs):
+                raise AssertionError('必须使用可取消的异步流')
+            async def astream(self, *_args, **_kwargs):
+                try:
+                    await asyncio.sleep(60)
+                    yield AIMessageChunk(content='late')
+                finally:
+                    closed.append(True)
+        with self.assertRaises(TimeoutError):
+            call_model(SilentModel(), [], GraphProgress(self.job.pk), request_timeout=0.03)
+        self.assertEqual(closed,[True])
+        self.assertFalse(self.job.events.filter(kind='token').exists())
+
+    def test_real_sdk_can_stream_two_successive_requests_on_the_bounded_worker(self):
+        from kb.agent import _get_llm
+        from langchain_core.messages import HumanMessage
+        requests=[]
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version='HTTP/1.1'
+            def log_message(self,*args):pass
+            def do_POST(self):
+                requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                payload={'id':'test','object':'chat.completion.chunk','created':1,'model':'test',
+                         'choices':[{'index':0,'delta':{'role':'assistant','content':'{"relations":[]}'},'finish_reason':None}]}
+                tail={**payload,'choices':[{'index':0,'delta':{},'finish_reason':'stop'}]}
+                body=('data: '+json.dumps(payload)+'\n\ndata: '+json.dumps(tail)+'\n\ndata: [DONE]\n\n').encode()
+                self.send_response(200);self.send_header('Content-Type','text/event-stream')
+                self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        with ThreadingHTTPServer(('127.0.0.1',0),Handler) as server:
+            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+            model=_get_llm({'base_url':f'http://127.0.0.1:{server.server_port}/v1','model':'test',
+                            'api_key':'','temperature':0,'single_request_connections':True})
+            def read_source(chunk_id: str) -> str:
+                """Read one source chunk."""
+                return chunk_id
+            agent=model.bind_tools([read_source])
+            try:
+                for turn,request_model in ((1,agent),(2,agent.bind(tool_choice='none'))):
+                    response=call_model(request_model,[HumanMessage(content='synthetic test')],GraphProgress(self.job.pk),
+                                         turn,request_timeout=2)
+                    self.assertEqual(response.content,'{"relations":[]}')
+            finally:
+                server.shutdown();thread.join(timeout=3)
+        self.assertEqual(len(requests),2)
+        self.assertTrue(all(request['stream'] for request in requests))
+        self.assertEqual(requests[0]['tools'],requests[1]['tools'])
+        self.assertEqual(requests[1]['tool_choice'],'none')
+
     def terminal(self):
         self.job.status='completed'; self.job.save(update_fields=['status'])
         self.first=GraphExtractionEvent.objects.create(extraction=self.job,kind='token',payload={'text':'first\nline','turn':1})
@@ -177,3 +232,38 @@ class GraphProgressTests(TestCase):
         with patch('kb.graph_extraction.schedule_document',return_value=False):
             response=self.client.post(reverse('kb:graph_action'),{'kb':self.folder.slug,'action':'extract','document':str(self.doc.pk),'focus':'每日检查'})
         self.assertEqual(response.json()['job_id'],self.job.pk)
+
+    def test_retry_uses_the_failed_jobs_focus_and_keeps_existing_history(self):
+        self.job.status = 'failed'; self.job.save(update_fields=['status'])
+        def schedule(document, **kwargs):
+            self.assertEqual(document.pk, self.doc.pk)
+            self.assertEqual(kwargs['focus'], self.job.focus)
+            GraphExtraction.objects.create(document=document, focus=kwargs['focus'], source_digest=digest(document.md_content))
+            return True
+        with patch('kb.graph_extraction.schedule_document', side_effect=schedule):
+            response = self.client.post(reverse('kb:graph_action'), {'kb':self.folder.slug,
+                                       'action':'retry_extract', 'extraction':self.job.pk, 'focus':'ignored'})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotEqual(response.json()['job_id'], self.job.pk)
+        self.job.refresh_from_db(); self.assertEqual(self.job.status, 'failed')
+
+    def test_retry_rejects_active_jobs_changed_documents_and_non_managers(self):
+        url=reverse('kb:graph_action')
+        data={'kb':self.folder.slug, 'action':'retry_extract', 'extraction':self.job.pk}
+        with patch('kb.graph_extraction.schedule_document') as schedule:
+            self.assertEqual(self.client.post(url,data).status_code,400)
+            self.job.status='failed';self.job.save(update_fields=['status'])
+            self.doc.md_content+='changed';self.doc.save(update_fields=['md_content'])
+            self.assertEqual(self.client.post(url,data).status_code,400)
+            self.client.force_login(self.reader)
+            self.assertEqual(self.client.post(url,data).status_code,404)
+            schedule.assert_not_called()
+
+    def test_retry_cannot_use_a_job_from_a_different_library_scope(self):
+        other=KnowledgeBase.objects.create(name='Other',slug='retry-other')
+        doc=Document.objects.create(kb=other,original_name='other.pdf',status='completed',md_content='其他资料原文')
+        job=GraphExtraction.objects.create(document=doc,status='failed',focus='其他方面',source_digest=digest(doc.md_content))
+        with patch('kb.graph_extraction.schedule_document') as schedule:
+            response=self.client.post(reverse('kb:graph_action'),{'kb':self.folder.slug,'action':'retry_extract','extraction':job.pk})
+        self.assertEqual(response.status_code,404)
+        schedule.assert_not_called()

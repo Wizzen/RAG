@@ -225,7 +225,11 @@ def _get_llm(llm_cfg: dict) -> ChatOpenAI:
         max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
         extra_body=answer_extra_body(llm_cfg),
         http_client=httpx.Client(trust_env=False, follow_redirects=False),
-        http_async_client=httpx.AsyncClient(trust_env=False, follow_redirects=False),
+        # Graph workers use a bounded event loop per synchronous request.
+        # Close each HTTP connection before that loop exits.
+        http_async_client=httpx.AsyncClient(trust_env=False, follow_redirects=False,
+                                           limits=httpx.Limits(max_keepalive_connections=0)
+                                           if llm_cfg.get('single_request_connections') else httpx.Limits()),
         timeout=180,
         max_retries=0,
     )
@@ -602,12 +606,14 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
 """
 
     system_prompt += (
-        "\n知识图谱：用户询问明确编号的设备、部件、图纸之间的关系时，优先调用 kb_graph_search。"
-        "它返回人工核对的结构化关系及原始行，可直接回答该关系，无需为了有 chunk 再做向量检索。"
-        "只有返回的关系及适用条件已核对，原始行的其它字段不自动视为已核对事实；关系不代表永久或绝对真理。"
-        "ambiguous=true 时请用户指定设备，truncated=true 时明确结果不完整；没有命中不能推断关系不存在。"
-        "检修步骤、参数解释或图谱未覆盖的问题继续用 kb_search / kb_fetch_doc。"
-        "引用结构化事实时写来源文件、工作表和原始行号，不编造手册页码。"
+        "\n知识图谱：用户询问对象的属性、分级、子参数、阈值或明确编号之间的关系时，优先调用 kb_graph_search。"
+        "查询包含对象名、属性和用户指定的方法、标准、等级；例如“锻件 超声检测 I级 底波降低量”。"
+        "它返回人工核对的内容、取值、适用条件与原文，可直接据此回答，无需为了有 chunk 再做向量检索。"
+        "只有返回的具体内容及适用条件已核对，原文其它字段不自动视为已核对事实。"
+        "不同标准、版本、检测方法的分支必须分别说明，缺少限定时不得任意选择一个或合并阈值。"
+        "ambiguous=true 时请用户补充对象范围，truncated=true 时明确结果不完整；没有命中不能推断事实不存在。"
+        "检修步骤、进一步解释或图谱未覆盖的问题继续用 kb_search / kb_fetch_doc。"
+        "引用写实际来源文件；有工作表和行号时一并写出，不编造手册页码。"
         "调用图谱后回答须核对通过才发布；导出只能使用 request_verified_export，不能调用 write_analysis。"
     )
 
@@ -621,9 +627,10 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         return _kb_tree_text(_dept_filter)
 
     def kb_graph_search(query: str, kb_slug: str = "") -> str:
-        """查询已人工核对的明确关系和来源行；支持设备、部件、图纸编号及两跳路径。
+        """查询已人工确认的对象属性、分类等级、子参数、取值与原文，以及设备/部件/图纸关系。
 
-        未命中并不表示不存在；实体有歧义时请指定设备。维修步骤仍须查手册。
+        query 应包含对象名和需要的属性，可加标准、检测方法和等级；不同分支保留适用条件。
+        未命中并不表示不存在；对象有歧义时请限定范围。维修步骤仍须查手册。
         kb_slug 留空使用当前知识库，文件夹只包含权限范围内的子库。
         """
         nonlocal graph_used
@@ -648,7 +655,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
         return json.dumps({
             "facts": [{"id": fact["relation_id"], "text": fact["text"]} for fact in result["facts"]],
             "paths": result["paths"], "ambiguous": result["ambiguous"], "truncated": result["truncated"],
-            "notice": "仅关系与适用条件已人工核对。缺失不是否定证明；所有引用均为当前原始来源。",
+            "notice": "仅返回的具体内容与适用条件已人工确认。不同标准、版本、方法分别适用；缺失不是否定证明。",
         }, ensure_ascii=False)
 
     def kb_search(query: str, k: int = 0, kb_slug: str = "") -> str:
@@ -1151,7 +1158,7 @@ def _build_agent(kb_slug: str, thread_id: str, llm_cfg: dict, top_k: int, checkp
                 else:
                     parts.append(f"{k}: {shown}")
             st = status_map.get(r.status, r.status)
-            doc_name = r.document.original_name if r.document else "（文档已删除）"
+            doc_name = r.record_name
             updated = r.updated_at.strftime("%Y-%m-%d")
             body = " | ".join(parts) if parts else "（登记字段均为空）"
             blocks.append(f"[{i}] 库「{r.tracker.kb.name}」· {doc_name}"

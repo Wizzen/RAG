@@ -2,9 +2,11 @@
   <div class="graph-live-header"><h2>生成进度</h2><span id="graphLiveState" role="status" aria-live="polite">等待选择任务</span></div>
   <select id="graphLiveRun" hidden aria-label="当前生成任务"><option value="">请选择任务</option>{% for job in live_jobs %}<option value="{{ job.id }}" data-status="{{ job.status }}">{{ job.label }}</option>{% endfor %}</select>
   <div class="graph-coverage"><p id="graphLiveCoverage" role="status" aria-live="polite">等待召回相关正文。</p><progress id="graphLiveCoverageMeter" max="1" value="0" aria-label="本次已用模型调用次数"></progress></div>
+  <p id="graphLiveWaiting" class="graph-meta" role="status"></p>
+  <div id="graphLiveFailure" hidden><p id="graphLiveError" class="graph-stale" role="alert"></p><button type="button" class="btn sm outline" id="graphLiveRetry">重试抽取</button><p class="graph-meta">重试会创建新任务，保留原有候选；重新连接日志仅恢复进度显示。</p></div>
   <details id="graphLiveProcess"><summary>查看生成过程和原始输出</summary>
   <div class="graph-controls">
-    <button type="button" class="btn sm outline" id="graphLiveReconnect">重新连接</button>
+    <button type="button" class="btn sm outline" id="graphLiveReconnect">重新连接日志</button>
     <label class="graph-live-follow"><input type="checkbox" id="graphLiveFollow" checked> 跟随最新输出</label>
   </div>
   <p id="graphLiveFocus" class="graph-meta">生成候选后仍需您逐条核对确认。</p>

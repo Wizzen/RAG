@@ -2,16 +2,22 @@
 {% load static %}
 {% block title %}知识图谱 · SHDR RAG{% endblock %}
 {% block content %}
-<div id="graphPage" class="graph-page" data-graph-url="{% url 'kb:graph' %}" data-action-url="{% url 'kb:graph_action' %}" data-document="{{ selected_document.pk|default:'' }}">
-<h1>知识图谱</h1>
+<div id="graphPage" class="graph-page" data-graph-url="{% url 'kb:graph' %}" data-action-url="{% url 'kb:graph_action' %}" data-document="{{ selected_document.pk|default:'' }}" data-hierarchy-url="{% url 'kb:knowledge_structure' %}" data-hierarchy-action="{% url 'kb:knowledge_action' %}" data-hierarchy-scope="{{ hierarchy_scope.slug|default:'' }}">
+<header class="page-head">
+  <div class="page-head-main">
+    <h1>知识图谱</h1>
+    <p class="page-desc">从资料中按主题抽取对象、属性与取值，逐条核对原文后用于问答。</p>
+  </div>
+</header>
 <section class="graph-compose">
   <label class="graph-document-label" for="graphDocument">资料</label>
   <select id="graphDocument" aria-label="选择资料"><option value="">请选择资料</option>{% for group in document_groups %}<optgroup label="{{ group.name }}">{% for doc in group.documents %}<option value="{{ doc.pk }}" {% if selected_document.pk == doc.pk %}selected{% endif %}>{{ doc.original_name }}</option>{% endfor %}</optgroup>{% endfor %}</select>
   {% if can_manage %}<form id="extractForm" class="graph-compose-form">
     {% csrf_token %}<input type="hidden" name="action" value="extract"><input type="hidden" name="document" value="{{ selected_document.pk|default:'' }}">
-    <label for="graphFocus">关注什么</label><div class="graph-compose-input"><textarea id="graphFocus" name="focus" required minlength="2" maxlength="1000" rows="2" placeholder="例如：全部验收要求、质量分级和适用条件"></textarea>
+    <label for="graphFocus">关注什么</label><div class="graph-compose-input"><textarea id="graphFocus" name="focus" required minlength="2" maxlength="1000" rows="2" placeholder="例如：锻件的质量分级、各级参数和适用条件"></textarea>
     <button class="btn primary" type="submit" {% if not selected_document %}disabled{% endif %}>开始构建</button></div>
-  </form><p class="graph-meta graph-compose-hint">按主题检索相关正文，AI 按需补读邻文；结果经您确认后用于问答。</p>{% endif %}
+    {% if knowledge_objects %}<details class="knowledge-target"><summary>跨资料追加到已有对象（可选）</summary><select name="target_object" aria-label="追加到已有对象"><option value="">自动按集合与对象身份归并</option>{% for object in knowledge_objects %}<option value="{{ object.pk }}">{{ object.label }}</option>{% endfor %}</select></details>{% endif %}
+  </form><p class="graph-meta graph-compose-hint">按主题定位原文，自动展开相关表格的分类、参数和取值；逐条确认后用于问答。</p>{% endif %}
 </section>
 <details class="graph-filters"><summary>筛选与历史</summary>
 <form id="graphSearch" class="graph-controls">
@@ -25,6 +31,13 @@
 </details>
 <p id="graphStatus" role="status" aria-live="polite"></p>
 {% if can_manage %}{% include "kb/_graph_live.html" %}{% endif %}
+<section class="knowledge-hierarchy" id="knowledgeHierarchy" aria-label="对象与层级属性">
+  <div class="knowledge-heading"><h2>对象知识 <span class="graph-meta" id="knowledgeCounts"></span></h2><label><input type="checkbox" id="knowledgeCurrentRun"> 只看本次抽取</label></div>
+  <div class="knowledge-objects" id="knowledgeObjects" aria-label="选择知识对象"></div>
+  <p id="knowledgeStatus" class="graph-meta" role="status">正在读取对象知识…</p>
+  <div class="knowledge-workspace"><nav id="knowledgeTree" aria-label="属性与子参数"></nav><aside id="knowledgeInspector" aria-label="内容、条件与原文审核"><p class="graph-meta">展开属性并选择具体内容，查看完整取值和原文。</p></aside></div>
+</section>
+<details class="graph-list-view" id="graphLegacyView"><summary>旧版关系图与历史记录</summary>
 <section class="graph-explorer" id="graphExplorer">
   <div class="graph-toolbar">
     <div><strong>图谱</strong> <span id="graphCounts" class="graph-meta"></span></div>
@@ -41,6 +54,7 @@
   </div>
 </section>
 <details class="graph-list-view"><summary>查看文字列表</summary><div id="graphResults">{% include "kb/_graph_results.html" %}</div></details>
+</details>
 {% if can_manage %}
 <details class="graph-panel graph-advanced"><summary>高级工具</summary>
 <details class="graph-panel" id="graphAttach">
@@ -75,12 +89,13 @@
 <script src="{% static 'js/vendor/g6-5.1.1.min.js' %}"></script>
 <script src="{% static 'js/graph_explorer.js' %}"></script>
 <script src="{% static 'js/graph_live.js' %}"></script>
+<script src="{% static 'js/knowledge_hierarchy.js' %}"></script>
+<link rel="stylesheet" href="{% static 'css/knowledge_hierarchy.css' %}">
 <link rel="stylesheet" href="{% static 'css/graph_explorer.css' %}">
 <style>
 .graph-controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:16px 0}
 .graph-controls label{display:flex;flex-direction:column;gap:6px;font-size:13px}
-.graph-controls input,.graph-controls select,.graph-controls textarea{padding:9px;border:1px solid var(--rule);border-radius:6px;background:var(--surface);color:var(--text);font:inherit;max-width:100%}
-.graph-wide{flex-basis:100%}.graph-panel,.graph-relation{border:1px solid var(--rule-soft);border-radius:8px;padding:18px;margin:14px 0;background:var(--surface)}
+.graph-wide{flex-basis:100%}.graph-panel,.graph-relation{border:1px solid var(--rule);border-radius:var(--radius-lg);padding:18px 20px;margin:16px 0;background:var(--surface);box-shadow:var(--shadow-sm)}
 .graph-relation h3{font-size:15px;margin:0 0 10px}.graph-meta{color:var(--dim);font-size:12px}.graph-quote{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;max-height:220px;overflow:auto}
 .graph-path{padding:10px;border-left:3px solid var(--ok);background:var(--paper);margin:6px 0;overflow-wrap:anywhere}.graph-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.graph-stale{color:var(--danger)}
 @media(max-width:620px){.graph-controls label{width:100%}.graph-panel,.graph-relation{padding:12px}}

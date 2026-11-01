@@ -2,15 +2,37 @@
 from django.contrib.auth.decorators import login_required
 from django.urls import path
 
-from . import graph_views, views
+from . import graph_views, hierarchy_views, feed_views, connector_views, views
 
 app_name = "kb"
 
 urlpatterns = [
+    path('feeds/builder/',connector_views.index,name='connector_builder'),
+    path('feeds/builder/create/',connector_views.create,name='connector_create'),
+    path('feeds/builder/resume/',connector_views.resume,name='connector_resume'),
+    path('feeds/builder/clear-context/',connector_views.clear_context,name='connector_clear_context'),
+    path('feeds/builder/forget/',connector_views.forget,name='connector_forget'),
+    path('feeds/builder/test-auth/',connector_views.test_auth,name='connector_test_auth'),
+    path('feeds/builder/<uuid:job_id>/',connector_views.status,name='connector_status'),
+    path('feeds/builder/<uuid:job_id>/thread/',connector_views.thread,name='connector_thread'),
+    path('feeds/builder/<uuid:job_id>/download/',connector_views.download,name='connector_download'),
+    path('feeds/builder/<uuid:job_id>/enable/',connector_views.enable,name='connector_enable'),
+    path('feeds/builder/<uuid:job_id>/credentials/',connector_views.credentials,name='connector_credentials'),
+    path('feeds/builder/<uuid:job_id>/cancel/',connector_views.cancel,name='connector_cancel'),
+    path('feeds/builder/<uuid:job_id>/refine/',connector_views.refine,name='connector_refine'),
+    path('feeds/builder/<uuid:job_id>/browser.png',connector_views.browser_preview,name='connector_browser_preview'),
+    path('feeds/',feed_views.index,name='feeds'),
+    path('feeds/state/',feed_views.state,name='feed_state'),
+    path('feeds/action/',feed_views.action,name='feed_action'),
+    path('feeds/kit.zip',feed_views.kit,name='feed_kit'),
+    path('api/feeds/<uuid:feed_id>/ingest/',feed_views.ingest,name='feed_ingest'),
+    path('api/feeds/<uuid:feed_id>/runs/<uuid:run_id>/',feed_views.run_status,name='feed_run_status'),
     path("graph/", graph_views.graph_view, name="graph"),
     path("graph/action/", graph_views.graph_action, name="graph_action"),
     path("graph/extraction/<int:job_id>/events/", graph_views.graph_events, name="graph_events"),
-    path("graph/fact/<int:relation_id>/", graph_views.graph_fact, name="graph_fact"),
+    path("graph/fact/<str:relation_id>/", graph_views.graph_fact, name="graph_fact"),
+    path("graph/structure/", hierarchy_views.structure, name="knowledge_structure"),
+    path("graph/structure/action/", hierarchy_views.action, name="knowledge_action"),
     path("graph/relation/<int:relation_id>/", graph_views.graph_relation, name="graph_relation"),
     # 管理页面（仅 staff）
     path("manage/", views.manage_list, name="manage_list"),

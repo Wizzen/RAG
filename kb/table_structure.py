@@ -74,7 +74,8 @@ def parse_table(source):
     return parser.rows
 
 
-def table_text(source):
+def table_grid(source):
+    """还原合并单元格，返回矩形网格及原始行元数据。"""
     rows = parse_table(source)
     grid = {}
     width = 0
@@ -93,10 +94,16 @@ def table_text(source):
                     grid[row, col] = cell['text']
             column += cs
             width = max(width, column)
+    return [[grid.get((ri,col),'') for col in range(width)] for ri in range(len(rows))], rows
+
+
+def table_text(source):
+    grid, rows = table_grid(source)
+    width = len(grid[0]) if grid else 0
     rendered = []
     for ri, cells in enumerate(rows):
         if len(cells) == 1 and cells[0]['colspan'] == width and cells[0]['rowspan'] == 1:
             rendered.append(cells[0]['text'])
         else:
-            rendered.append(' | '.join(grid.get((ri, col), '') for col in range(width)).rstrip(' |'))
+            rendered.append(' | '.join(grid[ri]).rstrip(' |'))
     return '\n'.join(rendered)

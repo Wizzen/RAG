@@ -53,6 +53,16 @@ _CONTENT_LIST = [
 
 
 class SigAndLocateTests(TestCase):
+    def test_mineru_string_table_content_has_table_bbox_for_html_and_markdown(self):
+        for body in ['<table><tr><td>活性等级</td><td>定位源个数</td></tr><tr><td>强活性</td><td>E &gt; 10</td></tr></table>',
+                     '| 活性等级 | 定位源个数 |\n|---|---|\n| 强活性 | E > 10 |']:
+            with self.subTest(body=body):
+                spans,_=_locate_blocks([{'type':'table','text':body,'page_idx':9,'bbox':[100,200,900,600]}],_md_for_embedding(body))
+                self.assertEqual(len(spans),1)
+                self.assertEqual(spans[0]['kind'],'table')
+                self.assertEqual(spans[0]['page'],9)
+                self.assertEqual(spans[0]['bbox'],[100,200,900,600])
+
     def test_sig_strips_punctuation_and_case(self):
         self.assertEqual(_sig("Hello, World! 你好。"), "helloworld你好")
 

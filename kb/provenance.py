@@ -139,9 +139,10 @@ def _block_locate_text(block: dict) -> tuple[str, list[str]] | None:
     if btype in _SKIP_TYPES:
         return None
     if btype == "table":
-        from .pipeline import _html_table_to_text
-        html_body = block.get("table_body") or block.get("html") or ""
-        rendered = _html_table_to_text(html_body) if html_body else ""
+        from .pipeline import _md_for_embedding
+        # MinerU 4.x can return table content as a string (HTML or Markdown).
+        body = block.get("table_body") or block.get("html") or block.get("text") or ""
+        rendered = _md_for_embedding(body) if body else ""
         rows = [r for r in rendered.split("\n") if r.strip()]
         if rows:
             return "\n".join(rows), rows

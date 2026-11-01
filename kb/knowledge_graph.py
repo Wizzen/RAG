@@ -241,6 +241,9 @@ def retrieve_passages(scope_slugs: list[str], document_slugs: list[str], query: 
     walked = walk_graph(scope_slugs, query)
     results = {}
     cache = {}
+    from .knowledge_hierarchy import retrieve_passages as hierarchy_passages
+    for row in hierarchy_passages(scope_slugs,document_slugs,query,limit=limit):
+        results[(row['doc_id'],row['chunk_id'])]=row
     for path in walked["paths"]:
         relation = path[-1]
         for evidence in relation.evidence.all():
@@ -317,6 +320,9 @@ def validate_fact(snapshot: dict, user) -> bool:
     from .access import kb_accessible
     if not getattr(user, "is_active", False) or not isinstance(snapshot, dict):
         return False
+    if snapshot.get('schema_version')==2:
+        from .knowledge_hierarchy import validate_snapshot
+        return validate_snapshot(snapshot,user)
     try:
         relation = relation_queryset().filter(pk=snapshot.get("relation_id")).first()
     except (TypeError, ValueError):
@@ -341,6 +347,14 @@ def lookup_facts(scope_slugs: list[str], query: str) -> dict:
     paths = []
     size = 0
     truncated = walked["truncated"]
+    from .knowledge_hierarchy import approved_matches, fact_snapshot as hierarchy_snapshot
+    for item in approved_matches(scope_slugs,query,limit=13):
+        snapshot=hierarchy_snapshot(item)
+        if snapshot is None:continue
+        if len(facts)>=12 or size+len(snapshot['text'])>16000:
+            truncated=True;break
+        facts[snapshot['relation_id']]=snapshot
+        paths.append([snapshot['relation_id']]);size+=len(snapshot['text'])
     for path in walked["paths"]:
         ids = []
         for relation in path:

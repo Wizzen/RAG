@@ -5,6 +5,7 @@
 
 # ── 运行时数据 ──
 db.sqlite3
+/db.sqlite3.*
 db.sqlite3-journal
 data/
 media/

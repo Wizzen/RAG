@@ -7,21 +7,30 @@
     if (!page || !form) return;
     const status=document.getElementById('graphStatus'), picker=document.getElementById('graphDocument');
     const url=page.dataset.graphUrl, actionUrl=page.dataset.actionUrl;
-    let sequence=0, pollTimer, switching=false;
+    let sequence=0, pollTimer, switching=false, disposed=false;
+    const requests=new Set();
     const events=new AbortController();
-    const explorer=window.createGraphExplorer?.({form,url});
-    const live=window.createGraphLive?.({scope:()=>form.elements.kb.value,run:()=>form.elements.run.value,onComplete:()=>refresh(true)});
-    window.disposeGraphPage=()=>{++sequence;clearTimeout(pollTimer);events.abort();explorer?.destroy();live?.destroy();};
+    let explorer=null;
+    const hierarchy=window.createKnowledgeHierarchy?.({form,page});
+    const legacy=document.getElementById('graphLegacyView');
+    if(!legacy || legacy.open)explorer=window.createGraphExplorer?.({form,url});
+    legacy?.addEventListener('toggle',()=>{if(legacy.open && !explorer){explorer=window.createGraphExplorer?.({form,url});explorer?.reload();}});
+    const live=window.createGraphLive?.({scope:()=>form.elements.kb.value,run:()=>form.elements.run.value,onComplete:()=>refresh(true),onRetry:id=>{
+      const data=new FormData();data.set('action','retry_extract');data.set('extraction',id);return mutate(data);
+    }});
+    window.disposeGraphPage=()=>{disposed=true;++sequence;clearTimeout(pollTimer);events.abort();requests.forEach(request=>request.abort());explorer?.destroy();hierarchy?.destroy();live?.destroy();};
     function poll() {
       clearTimeout(pollTimer);
-      if (form.isConnected && document.querySelector('#graphResults [data-graph-active]')) pollTimer=setTimeout(()=>refresh(true),3000);
+      if (!disposed && form.isConnected && (document.querySelector('#graphResults [data-graph-active]') || live?.active?.())) pollTimer=setTimeout(()=>refresh(true),3000);
     }
     async function refresh(quiet=false) {
-      if (!form.isConnected || switching) return;
+      if (disposed || !form.isConnected || switching) return;
       const ticket=++sequence;
+      const controller=new AbortController();requests.add(controller);
+      const timeout=setTimeout(()=>controller.abort(),15000);
       if (!quiet) status.textContent='正在加载…';
       try {
-        const response=await fetch(url+'?'+new URLSearchParams(new FormData(form)),{headers:{'X-Requested-With':'XMLHttpRequest'}});
+        const response=await fetch(url+'?'+new URLSearchParams(new FormData(form)),{signal:controller.signal,headers:{'X-Requested-With':'XMLHttpRequest'}});
         if (!response.ok) throw new Error('加载失败，请重试。');
         if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('会话已失效，请重新登录。');
         const result=await response.json();
@@ -34,21 +43,23 @@
           select.value=previous;
         }
         if (live && result.live_jobs) live.updateJobs(result.live_jobs);
-        await explorer?.reload();
+        await Promise.all([explorer?.reload(),hierarchy?.reload()]);
         if (form.isConnected && ticket===sequence) status.textContent='';
-        poll();
-      } catch(error) {if (form.isConnected && ticket===sequence) status.textContent=error.message;}
+      } catch(error) {if (form.isConnected && ticket===sequence) status.textContent=error.name==='AbortError' ? '读取进度超时，稍后自动重试；后台抽取不受影响。' : error.message;}
+      finally {clearTimeout(timeout);requests.delete(controller);if (form.isConnected && ticket===sequence && !switching) poll();}
     }
     async function mutate(data,button) {
       if (data.get('action')==='attach' && !data.get('relation')) {status.textContent='请先选择一条关系。';return;}
       data.set('kb',form.elements.kb.value);
       if (button) button.disabled=true;
+      const controller=new AbortController();requests.add(controller);
+      const timeout=setTimeout(()=>controller.abort(),30000);
       try {
-        const response=await fetch(actionUrl,{method:'POST',body:data,headers:{'X-Requested-With':'XMLHttpRequest','X-CSRFToken':document.querySelector('[name=csrfmiddlewaretoken]').value}});
+        const response=await fetch(actionUrl,{method:'POST',body:data,signal:controller.signal,headers:{'X-Requested-With':'XMLHttpRequest','X-CSRFToken':document.querySelector('[name=csrfmiddlewaretoken]').value}});
         if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('保存失败，请检查登录状态或权限。');
         const result=await response.json();
         if (!response.ok) throw new Error(result.error || '保存失败。');
-        if (!form.isConnected) return;
+        if (disposed || !form.isConnected) return;
         window.fosToast?.(result.message,'ok');
         if (data.get('action')==='bind') document.querySelector('#bindForm option:checked')?.remove();
         if (result.job_id) {
@@ -58,8 +69,12 @@
           select.value=String(result.job_id);live?.select(result.job_id);
         }
         await refresh(true);
-      } catch(error) {if (form.isConnected) status.textContent=error.message;}
-      finally {if (button) button.disabled=false;}
+      } catch(error) {
+        if (!disposed && form.isConnected) {
+          status.textContent=error.name==='AbortError' ? '提交结果暂未确认，正在重新读取任务状态。' : error.message;
+          if (error.name==='AbortError' || error.name==='TypeError') await refresh(true);
+        }
+      } finally {clearTimeout(timeout);requests.delete(controller);if (button) button.disabled=false;}
     }
     picker.addEventListener('change',async()=>{
       if (!picker.value) {picker.value=page.dataset.document;return;}
@@ -100,7 +115,7 @@
     },{signal:events.signal});
     ['attachForm','bindForm','extractForm'].forEach(id=>document.getElementById(id)?.addEventListener('submit',event=>{event.preventDefault();mutate(new FormData(event.target),event.submitter);}));
     document.getElementById('backfill')?.addEventListener('click',event=>{const data=new FormData();data.set('action','backfill');mutate(data,event.target);});
-    poll();explorer?.reload();
+    poll();explorer?.reload();hierarchy?.reload();
   }
   document.addEventListener('graph:init',initGraph);initGraph();
 })();

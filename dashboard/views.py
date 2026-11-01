@@ -25,13 +25,13 @@ User = get_user_model()
 
 # 趋势图天数
 TREND_DAYS = 14
-# 文档状态 → 展示顺序 + Inspection Tag 配色（与 fos.css 徽标一致）
+# 文档状态 → 展示顺序 + 配色（fos.css 设计变量，随明暗主题切换）
 DOC_STATUS_META = [
-    ("completed", "已完成", "#2E7D43"),   # ok green
-    ("ocr", "OCR 中", "#E0A100"),         # warn amber
-    ("indexing", "向量化中", "#C2362C"),  # danger red
-    ("pending", "待处理", "#807A6C"),     # mute grey
-    ("failed", "失败", "#9E2A22"),        # dark danger
+    ("completed", "已完成", "var(--ok)"),
+    ("ocr", "OCR 中", "var(--warn)"),
+    ("indexing", "向量化中", "var(--brand)"),
+    ("pending", "待处理", "var(--mute)"),
+    ("failed", "失败", "var(--danger)"),
 ]
 
 
@@ -66,8 +66,8 @@ def _trend_series():
     max_val = max([*user_vals, *ai_vals, 1])
 
     # SVG 画布尺寸（viewBox，自适应宽度）
-    W, H = 560, 180
-    pad_l, pad_r, pad_t, pad_b = 28, 12, 14, 26
+    W, H = 960, 240
+    pad_l, pad_r, pad_t, pad_b = 30, 12, 16, 28
     plot_w = W - pad_l - pad_r
     plot_h = H - pad_t - pad_b
 
@@ -89,6 +89,10 @@ def _trend_series():
 
     def to_path(pts):
         return " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+
+    def to_area(pts):
+        base = pad_t + plot_h
+        return f"{to_path(pts)} {pts[-1][0]:.1f},{base:.1f} {pts[0][0]:.1f},{base:.1f}"
 
     # x 轴标签：每天一个会太密，隔 2 天标一次
     x_labels = [
@@ -117,6 +121,8 @@ def _trend_series():
             "plot_w": plot_w, "plot_h": plot_h,
             "user_path": to_path(user_pts),
             "ai_path": to_path(ai_pts),
+            "user_area": to_area(user_pts),
+            "ai_area": to_area(ai_pts),
             "user_pts": user_pts,
             "ai_pts": ai_pts,
             "x_labels": x_labels,

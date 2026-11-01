@@ -1,10 +1,12 @@
 {% extends "kb/_base.html" %}
 {% block title %}{{ kb.name }} · 追踪表{% endblock %}
 {% block content %}
-<div style="display:flex;gap:8px;flex-wrap:wrap">
-  <a class="btn sm outline" href="/kb/manage/{{ kb.slug }}/">← 返回 {{ kb.name }}</a>
-</div>
-<h1>{{ kb.name }} <span class="dept-badge">追踪表</span></h1>
+<header class="page-head">
+  <div class="page-head-main">
+    <a class="page-back" href="/kb/manage/{{ kb.slug }}/">{{ kb.name }}</a>
+    <h1>{{ kb.name }} <span class="dept-badge">追踪表</span></h1>
+  </div>
+</header>
 
 <div class="section-bar">
   <div>
@@ -67,7 +69,9 @@
         {% if r.status == 'proposed' %}
         <button type="button" class="btn sm primary trk-confirm" data-payload="{{ r.payload }}">确认变更</button>
         {% endif %}
-        {% if r.status != 'running' and r.status != 'pending' %}
+        {% if r.is_feed %}
+        <a class="btn sm outline" href="{% url 'kb:feeds' %}?kb={{ kb.slug }}">更新数据源</a>
+        {% elif r.status != 'running' and r.status != 'pending' %}
         <button type="button" class="btn sm outline trk-retry" data-row="{{ r.id }}">重试</button>
         {% endif %}
         <form method="post" action="/kb/manage/{{ kb.slug }}/tracker/" style="display:inline"
@@ -104,7 +108,7 @@
 {% endif %}
 
 {% if tracker.enabled %}
-<div class="section-bar" style="margin-top:26px">
+<div class="section-bar">
   <div><h2>抽取配置</h2><p>字段即表格列名；抽取由站点 LLM 完成，失败可重试</p></div>
 </div>
 <div class="trk-config">
@@ -131,17 +135,17 @@
 
 <style>
 /* 表格布局：fixed 列宽 + 省略号单元格，首列与表头冻结，横向滚动 */
-.trk-table-wrap{background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;
-  overflow:auto;max-height:calc(100vh - 220px);min-height:120px}
-.trk-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:12.5px}
-.trk-table th{position:sticky;top:0;z-index:2;background:var(--surface);
-  font-family:var(--fd);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
-  color:var(--dim);text-align:left;padding:10px 12px;border-bottom:1.5px solid var(--rule-soft);white-space:nowrap}
-.trk-table td{padding:8px 12px;border-bottom:1px solid var(--rule-soft);
+.trk-table-wrap{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);
+  overflow:auto;max-height:calc(100vh - 240px);min-height:120px}
+.trk-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:13px}
+.trk-table th{position:sticky;top:0;z-index:2;background:var(--surface-2);
+  font-family:var(--fd);font-weight:600;font-size:12px;
+  color:var(--dim);text-align:left;padding:11px 14px;border-bottom:1px solid var(--rule);white-space:nowrap}
+.trk-table td{padding:10px 14px;border-bottom:1px solid var(--rule-soft);background:var(--surface);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
 .trk-table tbody tr:last-child td{border-bottom:0}
 .trk-table .c-doc{position:sticky;left:0;z-index:1;width:210px;min-width:210px;
-  font:600 12px var(--fm)}
+  font:600 13px var(--fb)}
 .trk-table th.c-doc{z-index:3}
 .trk-table .c-field{width:120px}
 .trk-table .c-status{width:96px}
@@ -162,21 +166,19 @@
 .badge-stale{background:var(--warn-soft);color:#8a6300;border-color:var(--warn)}
 /* 确认变更弹窗：改前/改后逐字段对比 */
 .trk-diff{width:100%;border-collapse:collapse;font-size:12.5px;margin:4px 0 8px}
-.trk-diff th{font:700 11px var(--fd);text-transform:uppercase;letter-spacing:.05em;color:var(--dim);
-  text-align:left;padding:6px 8px;border-bottom:1.5px solid var(--rule-soft)}
+.trk-diff th{font:600 12px var(--fd);color:var(--dim);
+  text-align:left;padding:6px 8px;border-bottom:1px solid var(--rule)}
 .trk-diff td{padding:7px 8px;border-bottom:1px solid var(--rule-soft);vertical-align:top;word-break:break-all}
 .trk-diff tr:last-child td{border-bottom:0}
 .trk-diff td.chg{background:var(--warn-soft);color:var(--text)}
 .trk-diff .empty-v{color:var(--mute)}
 .trk-cf-hint{font-size:11px;color:var(--mute);margin:0 0 4px}  /* 表单内提示（.dialog-hint 的左右 padding 在此会双重缩进） */
 .trk-diff-bar{display:flex;gap:8px;justify-content:flex-end}
-.trk-config{background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:10px;padding:16px}
+.trk-config{background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius-lg);padding:18px 20px;box-shadow:var(--shadow-sm)}
 .trk-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
 .trk-field label{display:block;font-size:12px;font-weight:500;color:var(--dim);margin-bottom:6px}
 .trk-field label input[type=checkbox]{margin-right:6px;vertical-align:-2px}
-.trk-field textarea{width:100%;padding:9px 11px;font:500 13px var(--fm);border:1.5px solid var(--rule-soft);
-  border-radius:6px;background:var(--paper);color:var(--text);box-sizing:border-box;resize:vertical}
-.trk-field textarea:focus{border-color:var(--brand);outline:none}
+.trk-field textarea{width:100%;resize:vertical}
 @media(max-width:780px){.trk-grid{grid-template-columns:1fr}}
 </style>
 <dialog id="trkConfirmDialog" class="fos-dialog">

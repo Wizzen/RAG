@@ -16,11 +16,12 @@ class Command(BaseCommand):
         parser.add_argument('--kb', required=True)
         parser.add_argument('--retry', action='store_true')
         parser.add_argument('--focus', required=True, help='本次仅关注的一个方面')
+        parser.add_argument('--legacy', action='store_true', help='使用旧版关系抽取')
 
     def handle(self, *args, **options):
         kb = KnowledgeBase.objects.filter(slug=options['kb']).first()
         if kb is None:
             raise CommandError('知识库不存在。')
         documents = Document.objects.filter(Q(kb=kb) | Q(kb__parent=kb), status='completed').exclude(md_content='')
-        count = sum(schedule_document(doc, retry=options['retry'], focus=options['focus']) for doc in documents)
+        count = sum(schedule_document(doc, retry=options['retry'], focus=options['focus'],schema_version=1 if options['legacy'] else 2) for doc in documents)
         self.stdout.write(f'已安排 {count} 份文档抽取；进度可在知识图谱页面查看。')

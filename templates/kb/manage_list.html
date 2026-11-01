@@ -1,19 +1,19 @@
 {% extends "kb/_base.html" %}
 {% block title %}资料上传中心 · SHDR RAG{% endblock %}
 {% block content %}
-<div class="upload-head">
-  <div>
+<header class="page-head">
+  <div class="page-head-main">
     <h1>资料上传中心</h1>
+    <p class="page-desc">管理各部门的手册库与业务数据；上传后自动解析、分块并建立索引。</p>
   </div>
-</div>
-
-
+  <div class="page-actions">
+    <a class="btn outline" href="{% url 'kb:feeds' %}">自动更新知识库</a>
+    <button class="btn primary" type="button" id="openKbCreate">＋ 新建手册库</button>
+  </div>
+</header>
 
 <div class="section-bar">
   <div><h2>手册库</h2><p>PDF / MD / TXT / 图片（JPG·PNG·WebP）· xlsx / csv 自动识别为业务数据</p></div>
-  <div class="section-actions">
-    <button class="btn primary" type="button" id="openKbCreate">＋ 新建手册库</button>
-  </div>
 </div>
 
 <dialog id="kbCreateDialog" class="fos-dialog">
@@ -47,7 +47,10 @@
   {% for kb in kbs %}
   <div class="kb-card" data-slug="{{ kb.slug }}">
     <div class="pbody">
-      <div class="kb-name" data-name>{{ kb.name }} <span class="dept-badge" data-dept-badge title="部门：{{ kb.department }}（通用 = 所有部门可见）">{{ kb.department }}</span>{% if kb.embedding_label %} <span class="emb-badge" title="该库向量所用的 embedding 模型（向量化时自动记录）">🧬 {{ kb.embedding_label }}</span>{% endif %}</div>
+      <div class="kb-top">
+        <span class="kb-mono" aria-hidden="true">{{ kb.name|first|upper }}</span>
+        <div class="kb-name" data-name>{{ kb.name }} <span class="dept-badge" data-dept-badge title="部门：{{ kb.department }}（通用 = 所有部门可见）">{{ kb.department }}</span>{% if kb.embedding_label %} <span class="emb-badge" title="该库向量所用的 embedding 模型（向量化时自动记录）">{{ kb.embedding_label }}</span>{% endif %}</div>
+      </div>
       {% with counts=kb.aggregate_counts %}
       <div class="kb-stats">
         <span class="stat"><span class="v">{{ counts.0 }}</span><span class="k">文档</span></span>
@@ -92,37 +95,45 @@
   </form>
 </dialog>
 
-{% if is_global_admin %}
 <div class="section-bar dataset-bar">
-  <div><h2>业务数据</h2><p>在任意手册库内上传 xlsx / csv，自动识别导入。</p></div>
-  <span class="count-chip">{{ datasets|length }} 个</span>
+  <div><h2>业务数据</h2><p>自动采集的数据与导入的 xlsx / csv 在这里管理。</p></div>
+  <span class="count-chip">{{ business_kbs|length }} 个采集库{% if is_global_admin %} · {{ datasets|length }} 个导入表{% endif %}</span>
 </div>
 <div>
-  {% if datasets %}
+  {% if datasets and is_global_admin or business_kbs %}
   <div class="dataset-grid">
-    {% for dataset in datasets %}
+    {% for kb in business_kbs %}
+    <article data-business-slug="{{ kb.slug }}">
+      <span>自动采集 · {{ kb.department }}</span>
+      <strong title="{{ kb.name }}">{{ kb.name }}</strong>
+      <small>{{ kb.business_row_count }} 条记录</small>
+      <div class="kb-actions">
+        <a class="btn sm primary" href="{% url 'kb:tracker' kb.slug %}">查看追踪表</a>
+        <a class="btn sm outline" href="{% url 'kb:feeds' %}?kb={{ kb.slug }}">管理自动更新</a>
+      </div>
+    </article>
+    {% endfor %}
+    {% if is_global_admin %}{% for dataset in datasets %}
     <article>
       <span>{{ dataset.get_kind_display }}</span>
       <strong title="{{ dataset.source_name }}">{{ dataset.source_name }}</strong>
       <small>{{ dataset.row_count }} 行 · {{ dataset.created_at|date:"Y-m-d H:i" }}</small>
     </article>
-    {% endfor %}
+    {% endfor %}{% endif %}
   </div>
   {% else %}
   <div class="empty">尚未导入业务数据</div>
   {% endif %}
 </div>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <style>
-.dept-badge{display:inline-block;vertical-align:middle;font:600 10px var(--fm);color:var(--dim);background:var(--paper);border:1.5px solid var(--rule-soft);border-radius:999px;padding:2px 8px;margin-left:6px;letter-spacing:.02em}
-.emb-badge{display:inline-block;vertical-align:middle;font-size:10px;font-weight:500;font-family:var(--fm);line-height:1.4;color:var(--mute);background:var(--paper);border:1.5px dashed var(--rule-soft);border-radius:999px;padding:2px 8px;margin-left:4px;letter-spacing:.02em}
-
-.upload-head,.section-bar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.upload-head h1{margin-bottom:5px}.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0 12px}.upload-card{padding:17px;border:2px solid var(--rule);border-top:6px solid var(--danger);border-radius:8px;background:var(--surface)}.data-upload{border-top-color:#1f4fa8}.upload-card-head{display:flex;gap:11px;align-items:flex-start}.upload-no{font:800 20px var(--fm);color:var(--danger)}.data-upload .upload-no{color:#1f4fa8}.upload-card h2,.section-bar h2{font:700 15px var(--fd);text-transform:uppercase;margin:0 0 4px}.upload-card p,.section-bar p{font-size:11px;color:var(--mute);margin:0}.upload-form{display:grid;grid-template-columns:minmax(140px,.8fr) minmax(180px,1.2fr);gap:9px;margin-top:15px}.upload-form .btn{grid-column:1/-1;justify-content:center}.upload-form select,.upload-form input[type=file]{width:100%;min-height:41px;padding:8px;border:2px solid var(--rule);border-radius:5px;background:var(--paper)}.empty.compact{padding:13px;margin-top:15px}.upload-guidance{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:10px 12px;margin-bottom:24px;border:1px solid var(--rule-soft);border-radius:5px;background:var(--surface)}.upload-guidance strong,.upload-guidance span{font-size:10px}.upload-guidance span{font-family:var(--fm);padding:3px 6px;background:var(--paper);border-radius:3px}
-.upload-guidance.compact{padding:8px 0 0;margin:12px 0 0;border-top:1px solid var(--rule-soft);border-left:0;border-radius:0;background:none}.section-bar{align-items:center;margin:18px 0 12px;padding-bottom:9px;border-bottom:2px solid var(--rule)}.section-actions{display:flex;gap:8px;align-items:center}.dataset-bar{margin-top:28px}.count-chip{font:700 11px var(--fm);padding:5px 8px;background:var(--text);color:var(--paper);border-radius:3px}.dataset-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px}.dataset-grid article{display:flex;flex-direction:column;gap:5px;padding:11px;border:1px solid var(--rule-soft);border-left:4px solid #1f4fa8;border-radius:5px;background:var(--surface)}.dataset-grid span{font:700 9px var(--fm);color:#1f4fa8;text-transform:uppercase}.dataset-grid strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dataset-grid small{font-size:10px;color:var(--mute)}
-@media(max-width:780px){.upload-grid{grid-template-columns:1fr}.upload-head{display:block}.upload-head>a{margin-top:10px}.upload-form{grid-template-columns:1fr}.section-bar{align-items:flex-end}.section-actions{flex-wrap:wrap;justify-content:flex-end}}
+.dataset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.dataset-grid article{display:flex;flex-direction:column;gap:6px;padding:14px 16px;border:1px solid var(--rule);border-radius:var(--radius-lg);background:var(--surface);box-shadow:var(--shadow-sm)}
+.dataset-grid span{align-self:flex-start;font:500 11px/1.6 var(--fb);color:var(--brand);background:var(--brand-soft);padding:0 8px;border-radius:999px}
+.dataset-grid strong{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dataset-grid small{font-size:12px;color:var(--mute)}
 </style>
 <script>
 /* 新建手册库弹窗（AJAX）：创建成功后只替换卡片网格，页面无刷新 */

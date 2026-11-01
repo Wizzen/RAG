@@ -1,16 +1,25 @@
 {% extends "kb/_base.html" %}
 {% block title %}站点配置 · SHDR RAG{% endblock %}
 {% block content %}
-<h1>站点配置</h1>
-<form method="post" class="all-api-control" style="margin:16px 0">
+<header class="page-head">
+  <div class="page-head-main">
+    <h1>站点配置</h1>
+    <p class="page-desc">模型、向量、重排与 OCR 服务的连接配置，编辑后即时生效。</p>
+  </div>
+  <div class="page-actions">
+    <button type="button" class="btn primary" data-test="all" title="测试当前已保存配置；结果仅代表本次检测，不代表模型一直运行。健康检查不会标为推理成功。">一键全部测试</button>
+  </div>
+</header>
+<form method="post" class="card setting-switch">
   {% csrf_token %}
   <input type="hidden" name="action" value="all_remote_toggle">
   <input type="hidden" name="enabled" value="{% if eff.llm.all_remote_enabled %}0{% else %}1{% endif %}">
-  <button type="submit" class="btn {% if eff.llm.all_remote_enabled %}primary{% else %}outline{% endif %}" aria-pressed="{{ eff.llm.all_remote_enabled|yesno:'true,false' }}">允许全部远程／局域网 API：{% if eff.llm.all_remote_enabled %}已开启 · 点击关闭{% else %}已关闭 · 点击开启{% endif %}</button>
-  <p>点击即保存，支持 HTTP / HTTPS。开启后，LLM、向量、重排和 MinerU 可调用各自配置的远程地址，问题、资料片段或原文件会发送给对应服务。关闭后恢复 LLM 独立开关，其他服务恢复本机限制。</p>
+  <div class="setting-switch-text">
+    <div class="card-title">允许全部远程／局域网 API <span class="state-pill {% if eff.llm.all_remote_enabled %}on{% endif %}">{% if eff.llm.all_remote_enabled %}已开启{% else %}已关闭{% endif %}</span></div>
+    <p>点击即保存，支持 HTTP / HTTPS。开启后，LLM、向量、重排和 MinerU 可调用各自配置的远程地址，问题、资料片段或原文件会发送给对应服务。关闭后恢复 LLM 独立开关，其他服务恢复本机限制。</p>
+  </div>
+  <button type="submit" class="btn {% if eff.llm.all_remote_enabled %}outline{% else %}primary{% endif %}" aria-pressed="{{ eff.llm.all_remote_enabled|yesno:'true,false' }}">{% if eff.llm.all_remote_enabled %}关闭{% else %}开启{% endif %}</button>
 </form>
-<button type="button" class="btn primary" data-test="all">一键全部测试</button>
-<p>测试当前已保存配置；结果仅代表本次检测，不代表模型一直运行。健康检查不会标为推理成功。</p>
 
 
 <!-- 当前生效配置（JSON）：AJAX 刷新会连内容区一起替换，弹窗每次打开实时读取，
@@ -149,9 +158,9 @@
 
 <!-- ============ 测试结果区 ============ -->
 <div class="fos-tag" id="testPanel" hidden>
-  <div class="th warn">⚠ 连接测试<span class="stamp">已保存配置</span></div>
+  <div class="th warn">连接测试<span class="stamp">已保存配置</span></div>
   <div class="tb">
-    <div id="testResults" style="font-family:var(--fm);font-size:12px"></div>
+    <div id="testResults" style="font-size:13px"></div>
   </div>
 </div>
 
@@ -174,8 +183,8 @@
   </form>
 </dialog>
 
-<div class="fos-tag" style="margin-top:18px">
-  <div class="th danger">🔒 安全提示<span class="stamp">明文</span></div>
+<div class="fos-tag">
+  <div class="th danger">安全提示<span class="stamp">明文存储</span></div>
   <div class="tb">
     <p style="font-size:13px;line-height:1.65">API 密钥以<strong>明文</strong>存储于数据库，敏感度等同于 <code>.env</code> 文件。请确保数据库访问受控，并定期轮换密钥。</p>
   </div>
@@ -419,16 +428,24 @@ document.addEventListener('change', async (e) => {
 });
 </script>
 <style>
-.cfg-list{display:flex;flex-direction:column}
-.cfg-row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:13px 0;flex-wrap:wrap}
+.setting-switch{display:flex;align-items:center;justify-content:space-between;gap:16px 24px}
+.setting-switch-text p{margin:4px 0 0;font-size:12.5px;line-height:1.65;color:var(--mute);max-width:86ch}
+.setting-switch .card-title{display:flex;align-items:center;gap:8px}
+.setting-switch>.btn{flex-shrink:0;min-width:72px}
+.state-pill{font:500 11px/1.6 var(--fb);padding:0 8px;border-radius:999px;color:var(--mute);background:var(--paper);border:1px solid var(--rule-soft)}
+.state-pill.on{color:var(--ok);background:var(--ok-soft);border-color:transparent}
+.cfg-list{display:flex;flex-direction:column;padding-top:4px!important;padding-bottom:4px!important}
+.cfg-row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:16px 0;flex-wrap:wrap}
 .cfg-row + .cfg-row{border-top:1px solid var(--rule-soft)}
 .cfg-left{display:flex;flex-direction:column;gap:3px;min-width:220px;flex:1}
-.cfg-cat{font:700 10px var(--fd);text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
-.cfg-note{font:500 10px var(--fm);color:var(--warn);text-transform:none;letter-spacing:0}
-.cfg-model{font:700 15px var(--fd)}
-.cfg-sub{font:500 11px var(--fm);color:var(--mute)}
+.cfg-cat{font:500 12px var(--fd);color:var(--mute)}
+.cfg-note{font:500 11px var(--fb);color:var(--warn-text);background:var(--warn-soft);padding:0 7px;border-radius:999px;margin-left:4px}
+.cfg-model{font:600 15px var(--fd);overflow-wrap:anywhere}
+.cfg-sub{font:400 12px var(--fb);color:var(--mute)}
+.cfg-model .cfg-sub{margin-left:6px}
 .cfg-right{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
-.cfg-switch{padding:4px 8px;font:500 12px var(--fm);border:1.5px solid var(--rule-soft);border-radius:6px;background:var(--paper);color:var(--text)}
+.cfg-preset-badge{font-size:12.5px;color:var(--dim)}
+.cfg-switch{min-height:30px;padding:3px 8px;font-size:12.5px;max-width:180px}
 /* 编辑弹窗内的开关（checkbox 字段）：整行可点。
    .fos-dialog .field label{display:block} 优先级 0-2-1，压过 label.sw——必须同级对拼 */
 label.sw, .fos-dialog label.sw{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
@@ -438,12 +455,9 @@ label.sw, .fos-dialog label.sw{display:flex;align-items:center;gap:10px;cursor:p
 .sw input:checked + .track{background:var(--brand)}
 .sw input:checked + .track::after{transform:translateX(16px)}
 .sw input:focus-visible + .track{outline:2px solid var(--brand);outline-offset:2px}
-.sw .sw-txt{font:500 13px var(--fm);color:var(--text)}
-.pc-del.del-cur{border:0;background:none;cursor:pointer;font:700 14px var(--fm);color:var(--dim);padding:0 2px;line-height:1}
-.pc-del.del-cur:hover{color:var(--danger)}
-.toast{font:600 12px var(--fm);color:var(--paper);padding:9px 14px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.28);opacity:0;transform:translateX(12px);transition:all .25s;max-width:380px}
-.toast.show{opacity:1;transform:none}
-.toast-ok{background:var(--ok)}
-.toast-err{background:var(--danger)}
+.sw .sw-txt{font:500 13px var(--fb);color:var(--text)}
+.pc-del.del-cur{border:0;background:none;cursor:pointer;font:600 16px var(--fb);color:var(--mute);width:26px;height:26px;border-radius:6px;line-height:1}
+.pc-del.del-cur:hover{color:var(--danger);background:var(--err-soft)}
+@media(max-width:720px){.setting-switch{flex-direction:column;align-items:flex-start}}
 </style>
 {% endblock %}

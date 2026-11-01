@@ -1,7 +1,12 @@
 {% extends "kb/_base.html" %}
 {% block title %}图谱事实依据 · SHDR RAG{% endblock %}
 {% block content %}
-<h1>图谱事实依据</h1>
+<header class="page-head">
+  <div class="page-head-main">
+    <a class="page-back" href="{% url 'kb:graph' %}?kb={{ fact.kb_slug|urlencode }}">知识图谱</a>
+    <h1>图谱事实依据</h1>
+  </div>
+</header>
 <div class="fos-tag">
   <div class="th ok">已人工核对 · 当前来源有效</div>
   <div class="tb">

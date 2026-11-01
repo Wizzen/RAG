@@ -71,7 +71,8 @@ class GraphProgress:
             self.last_flush = time.monotonic()
 
 
-def call_model(model, messages: list, progress: GraphProgress | None = None, turn: int = 1, *, on_chunk=None):
+def call_model(model, messages: list, progress: GraphProgress | None = None, turn: int = 1, *,
+               on_chunk=None, before_retry=None, report_timing: bool = False, request_timeout=None):
     """通过 LangChain 原生流聚合完整消息，保留分片工具参数及结束信息。"""
     if progress is None:
         response = model.invoke(messages)
@@ -79,19 +80,65 @@ def call_model(model, messages: list, progress: GraphProgress | None = None, tur
             on_chunk(response)
         return response
     from langchain_core.messages import message_chunk_to_message
-    aggregate = None
-    stream = model.stream(messages)
-    try:
-        for chunk in stream:
+    import httpx
+    from openai import APIConnectionError
+    from langchain_core.runnables import Runnable
+    for attempt in range(2):
+        started, first_response = time.monotonic(), None
+        aggregate, stream, failure = None, None, None
+        if report_timing:
+            progress.emit('model_request', turn=turn, attempt=attempt + 1,
+                          message=f'第 {turn} 轮请求已发出，正在等待模型。')
+        def accept(chunk):
+            nonlocal aggregate, first_response
             if on_chunk:
                 on_chunk(chunk)
+            if first_response is None:
+                first_response = round(time.monotonic() - started, 2)
+                if report_timing:
+                    progress.emit('model_activity', turn=turn, first_response_seconds=first_response,
+                                  message='模型已响应，正在等待完整的结构化结果。')
             aggregate = chunk if aggregate is None else aggregate + chunk
             progress.token(visible_text(chunk.content), turn)
-    finally:
-        close = getattr(stream, 'close', None)
-        if callable(close):
-            close()
-        progress.flush()
-    if aggregate is None:
-        raise ValueError('模型没有返回输出，请重试。')
-    return message_chunk_to_message(aggregate)
+        try:
+            if request_timeout is not None and isinstance(model, Runnable):
+                # HTTP read timeout can be kept alive by SSE comments. An async
+                # deadline also cancels an otherwise silent upstream response.
+                import asyncio
+                from contextlib import aclosing
+                from asgiref.sync import async_to_sync, sync_to_async
+                async def consume():
+                    async with asyncio.timeout(request_timeout):
+                        async with aclosing(model.astream(messages)) as upstream:
+                            async for chunk in upstream:
+                                await sync_to_async(accept, thread_sensitive=True)(chunk)
+                async_to_sync(consume)()
+            else:
+                stream = model.stream(messages)
+                for chunk in stream:
+                    accept(chunk)
+            if aggregate is None:
+                raise ValueError('模型没有返回输出，请重试。')
+        except Exception as exc:
+            failure = exc
+        finally:
+            close = getattr(stream, 'close', None)
+            try:
+                if callable(close):
+                    close()
+            finally:
+                progress.flush()
+                if report_timing:
+                    seconds = round(time.monotonic() - started, 2)
+                    progress.emit('model_timing', turn=turn, seconds=seconds,
+                                  first_response_seconds=first_response, failed=failure is not None,
+                                  message=f'第 {turn} 轮请求{"中断" if failure else "完成"}，耗时 {seconds:g} 秒。')
+        if failure is None:
+            return message_chunk_to_message(aggregate)
+        transient = isinstance(failure, (httpx.TransportError, APIConnectionError, TimeoutError, ConnectionError))
+        if not transient or before_retry is None:
+            raise failure
+        if attempt or not before_retry():
+            raise RuntimeError('模型连接中断，本次任务的连接重试额度已用尽。已保存的候选保留；'
+                               '请点击“重试抽取”，重新连接日志不会重启抽取。') from failure
+        turn = progress.next_turn('模型连接中断，重试当前请求一次；不重新检索或重做已保存的候选。')

@@ -51,8 +51,10 @@ def _scope_docs(kb: KnowledgeBase):
     """文件夹 → 其下所有子文档库的文档（扁平）；文档库 → 自身文档。"""
     if kb.is_folder:
         child_ids = list(kb.children.filter(is_folder=False).values_list("id", flat=True))
-        return Document.objects.filter(kb_id__in=child_ids)
-    return kb.documents.all()
+        docs = Document.objects.filter(kb_id__in=child_ids)
+    else:
+        docs = kb.documents.all()
+    return docs.exclude(status=Document.Status.SUPERSEDED).exclude(kb__slug__startswith='syncitem-',status__in=['pending','ocr','indexing','failed'])
 
 
 def _scope_kb_ids(kb: KnowledgeBase) -> list:
@@ -249,7 +251,10 @@ def manage_list(request):
     _kb_qs = KnowledgeBase.objects.filter(parent__isnull=True).order_by("name")
     if not kb_access.is_global_admin(request.user):
         _kb_qs = _kb_qs.filter(department=kb_access.user_department(request.user))
-    kbs = list(_kb_qs)
+    kbs = list(_kb_qs.filter(category='manual'))
+    from django.db.models import Count, Q
+    business_kbs = _kb_qs.filter(category='business').annotate(
+        business_row_count=Count('tracker__rows',filter=Q(tracker__rows__status='done')))
     from .models import StructuredDataset
     datasets = StructuredDataset.objects.filter(active=True).order_by("kind", "-created_at")
     if not kb_access.is_global_admin(request.user):
@@ -261,6 +266,7 @@ def manage_list(request):
     departments = kb_access.all_departments()
     return render(request, "kb/manage_list.html", {
         "kbs": kbs,
+        "business_kbs": business_kbs,
         "datasets": datasets,
         "dataset_kinds": StructuredDataset.Kind.choices,
         "departments": departments,
@@ -443,6 +449,8 @@ def doc_retry(request, slug, doc_id):
     if not kb_access.can_manage_kb(request.user, kb):
         raise Http404("知识库不存在")
     doc = get_object_or_404(Document, id=doc_id, kb__in=_scope_kb_ids(kb))
+    if doc.kb.slug.startswith('syncitem-'):
+        return JsonResponse({'ok':False,'message':'自动更新文档请从数据源重试，避免绕过批次发布。'},status=409)
     changed = Document.objects.filter(id=doc.id, status=Document.Status.FAILED).update(
         status=Document.Status.PENDING, error_msg="", stage_detail="排队中，等待从保存进度继续", updated_at=timezone.now())
     if not changed:
@@ -638,6 +646,7 @@ def tracker_view(request, slug):
             row_id = request.POST.get("row_id")
             n = tr.rows.filter(
                 id=row_id,
+                document__isnull=False,
                 status__in=[TrackerRow.Status.FAILED, TrackerRow.Status.DONE,
                             TrackerRow.Status.PROPOSED],
             ).update(status=TrackerRow.Status.PENDING, error="",
@@ -690,8 +699,8 @@ def tracker_view(request, slug):
 
         smap = dict(TrackerRow.Status.choices)
 
-        for r in tr.rows.select_related("document").order_by("-document__created_at"):
-            ws.append([_safe_cell(r.document.original_name)]
+        for r in tr.rows.select_related("document").order_by("-created_at","-pk"):
+            ws.append([_safe_cell(r.record_name)]
                       + [_safe_cell(r.values.get(f["label"], "")) for f in tr.fields]
                       + [smap.get(r.status, r.status),
                          "是" if r.schema_version < tr.schema_version else "",
@@ -721,7 +730,7 @@ def tracker_view(request, slug):
                         .values_list("document_id", flat=True))
     field_labels = [f["label"] for f in tr.fields]
     rows = []
-    for r in tr.rows.select_related("document").order_by("-document__created_at"):
+    for r in tr.rows.select_related("document").order_by("-created_at","-pk"):
         cells = [r.values.get(k, "") for k in field_labels]
         proposed = [r.proposed_values.get(k, "") for k in field_labels]
         # 卡片式字段 chip：标签+值成对，跳过空值；待确认行里与登记值不同的
@@ -733,14 +742,15 @@ def tracker_view(request, slug):
             pairs.append({"label": k, "value": v or pv, "changed": changed})
         rows.append({
             "id": r.id,
-            "doc_name": r.document.original_name,
+            "doc_name": r.record_name,
+            "is_feed": bool(r.feed_id),
             "status": r.status,
             "error": r.error,
             "updated_at": r.updated_at,
             "pairs": pairs,
             "stale": r.schema_version < tr.schema_version,
             # 确认弹窗数据（HTML 属性内联 JSON，autoescape 处理引号）
-            "payload": _json_dumps({"row": r.id, "doc": r.document.original_name,
+            "payload": _json_dumps({"row": r.id, "doc": r.record_name,
                                     "fields": field_labels,
                                     "old": cells, "new": proposed}),
         })
@@ -852,7 +862,12 @@ def document_html(request, doc_id):
     # 模板用 |json_script 渲染（XSS 安全，勿改回 |safe + json.dumps）。
     highlights = [h.strip()[:160] for h in request.GET.getlist("h") if h.strip()][:12]
     from .pipeline import rewrite_img_srcs
+    feed_record=None
+    if doc.kb.slug.startswith('syncitem-'):
+        from .models import FeedRecord
+        feed_record=FeedRecord.objects.filter(document=doc).select_related('feed').first()
     return render(request, "kb/document_html.html", {
+        'feed_record':feed_record,
         "doc": doc,
         "html_body": rewrite_img_srcs(doc.html_content or "", doc.id),
         "highlights": highlights,
@@ -1061,11 +1076,18 @@ def ask(request):
         .filter(kb__department__in=[kb_access.DEPARTMENT_GENERAL, kb_access.user_department(request.user)])
         .select_related("kb").only("id", "title", "thread_id", "kb__name", "updated_at", "created_at")
     )
-    return render(request, "kb/ask.html", {
+    import re
+    active=request.GET.get('conv','')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',active):active=''
+    embedded=request.GET.get('embed')=='1'
+    response=render(request, "kb/ask.html" if embedded else "kb/assistant.html", {
         "pyodide_index_url": settings.PYODIDE_INDEX_URL,
         "conversations": conversations,
-        "active_thread": request.GET.get("conv", ""),
+        "active_thread": active,
+        "chat_embedded":embedded,"assistant_auto_open":not embedded,"assistant_thread":active,
     })
+    response['X-Frame-Options']='SAMEORIGIN'
+    return response
 
 
 def _route_kb_by_question(message: str, user):

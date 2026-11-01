@@ -31,6 +31,8 @@ class KnowledgeBase(models.Model):
         related_name="children", verbose_name="父知识库",
     )
     is_folder = models.BooleanField("是否文件夹", default=False)
+    category = models.CharField('资料分类', max_length=16,
+        choices=[('manual','手册库'),('business','业务数据')], default='manual')
     # 部门可见性：「通用」= 所有部门可见；其它值 = 仅该部门可见。
     # 文件夹与其子库保持同值（改文件夹部门时级联更新子库，见 kb/access.py）。
     department = models.CharField(
@@ -112,6 +114,7 @@ class Document(models.Model):
         INDEXING = "indexing", "向量化中"
         COMPLETED = "completed", "已完成"
         FAILED = "failed", "失败"
+        SUPERSEDED = "superseded", "历史版本"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     kb = models.ForeignKey(KnowledgeBase, on_delete=models.CASCADE, related_name="documents")
@@ -255,8 +258,11 @@ class TrackerRow(models.Model):
         KbTracker, on_delete=models.CASCADE, related_name="rows",
     )
     document = models.ForeignKey(
-        Document, on_delete=models.CASCADE, related_name="tracker_rows",
+        Document, on_delete=models.CASCADE, related_name="tracker_rows", null=True, blank=True,
     )
+    feed = models.ForeignKey('KnowledgeFeed',null=True,blank=True,on_delete=models.CASCADE,related_name='tracker_rows')
+    feed_run = models.ForeignKey('FeedRun',null=True,blank=True,on_delete=models.RESTRICT,related_name='tracker_rows')
+    external_id = models.CharField(max_length=200,blank=True,default='')
     values = models.JSONField("抽取值", default=dict, blank=True)
     proposed_values = models.JSONField("待确认的新值", default=dict, blank=True)
     schema_version = models.PositiveIntegerField("抽取时的字段结构版本", default=0)
@@ -270,11 +276,19 @@ class TrackerRow(models.Model):
     class Meta:
         ordering = ["-document__created_at"]
         unique_together = [("tracker", "document")]
+        constraints = [
+            models.UniqueConstraint(fields=['tracker','feed','external_id'],condition=models.Q(feed_run__isnull=True),name='unique_tracker_feed_current'),
+            models.UniqueConstraint(fields=['tracker','feed','external_id','feed_run'],name='unique_tracker_feed_snapshot'),
+        ]
         verbose_name = "追踪记录"
         verbose_name_plural = "追踪记录"
 
     def __str__(self):
-        return f"{self.document.original_name} → {self.get_status_display()}"
+        return f"{self.record_name} → {self.get_status_display()}"
+
+    @property
+    def record_name(self):
+        return self.document.original_name if self.document_id else str(self.values.get('标题') or self.external_id or '数据记录')
 
 
 class SiteConfig(models.Model):
@@ -579,6 +593,8 @@ class GraphExtraction(models.Model):
     rejected = models.PositiveIntegerField(default=0)
     error = models.TextField(blank=True)
     coverage = models.JSONField("正文扫描覆盖情况", default=dict, blank=True)
+    schema_version = models.PositiveSmallIntegerField("知识结构版本", default=1)
+    target_object = models.ForeignKey('KnowledgeObject', on_delete=models.SET_NULL, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
 
@@ -660,3 +676,180 @@ class GraphEvidence(models.Model):
             name="graph_evidence_one_source")]
         verbose_name = "图谱证据"
         verbose_name_plural = "图谱证据"
+
+
+class KnowledgeObject(models.Model):
+    """集合内稳定的对象身份；断言仍按原始知识库权限独立隔离。"""
+    space = models.ForeignKey(KnowledgeBase, on_delete=models.SET_NULL, null=True, related_name='knowledge_objects')
+    kind = models.CharField('对象类型', max_length=60)
+    key = models.CharField('规范身份', max_length=255)
+    label = models.CharField('对象名称', max_length=255)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['space', 'kind', 'key'], name='knowledge_object_identity')]
+
+
+class KnowledgeNode(models.Model):
+    """可递归的属性、分类项和组织分组，节点也可同时承载内容。"""
+    object = models.ForeignKey(KnowledgeObject, on_delete=models.CASCADE, related_name='nodes')
+    parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='children')
+    kind = models.CharField('节点角色', max_length=16, choices=[('property','属性'),('entry','分类项'),('group','分组')])
+    label = models.CharField('节点名称', max_length=255)
+    key = models.CharField('规范名称', max_length=255)
+    scope = models.JSONField('适用上下文', default=dict)
+    identity = models.CharField('路径身份', max_length=64, unique=True)
+
+
+class KnowledgeAssertion(models.Model):
+    """某一对象路径下的内容断言；新来源和新解释始终需要独立审核。"""
+    node = models.ForeignKey(KnowledgeNode, on_delete=models.CASCADE, related_name='assertions')
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='knowledge_assertions')
+    extraction = models.ForeignKey(GraphExtraction, on_delete=models.SET_NULL, null=True, blank=True)
+    origin_relation = models.ForeignKey(GraphRelation, on_delete=models.SET_NULL, null=True, blank=True)
+    identity = models.CharField(max_length=64, unique=True)
+    subject_label = models.CharField('原文对象名称', max_length=255)
+    path = models.JSONField('原文属性路径', default=list)
+    value = models.JSONField('内容或取值')
+    conditions = models.JSONField('条件与逻辑', default=dict)
+    status = models.CharField(max_length=20, choices=GraphRelation.Status.choices, default=GraphRelation.Status.CANDIDATE)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['status','document'], name='knowledge_status_document')]
+
+
+class KnowledgeEvidence(models.Model):
+    assertion = models.ForeignKey(KnowledgeAssertion, on_delete=models.CASCADE, related_name='evidence')
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    quote = models.TextField('逐字证据')
+    chunks = models.JSONField('原文定位', default=list)
+    source_digest = models.CharField('来源版本', max_length=64)
+
+
+class FeedCredential(models.Model):
+    """页面录入的 API 凭据；数据库只留密文，密钥由部署自动保管。"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    kind = models.CharField('认证方式', max_length=20)
+    api_origin = models.CharField('凭据接收主机', max_length=2000)
+    header_names = models.JSONField('请求头名称', default=list)
+    encrypted_value = models.TextField('加密凭据')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class KnowledgeFeed(models.Model):
+    """向资料集合持续更新报告的数据源；调度与写入权限随创建者重验。"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    kb = models.ForeignKey(KnowledgeBase, on_delete=models.CASCADE, related_name='feeds')
+    name = models.CharField('数据源名称', max_length=100)
+    mode = models.CharField('接入方式', max_length=10, choices=[('pull','定时拉取 API'),('push','脚本推送')], default='pull')
+    write_mode = models.CharField('写入模式', max_length=10,
+        choices=[('append','追加新记录（保留历史）'),('upsert','覆盖更新相同 ID')], default='append')
+    url = models.URLField('API 地址', max_length=2000, blank=True)
+    header_env = models.JSONField('请求头环境变量', default=dict, blank=True)
+    credential = models.ForeignKey(FeedCredential, null=True, blank=True, on_delete=models.SET_NULL, related_name='feeds')
+    adapter_spec = models.JSONField('API 转换配置', default=dict, blank=True)
+    allow_private = models.BooleanField('允许内网 API', default=False)
+    cron = models.CharField('Cron 表达式', max_length=100, default='0 * * * *')
+    timezone = models.CharField('时区', max_length=100, default='Asia/Shanghai')
+    enabled = models.BooleanField('启用', default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    token_digest = models.CharField('推送令牌摘要', max_length=64, blank=True)
+    cursor = models.CharField('已提交游标', max_length=2048, blank=True)
+    etag = models.CharField('HTTP 缓存标识', max_length=500, blank=True)
+    next_run_at = models.DateTimeField('下次运行', null=True, blank=True, db_index=True)
+    lease_token = models.CharField('执行锁', max_length=64, blank=True)
+    lease_until = models.DateTimeField('锁有效期', null=True, blank=True)
+    last_run_at = models.DateTimeField('最近运行', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class FeedRecord(models.Model):
+    """上游稳定 ID 的最近状态；追踪表可按采集批次保留多个历史快照。"""
+    feed = models.ForeignKey(KnowledgeFeed, on_delete=models.CASCADE, related_name='records')
+    external_id = models.CharField('上游 ID', max_length=200)
+    kb = models.OneToOneField(KnowledgeBase, null=True, on_delete=models.SET_NULL, related_name='feed_record')
+    document = models.ForeignKey(Document, null=True, on_delete=models.SET_NULL, related_name='+')
+    pending_document = models.ForeignKey(Document, null=True, on_delete=models.SET_NULL, related_name='+')
+    pending_digest = models.CharField(max_length=64, blank=True)
+    content_digest = models.CharField(max_length=64, blank=True)
+    title = models.CharField(max_length=200, blank=True)
+    source_url = models.URLField(max_length=2000, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    upstream_updated_at = models.DateTimeField(null=True, blank=True)
+    deleted = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['feed','external_id'], name='unique_feed_external_id')]
+
+
+class FeedRun(models.Model):
+    """可重放运行记录；只在整批发布成功后提交游标。"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    feed = models.ForeignKey(KnowledgeFeed, on_delete=models.CASCADE, related_name='runs')
+    trigger = models.CharField(max_length=12, default='manual')
+    status = models.CharField(max_length=15, default='running')
+    request_key = models.CharField(max_length=180, blank=True)
+    payload_digest = models.CharField(max_length=64, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+    lease_token = models.CharField(max_length=64)
+    counts = models.JSONField(default=dict, blank=True)
+    error = models.CharField(max_length=1000, blank=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-started_at']
+        constraints = [models.UniqueConstraint(fields=['feed','request_key'], condition=~models.Q(request_key=''), name='unique_feed_request_key')]
+
+
+class FeedSchedulerState(models.Model):
+    """调度器心跳，只用于管理页展示是否正在执行到期扫描。"""
+    key = models.CharField(primary_key=True, max_length=50, default='default')
+    heartbeat_at = models.DateTimeField()
+
+
+class ConnectorDraft(models.Model):
+    """有工具和调用预算的连接器生成草稿；审核启用前不执行定时更新。"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    kb = models.ForeignKey(KnowledgeBase, null=True, blank=True, on_delete=models.CASCADE)
+    feed = models.ForeignKey(KnowledgeFeed, null=True, blank=True, on_delete=models.SET_NULL)
+    parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='revisions')
+    feedback = models.TextField('预览调整要求', blank=True)
+    prompt = models.TextField()
+    api_url = models.URLField(max_length=2000, blank=True)
+    header_env = models.JSONField(default=dict, blank=True)
+    credential = models.ForeignKey(FeedCredential, null=True, blank=True, on_delete=models.SET_NULL, related_name='drafts')
+    allow_private = models.BooleanField(default=False)
+    sample = models.JSONField(null=True, blank=True)
+    status = models.CharField(max_length=20, default='running')
+    spec = models.JSONField(default=dict, blank=True)
+    preview = models.JSONField(default=dict, blank=True)
+    events = models.JSONField(default=list, blank=True)
+    sources = models.JSONField(default=list, blank=True)
+    questions = models.JSONField(default=list, blank=True)
+    metrics = models.JSONField(default=dict, blank=True)
+    browser_state = models.JSONField('浏览器取数状态', default=dict, blank=True)
+    retain_context = models.BooleanField('随定时任务保留对话', default=False)
+    context_snapshot = models.TextField('加密代理上下文', blank=True)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class ConnectorEvent(models.Model):
+    """采集活动的追加式日志，保留工具参数、耗时与结果，支持游标增量读取。"""
+    job = models.ForeignKey(ConnectorDraft,on_delete=models.CASCADE,related_name='activity')
+    kind = models.CharField(max_length=40)
+    turn = models.PositiveIntegerField(default=0)
+    payload = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']

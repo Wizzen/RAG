@@ -8,7 +8,7 @@
     if (className) node.className = className;
     return node;
   }
-  window.createGraphLive = function ({scope, run, onComplete}) {
+  window.createGraphLive = function ({scope, run, onComplete, onRetry}) {
     const panel = document.getElementById('graphLive');
     if (!panel) return null;
     const select = document.getElementById('graphLiveRun');
@@ -19,6 +19,10 @@
     const previews = document.getElementById('graphLiveCandidates');
     const count = document.getElementById('graphLiveCandidateCount');
     const reconnect = document.getElementById('graphLiveReconnect');
+    const retry = document.getElementById('graphLiveRetry');
+    const failure = document.getElementById('graphLiveFailure');
+    const errorText = document.getElementById('graphLiveError');
+    const waiting = document.getElementById('graphLiveWaiting');
     const follow = document.getElementById('graphLiveFollow');
     const steps = [...panel.querySelectorAll('.graph-live-steps li')];
     const coverageLabel = document.getElementById('graphLiveCoverage');
@@ -26,7 +30,31 @@
     const coverageBatches = document.getElementById('graphLiveCoverageBatches');
     let coverageFingerprint = '';
     let source, selected = null, cursor = 0, lastTurn = null, candidates = 0, events = 0, failureMessage = null, disposed = false;
+    let waitTimer, waitStarted = null, waitTurn = null, terminal = false;
+    const reported = new Set();
     function close() { if (source) source.close(); source = null; }
+    function stopWaiting(text='') { clearInterval(waitTimer); waitTimer=null; waitStarted=null; if (waiting) waiting.textContent=text; }
+    function startWaiting(at, turn) {
+      const started = Date.parse(at);
+      if (!waiting || !Number.isFinite(started)) return;
+      if (waitStarted===started && waitTurn===turn) return;
+      stopWaiting();waitStarted=started;waitTurn=turn;
+      const update=()=>{waiting.textContent='第 '+turn+' 轮模型请求 · 已等待 '+Math.max(0,Math.floor((Date.now()-started)/1000))+' 秒';};
+      update();waitTimer=setInterval(update,1000);
+    }
+    function applyStatus(data) {
+      terminal=['completed','failed'].includes(data.status);
+      state(statusText(data),data.status==='failed');
+      if (failure) failure.hidden=data.status!=='failed';
+      if (errorText) errorText.textContent=data.status==='failed' ? (data.error || '本次抽取未完成，已保存的候选保留。') : '';
+      if (terminal) stopWaiting();
+      else if (data.coverage?.request_in_flight) startWaiting(data.coverage.request_started_at,data.coverage.model_calls);
+      else if (data.coverage?.request_in_flight===false) stopWaiting();
+    }
+    function notifyComplete(data) {
+      const key=selected+':'+data.status;
+      if (!reported.has(key)) {reported.add(key);onComplete?.();}
+    }
     function state(text, failed) { badge.textContent = text; badge.classList.toggle('graph-stale',!!failed); }
     function scroll(node) { if (follow.checked) node.scrollTop = node.scrollHeight; }
     function stage(name) {
@@ -94,6 +122,9 @@
       cursor = Number(event.id); ++events;
       const data = event.payload;
       if (event.kind === 'coverage') { showCoverage(data); return; }
+      if (event.kind === 'model_request') startWaiting(event.at,data.turn);
+      if (event.kind === 'model_timing') stopWaiting(data.message);
+      if (event.kind === 'tool_start') stopWaiting('正在按需读取原文…');
       if (event.kind === 'token') {
         if (lastTurn !== data.turn) {
           output.appendChild(document.createTextNode((lastTurn === null ? '' : '\n\n') + '—— 第 ' + data.turn + ' 轮模型输出 ——\n'));
@@ -122,7 +153,7 @@
       scroll(activity);
       if (event.kind === 'phase') stage(data.stage);
       if (event.kind === 'complete') stage('complete');
-      if (event.kind === 'failed') { failureMessage = data.message; state('抽取失败',true); }
+      if (event.kind === 'failed') { failureMessage = data.message; applyStatus({status:'failed',error:data.message}); }
     }
     function connect() {
       close();
@@ -136,14 +167,14 @@
       connection.addEventListener('snapshot', event => {
         if (!current()) return;
         const data = JSON.parse(event.data);
-        state(statusText(data),data.status === 'failed'); showCoverage(data.coverage);
+        applyStatus(data); showCoverage(data.coverage);
         document.getElementById('graphLiveFocus').textContent = data.document + ' · 关注：' + (data.focus || '旧版全书抽取');
       });
       connection.addEventListener('progress', event => { if (current()) progress(JSON.parse(event.data)); });
       connection.addEventListener('done', event => {
         if (!current()) return;
         const data = JSON.parse(event.data);
-        close(); state(statusText(data),data.status === 'failed'); showCoverage(data.coverage);
+        close(); applyStatus(data); showCoverage(data.coverage);
         if (data.status === 'completed') stage('complete');
         if (!events) note.textContent = '此任务没有保存实时输出；升级前的任务仅保留抽取结果。';
         else if (lastTurn === null) note.textContent = '模型未返回公开文本输出。请查看左侧工具活动与任务状态。';
@@ -151,21 +182,22 @@
           const item = element('li',data.error,'graph-stale'); activity.appendChild(item);
           failureMessage = data.error;
         }
-        if (onComplete) onComplete();
+        notifyComplete(data);
       });
       connection.addEventListener('unavailable', event => {
         if (current()) { close(); state(JSON.parse(event.data).message,true); }
       });
       connection.onerror = () => {
         if (!current()) return;
-        if (connection.readyState === EventSource.CLOSED) { close(); state('无法读取此任务，请检查登录状态及权限。',true); }
-        else state('连接中断，正在重连…',true);
+        if (connection.readyState === EventSource.CLOSED) { close(); if (!terminal) state('无法读取此任务，请检查登录状态及权限。',true); }
+        else if (!terminal) state('日志连接中断，正在重连；后台任务独立运行。',true);
       };
     }
     function choose(id) {
       id = String(id || '');
       if (id === selected) return;
       close(); selected = id;
+      terminal=false;stopWaiting();if (failure) failure.hidden=true;
       panel.hidden = !id;
       if (id && ![...select.options].some(option => option.value === id)) select.add(new Option('#' + id,id));
       select.value = id;
@@ -186,14 +218,22 @@
       });
       select.disabled = !jobs.length;
       const requested = run?.();
-      const next = requested && jobs.some(job=>String(job.id)===requested) ? requested : !run && jobs.some(job => String(job.id) === previous) ? previous :
+      const next = requested && jobs.some(job=>String(job.id)===requested) ? requested : jobs.some(job => String(job.id) === previous) ? previous :
         String((jobs.find(job => ['pending','running'].includes(job.status)) || jobs[0])?.id || '');
       select.value = next; choose(next); reconnect.disabled = !next;
+      const job=jobs.find(job=>String(job.id)===next);
+      if (job && ['completed','failed'].includes(job.status)) {applyStatus(job);notifyComplete(job);}
     }
     select.addEventListener('change', () => choose(select.value));
     reconnect.addEventListener('click', connect);
+    retry?.addEventListener('click',async()=>{
+      if (!selected || disposed || retry.disabled) return;
+      retry.disabled=true;
+      try {await onRetry?.(selected);} finally {if (!disposed) retry.disabled=false;}
+    });
     const first = [...select.options].find(option=>option.value && option.value===run?.()) || [...select.options].find(option => ['pending','running'].includes(option.dataset.status)) || select.options[1];
     choose(first?.value || ''); reconnect.disabled = !selected;
-    return {updateJobs,select:choose,destroy() { disposed = true; close(); }};
+    return {updateJobs,select:choose,active:()=>!!selected && !terminal,
+      destroy() { disposed = true; close(); stopWaiting(); }};
   };
 })();

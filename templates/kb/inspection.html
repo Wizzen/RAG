@@ -1,12 +1,18 @@
 {% extends "kb/_base.html" %}
 {% block title %}检查项提取 · SHDR RAG{% endblock %}
 {% block content %}
-<h1>检查项提取</h1>
+<header class="page-head">
+  <div class="page-head-main">
+    {% if doc %}<a class="page-back" href="/kb/manage/{{ doc.kb.slug }}/">{{ doc.kb.name }}</a>{% else %}<a class="page-back" href="/kb/manage/">资料上传中心</a>{% endif %}
+    <h1>检查项提取</h1>
+    <p class="page-desc">从已处理的手册中抽取图纸号、部件、检查频率与要求，可筛选并导出 CSV。</p>
+  </div>
+</header>
 
 <!-- 文档选择区 -->
-<div class="insp-doc-selector" style="margin-bottom:20px">
-  <div style="font-family:var(--fd);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;color:var(--dim)">选择文档</div>
-  <div class="doc-select-list" id="docSelectList" style="display:flex;gap:8px;flex-wrap:wrap">
+<div class="card insp-doc-selector">
+  <div class="card-title">选择文档</div>
+  <div class="doc-select-list" id="docSelectList">
     {% for d in docs %}
     <button class="doc-chip {% if doc and doc.id == d.id %}active{% endif %}"
             data-doc-id="{{ d.id }}"
@@ -15,29 +21,22 @@
     </button>
     {% endfor %}
     {% if not docs %}
-    <div class="empty" style="grid-column:1/-1">暂无已完成的文档。请先上传并处理文档。</div>
+    <div class="empty">暂无已完成的文档。请先上传并处理文档。</div>
     {% endif %}
   </div>
 </div>
 
-<div id="inspStatus" style="margin-bottom:12px"></div>
+<div id="inspStatus"></div>
 
 <!-- 检查项结果区 -->
 <div id="inspResults">
   {% if items %}
-  <div class="fos-tag" style="margin-bottom:16px">
-    <div class="th ok">✓ 检查项提取 OK<span class="stamp">{{ total }} 项</span></div>
-    <div class="tb">
-      <p style="font-size:13px"><strong>{{ doc.original_name }}</strong>
-        · 来源知识库：{{ doc.kb.name }}
-        · 提取到 <strong>{{ total }}</strong> 个检查项</p>
+  <div class="section-bar">
+    <div><h2>{{ doc.original_name }}</h2><p>来源知识库：{{ doc.kb.name }} · 提取到 {{ total }} 个检查项</p></div>
+    <div class="insp-toolbar">
+      <input type="search" id="inspFilter" placeholder="筛选图纸号、部件或要求…" aria-label="筛选检查项">
+      <button class="btn outline" id="exportBtn">导出 CSV</button>
     </div>
-  </div>
-
-  <div class="insp-toolbar" style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
-    <input type="text" id="inspFilter"
-           style="flex:1;min-width:200px;padding:8px 12px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:6px;font-size:13px;outline:none">
-    <button class="btn sm outline" id="exportBtn">导出 CSV</button>
   </div>
 
   <div class="insp-table-wrap">
@@ -82,29 +81,32 @@
 
 {% block scripts %}
 <style>
+.insp-doc-selector .card-title{margin-bottom:12px}
+.doc-select-list{display:flex;gap:8px;flex-wrap:wrap}
 .doc-chip{
-  font-family:var(--fd);font-weight:600;font-size:12px;padding:7px 14px;
-  border:2px solid var(--rule-soft);border-radius:6px;background:var(--surface);
-  cursor:pointer;transition:border-color .12s,background .12s;color:var(--text);
+  font:500 13px var(--fb);padding:6px 14px;
+  border:1px solid var(--rule);border-radius:999px;background:var(--surface);
+  cursor:pointer;transition:border-color .15s,background .15s,color .15s;color:var(--text);
 }
-.doc-chip:hover{border-color:var(--danger)}
-.doc-chip.active{border-color:var(--danger);background:var(--accent-soft);color:var(--danger)}
+.doc-chip:hover{border-color:var(--brand);color:var(--brand)}
+.doc-chip.active{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:600}
+#inspStatus:not(:empty){margin:0 0 12px;font-size:13px;color:var(--dim)}
 
-.insp-table-wrap{overflow-x:auto;border:2px solid var(--rule);border-radius:8px;background:var(--surface)}
-.insp-table{width:100%;border-collapse:collapse;font-size:12px}
-.insp-table th{background:var(--paper);font-family:var(--fd);font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;text-align:left;border-bottom:2px solid var(--rule);white-space:nowrap}
-.insp-table td{padding:7px 10px;border-bottom:1px solid var(--rule-soft);vertical-align:top;line-height:1.5}
-.insp-table tr:hover td{background:var(--warn-soft)}
+.insp-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.insp-toolbar input{width:260px;max-width:100%}
+.insp-table-wrap{overflow-x:auto;border:1px solid var(--rule);border-radius:var(--radius-lg);background:var(--surface);box-shadow:var(--shadow-sm)}
+.insp-table{width:100%;border-collapse:collapse;font-size:13px}
+.insp-table th{background:var(--surface-2);font:600 12px var(--fd);color:var(--dim);padding:11px 12px;text-align:left;border-bottom:1px solid var(--rule);white-space:nowrap}
+.insp-table td{padding:10px 12px;border-bottom:1px solid var(--rule-soft);vertical-align:top;line-height:1.55}
+.insp-table tr:hover td{background:var(--surface-2)}
 .insp-table tr:last-child td{border-bottom:0}
-.ir-idx{font-family:var(--fm);font-size:10px;color:var(--mute);text-align:center}
-.ir-dwg{font-family:var(--fm);font-size:11px;font-weight:600;color:var(--danger)}
-.ir-part{font-size:12px;font-weight:500}
-.ir-freq{font-size:11px}
-.ir-req{font-size:12px;color:var(--dim)}
-.ir-detail{font-size:11px;color:var(--mute);max-width:300px;white-space:pre-wrap}
-.ir-sec{font-family:var(--fm);font-size:10px;color:var(--mute)}
-.freq-badge{font-family:var(--fm);font-size:10px;padding:2px 7px;border-radius:3px;background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn);white-space:nowrap}
-.insp-toolbar input:focus{border-color:var(--danger)}
+.ir-idx{font-size:12px;color:var(--mute);text-align:center}
+.ir-dwg{font-family:var(--fcode);font-size:12px;font-weight:600;color:var(--brand)}
+.ir-part{font-weight:500}
+.ir-req{color:var(--dim)}
+.ir-detail{font-size:12.5px;color:var(--mute);max-width:300px;white-space:pre-wrap}
+.ir-sec{font-size:12px;color:var(--mute)}
+.freq-badge{font-size:12px;font-weight:500;padding:1px 9px;border-radius:999px;background:var(--warn-soft);color:var(--warn-text);white-space:nowrap}
 #inspStatus .spinner{vertical-align:middle;margin-right:6px}
 .insp-table tr.hidden{display:none}
 </style>
@@ -140,15 +142,13 @@ async function loadInspection(docId, docName){
       return;
     }
 
-    let html = '<div class="fos-tag" style="margin-bottom:16px">'
-      + '<div class="th ok">✓ 检查项提取 OK<span class="stamp">' + data.total + ' 项</span></div>'
-      + '<div class="tb"><p style="font-size:13px"><strong>' + escapeHtml(data.doc_name) + '</strong>'
-      + ' · 来源知识库：' + escapeHtml(data.kb_name)
-      + ' · 提取到 <strong>' + data.total + '</strong> 个检查项</p></div></div>';
-
-    html += '<div class="insp-toolbar" style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">'
-      + '<input type="text" id="inspFilter" style="flex:1;min-width:200px;padding:8px 12px;background:var(--surface);border:1.5px solid var(--rule-soft);border-radius:6px;font-size:13px;outline:none">'
-      + '<button class="btn sm outline" id="exportBtn">导出 CSV</button></div>';
+    let html = '<div class="section-bar">'
+      + '<div><h2>' + escapeHtml(data.doc_name) + '</h2>'
+      + '<p>来源知识库：' + escapeHtml(data.kb_name)
+      + ' · 提取到 ' + Number(data.total) + ' 个检查项</p></div>'
+      + '<div class="insp-toolbar">'
+      + '<input type="search" id="inspFilter" placeholder="筛选图纸号、部件或要求…" aria-label="筛选检查项">'
+      + '<button class="btn outline" id="exportBtn">导出 CSV</button></div></div>';
 
     html += '<div class="insp-table-wrap"><table class="insp-table" id="inspTable"><thead><tr>'
       + '<th style="width:40px">#</th>'
@@ -256,7 +256,7 @@ if (exportBtn){
         section: tds[6] ? tds[6].textContent.trim() : '',
       });
     });
-    exportCSV(items, '{{ doc.original_name|default:"inspection" }}');
+    exportCSV(items, '{{ doc.original_name|default:"inspection"|escapejs }}');
   });
 }
 </script>

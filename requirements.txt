@@ -2,6 +2,8 @@ Django==6.0.6
 daphne==4.2.2
 python-dotenv==1.2.1
 httpx==0.28.1
+cryptography==50.0.0  # 页面凭据加密；复用现有运行环境
+playwright==1.58.0  # 动态网页采集和浏览器步骤重放
 langchain==1.3.9
 langchain-openai==1.3.2
 langchain-chroma==0.2.6

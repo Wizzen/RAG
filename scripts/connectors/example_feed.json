@@ -1,0 +1,18 @@
+{
+  "schema": "fos-rag-feed/v1",
+  "batch_id": "sample-report-2026-10-31-v1",
+  "cursor": "page-2",
+  "items": [
+    {
+      "id": "equipment-report-001",
+      "title": "Equipment daily report (example)",
+      "format": "markdown",
+      "content": "## Operating summary\n\n| Equipment | Running hours | Status |\n|---|---|---|\n| Example pump | 12 | Normal |\n",
+      "source_url": "https://example.com/reports/001",
+      "updated_at": "2026-10-31T08:00:00+08:00",
+      "fields": {"Equipment": "Example pump", "Running hours": 12},
+      "metadata": {"equipment_id": "example-pump", "report_type": "daily"}
+    }
+  ],
+  "deleted": []
+}

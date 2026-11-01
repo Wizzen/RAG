@@ -157,6 +157,15 @@ def _merge_graph(fused: dict, scope_slugs: list[str], document_slugs: list[str],
         logging.getLogger(__name__).warning("图谱召回失败（继续常规检索）", exc_info=True)
 
 
+def _feed_current_sources(kb_slug):
+    """自动数据子库只检索当前已发布指针，排除暂存、历史和已删除版本。"""
+    if not kb_slug.startswith('syncitem-'):return None
+    from .models import FeedRecord,Document
+    record=FeedRecord.objects.select_related('document').filter(kb__slug=kb_slug).first()
+    if not record or record.deleted or not record.document_id or record.document.status!=Document.Status.COMPLETED:return {}
+    return {record.document.original_name:str(record.document_id)}
+
+
 def search(kb_slug: str, query: str, k: int | None = None,
            query_embedding: list[float] | None = None,
            rerank_enabled: bool = True) -> list[dict[str, Any]]:
@@ -172,6 +181,8 @@ def search(kb_slug: str, query: str, k: int | None = None,
     """
     k = k or retrieval_settings()["top_k"]
     recall = max(k * 3, 15)
+    published=_feed_current_sources(kb_slug)
+    if published is not None and not published:return []
 
     # ---- 向量路 ----
     vec_docs: list[tuple[Any, dict]] = []
@@ -183,6 +194,7 @@ def search(kb_slug: str, query: str, k: int | None = None,
             # include 不收 "ids"（chromadb 校验拒绝），但 query 结果恒带 ids
             res = vs._collection.query(  # noqa: SLF001 同 fetch_doc 的原生查询模式
                 query_embeddings=[query_embedding], n_results=recall,
+                **({'where':{'source':next(iter(published))}} if published is not None else {}),
                 include=["documents", "metadatas"])
             from langchain_core.documents import Document as _Doc
             for d, m, cid in zip((res.get("documents") or [[]])[0] or [],
@@ -198,12 +210,13 @@ def search(kb_slug: str, query: str, k: int | None = None,
 
     # ---- 关键词路 ----
     from . import keyword_index
-    kw_rows = keyword_index.search(kb_slug, query, limit=recall)
+    kw_rows = keyword_index.search(kb_slug, query, limit=recall,**({'source':next(iter(published))} if published is not None else {}))
 
     # ---- RRF 融合（同一路内重复文本只计首次——语料里存在内容相同的 chunk） ----
     fused: dict[str, dict[str, Any]] = {}
     seen_vec: set[str] = set()
     for rank, (doc, meta) in enumerate(vec_docs, start=1):
+        if published is not None and meta.get('source') not in published:continue
         # 图片块以「图+上下文」独立身份参与融合（同名图的上下文与文本块不同，
         # 但 page_content 可能与章节文本块相同 → 融合键必须带上图片名防撞）
         key = _result_key({**meta, "text": doc.page_content, "kb_slug": kb_slug})
@@ -224,6 +237,7 @@ def search(kb_slug: str, query: str, k: int | None = None,
         item["via"].add("vec")
     seen_kw: set[str] = set()
     for rank, row in enumerate(kw_rows, start=1):
+        if published is not None and row.get('source') not in published:continue
         key = _result_key({**row, "kb_slug": kb_slug})
         if key in seen_kw:
             continue
@@ -275,7 +289,8 @@ def search(kb_slug: str, query: str, k: int | None = None,
         pass
 
     for r in results:
-        r["doc_id"] = r.get("doc_id") or name_to_id.get(r["source"], "")
+        r["doc_id"] = (published.get(r['source'],'') if published is not None else r.get("doc_id") or name_to_id.get(r["source"], ""))
+    if published is not None and _feed_current_sources(kb_slug)!=published:return []
     return results
 
 
@@ -305,6 +320,7 @@ def _image_lane(slugs: list[str], query_embedding: list[float] | None,
         return []
     ranked: list[tuple[float, dict[str, Any]]] = []
     for slug in slugs:
+        if slug.startswith('syncitem-'):continue  # v1 feed only accepts text/Markdown.
         try:
             col = get_kb_vectorstore(slug)._collection  # noqa: SLF001
             res = col.query(
