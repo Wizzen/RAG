@@ -1,3 +1,4 @@
+import {clearSessions, deleteSession, listSessions, saveSession} from './ai-history.mjs';
 import {cellText, csvContent, fieldLabel, recordsFrom, sourceNames, tableColumns} from './presentation.mjs';
 
 const root = document.getElementById('ops-workbench');
@@ -494,16 +495,32 @@ function stopDetail() {
   pdfDocument = null;
 }
 
+const modalTarget = {
+  source: $('detail-source'), title: $('detail-title'), body: $('detail-body'),
+  show() { if (!$('detail').open) $('detail').showModal(); },
+};
+const paneTarget = {
+  source: $('ai-pane-source'), title: $('ai-pane-title'), body: $('ai-pane-body'),
+  show() {
+    $('ai-pane').hidden = false;
+    $('ai-drawer').classList.add('has-pane');
+  },
+};
+// Follow-up links inside a detail (job plan, PDF) stay in the view that opened it.
+let detailTarget = modalTarget;
+
 function openDetail(source, title) {
   stopDetail();
-  $('detail-source').textContent = source;
-  $('detail-title').textContent = title;
-  $('detail-body').replaceChildren();
-  if (!$('detail').open) $('detail').showModal();
-  return $('detail-body');
+  detailTarget.source.textContent = source;
+  detailTarget.title.textContent = title;
+  detailTarget.body.replaceChildren();
+  detailTarget.show();
+  detailTarget.body.scrollTop = 0;
+  return detailTarget.body;
 }
 
 function showRow(row) {
+  detailTarget = modalTarget;
   const title = row.wonum || row.jpnum || row.apexmssgmnemonic || '记录详情';
   let id;
   let params;
@@ -523,6 +540,7 @@ function showRow(row) {
 }
 
 function showCorrelation(row) {
+  detailTarget = modalTarget;
   const params = {location: row.location, padding_minutes: 15};
   for (const key of ['downtime_start_local', 'downtime_end_local', 'report_local', 'attraction_name_en', 'snapshot_end_local']) {
     if (row[key] != null && row[key] !== '') params[key] = row[key];
@@ -705,12 +723,115 @@ function openEvidence(evidence, index) {
   body.append(details);
 }
 
-function answerView(text) {
+const REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._\/-]{2,39}$/;
+
+// Work-order and job-plan numbers the server actually returned for this answer.
+function evidenceLinks(evidence) {
+  const links = new Map();
+  const add = (code, id, params) => {
+    const text = code == null ? '' : String(code).trim();
+    if (REF_PATTERN.test(text) && !links.has(text) && searchCatalog(id)) links.set(text, {id, params});
+  };
+  const visit = row => {
+    if (!row || typeof row !== 'object') return;
+    add(row.wonum, 'maximo.workorder', {wonum: String(row.wonum ?? '')});
+    add(row.jpnum, 'maximo.jobplan', {jpnum: String(row.jpnum ?? ''), include_workorders: false});
+  };
+  for (const item of evidence || []) {
+    if (item.status !== 'ok') continue;
+    visit(item.params);
+    visit(item.data?.workorder);
+    visit(item.data?.jobplan);
+    for (const row of recordsFrom(item.data)) visit(row);
+  }
+  return links;
+}
+
+function linkMatcher(links) {
+  if (!links.size) return null;
+  const escaped = [...links.keys()].sort((a, b) => b.length - a.length).map(code => code.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&'));
+  return new RegExp('(?<![A-Za-z0-9])(' + escaped.join('|') + ')(?![A-Za-z0-9])', 'g');
+}
+
+function inlineText(node, text, links, matcher) {
+  if (!matcher) {node.append(document.createTextNode(text)); return;}
+  let last = 0;
+  for (const match of text.matchAll(matcher)) {
+    if (match.index > last) node.append(document.createTextNode(text.slice(last, match.index)));
+    const code = match[1];
+    const link = links.get(code);
+    const ref = button(code, () => openFromAi(() => queryDetail(link.id, link.params, code)), 'ops-ai-ref');
+    ref.title = link.id === 'maximo.jobplan' ? '查看作业计划 ' + code : '查看工单 ' + code;
+    node.append(ref);
+    last = match.index + code.length;
+  }
+  if (last < text.length) node.append(document.createTextNode(text.slice(last)));
+}
+
+function inline(node, text, links, matcher) {
+  for (const piece of text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)) {
+    if (!piece) continue;
+    if (piece.startsWith('**') && piece.endsWith('**') && piece.length > 4) {
+      const strong = el('strong');
+      inlineText(strong, piece.slice(2, -2), links, matcher);
+      node.append(strong);
+    } else if (piece.startsWith('`') && piece.endsWith('`') && piece.length > 2) {
+      const code = el('code');
+      inlineText(code, piece.slice(1, -1), links, matcher);
+      node.append(code);
+    } else inlineText(node, piece, links, matcher);
+  }
+}
+
+function tableCells(line) {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+}
+
+function markdownTable(lines, links, matcher) {
+  const rows = lines.map(tableCells);
+  const separator = row => row.length && row.every(cell => /^:?-{2,}:?$/.test(cell));
+  const head = rows.length > 1 && separator(rows[1]) ? rows[0] : null;
+  const body = rows.filter((row, index) => !separator(row) && !(head && index === 0));
+  const wrap = el('div', null, 'ops-table-wrap ops-ai-table');
+  const table = el('table', null, 'ops-table');
+  const fill = (row, cells, tag) => {
+    for (const cell of cells) {
+      const node = el(tag);
+      inline(node, /^(null|none|undefined)$/i.test(cell) ? '—' : cell, links, matcher);
+      row.append(node);
+    }
+  };
+  if (head) fill(table.createTHead().insertRow(), head, 'th');
+  const tbody = table.createTBody();
+  for (const row of body) fill(tbody.insertRow(), row, 'td');
+  wrap.append(table);
+  return wrap;
+}
+
+function answerView(text, links = new Map()) {
+  const matcher = linkMatcher(links);
   const content = el('div', null, 'ops-ai-answer');
+  const lines = text.split('\n');
   let list;
-  for (const raw of text.split('\n')) {
-    const line = raw.trim();
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index].trim();
     if (!line) {list = null; continue;}
+    if (line.startsWith('|')) {
+      const block = [];
+      while (index < lines.length && lines[index].trim().startsWith('|')) block.push(lines[index++].trim());
+      index--;
+      list = null;
+      content.append(markdownTable(block, links, matcher));
+      continue;
+    }
+    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    if (heading) {
+      list = null;
+      const node = el('h4');
+      inline(node, heading[1], links, matcher);
+      content.append(node);
+      continue;
+    }
     const marker = /^([*+-]|\d+[.)])\s+/.exec(line);
     let node;
     if (marker) {
@@ -726,56 +847,191 @@ function answerView(text) {
       node = el('p');
       content.append(node);
     }
-    const body = line.slice(marker?.[0].length || 0);
-    for (const piece of body.split(/(\*\*[^*]+\*\*)/g)) {
-      if (piece.startsWith('**') && piece.endsWith('**')) node.append(el('strong', piece.slice(2,-2)));
-      else node.append(document.createTextNode(piece));
-    }
+    inline(node, line.slice(marker?.[0].length || 0), links, matcher);
   }
   return content;
+}
+
+const account = String(root.dataset.account || 'anonymous');
+const outcome = {complete: '分析完成', partial: '部分数据源未返回资料', needs_input: '请补充查询条件', unavailable: '此时无法取得完整资料'};
+let session = null;
+let historyNote = '';
+
+function wideLayout() {
+  return $('ai-drawer').classList.contains('is-wide') && window.matchMedia('(min-width: 900px)').matches;
+}
+
+function openFromAi(show) {
+  detailTarget = wideLayout() ? paneTarget : modalTarget;
+  show();
+}
+
+function closePane() {
+  if (detailTarget === paneTarget) stopDetail();
+  $('ai-pane').hidden = true;
+  $('ai-pane-body').replaceChildren();
+  $('ai-drawer').classList.remove('has-pane');
+}
+
+function timeLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false}).format(date);
+}
+
+function turnView(turn) {
+  const article = el('article', null, 'ops-ai-turn');
+  const asked = el('div', null, 'ops-ai-question');
+  asked.append(el('p', turn.question));
+  const sourceLabel = turn.source === 'auto' ? '自动选择' : (sourceNames[turn.source] || turn.source);
+  asked.append(el('small', [sourceLabel, timeLabel(turn.asked_at)].filter(Boolean).join(' · ')));
+  const reply = el('div', null, 'ops-ai-reply');
+  if (turn.pending) {
+    const wait = el('p', '正在选择数据源并查询记录…', 'ops-inline-status ops-ai-pending');
+    wait.setAttribute('role', 'status');
+    reply.append(wait);
+  } else if (turn.error) {
+    reply.append(el('p', turn.error, 'ops-inline-status is-error'));
+  } else {
+    const evidence = Array.isArray(turn.evidence) ? turn.evidence : [];
+    reply.append(el('span', outcome[turn.status] || '查询完成', 'ops-ai-outcome' + (turn.status === 'complete' ? '' : ' is-warn')));
+    reply.append(answerView(turn.answer || '未取得回答。', evidenceLinks(evidence)));
+    if (evidence.length) {
+      const list = el('div', null, 'ops-ai-evidence-list');
+      list.append(el('h4', '本次查询依据'));
+      evidence.forEach((item, i) => {
+        const itemButton = button('', () => openFromAi(() => openEvidence(item, i + 1)), 'ops-evidence');
+        itemButton.append(el('strong', (i + 1) + ' · ' + actionLabel(item.action)),
+          el('small', (sourceNames[item.source] || item.source) + ' · ' + (item.status === 'ok' ? '查看记录' : '查看未取得资料的原因')));
+        list.append(itemButton);
+      });
+      reply.append(list);
+    }
+  }
+  article.append(asked, reply);
+  return article;
+}
+
+function renderThread(scroll = true) {
+  const thread = $('ai-thread');
+  const turns = session?.turns || [];
+  thread.replaceChildren($('ai-welcome'), ...turns.map(turnView));
+  $('ai-welcome').hidden = turns.length > 0;
+  if (historyNote) thread.append(el('p', historyNote, 'ops-notice'));
+  if (scroll) thread.lastElementChild?.scrollIntoView({block: turns.length ? 'start' : 'end'});
+}
+
+async function renderSessions() {
+  const list = $('ai-sessions');
+  let rows = [];
+  try {
+    rows = await listSessions(account);
+  } catch {
+    list.replaceChildren(el('li', '此浏览器无法保存历史对话。', 'ops-ai-history-empty'));
+    return;
+  }
+  if (!rows.length) {
+    list.replaceChildren(el('li', '暂无历史对话。', 'ops-ai-history-empty'));
+    $('ai-clear').hidden = true;
+    return;
+  }
+  $('ai-clear').hidden = false;
+  list.replaceChildren(...rows.map(row => {
+    const item = el('li', null, 'ops-ai-session' + (row.id === session?.id ? ' is-current' : ''));
+    const open = button('', () => loadSession(row), 'ops-ai-session-open');
+    if (row.id === session?.id) open.setAttribute('aria-current', 'true');
+    open.append(el('strong', row.title || '未命名对话'), el('small', timeLabel(row.updated) + ' · ' + (row.turns?.length || 0) + ' 轮'));
+    const remove = button('', async () => {
+      await deleteSession(row.id).catch(() => {});
+      if (session?.id === row.id) startSession();
+      renderSessions();
+    }, 'ops-ai-session-delete');
+    remove.setAttribute('aria-label', '删除对话：' + (row.title || '未命名对话'));
+    remove.textContent = '×';
+    item.append(open, remove);
+    return item;
+  }));
+}
+
+function showHistory(visible) {
+  $('ai-drawer').classList.toggle('show-history', visible);
+  $('ai-history-toggle').setAttribute('aria-expanded', String(visible));
+}
+
+function startSession() {
+  session = null;
+  historyNote = '';
+  closePane();
+  renderThread(false);
+  renderSessions();
+  $('question').focus({preventScroll: true});
+}
+
+function loadSession(row) {
+  session = row;
+  historyNote = '';
+  closePane();
+  renderThread();
+  renderSessions();
+  if (!wideLayout()) showHistory(false);
+}
+
+async function persist(owner) {
+  const stored = {...owner, turns: owner.turns.filter(turn => !turn.pending)};
+  try {
+    await saveSession(stored);
+    if (owner === session) historyNote = '';
+  } catch {
+    if (owner === session) historyNote = '本次对话未能保存到浏览器历史，刷新页面后将不保留。';
+  }
+  renderSessions();
 }
 
 function aiBusy(busy) {
   $('ask').disabled = busy;
   $('ai-cancel').hidden = !busy;
-  $('ai-result').setAttribute('aria-busy', String(busy));
+  $('ai-thread').setAttribute('aria-busy', String(busy));
   $('ai-launcher').classList.toggle('is-busy', busy);
   $('ai-launcher').setAttribute('aria-label', busy ? '运维 AI 正在分析，点击查看' : '打开运维 AI');
 }
 
+function recentHistory(turns) {
+  const messages = [];
+  for (const turn of turns.filter(row => !row.pending && !row.error && row.answer).slice(-3)) {
+    messages.push({role: 'user', content: turn.question.slice(0, 1200)}, {role: 'assistant', content: turn.answer.slice(0, 1500)});
+  }
+  return messages;
+}
+
 async function ask() {
   const question = $('question').value.trim();
-  if (!question) {$('question').focus(); return;}
-  aiController?.abort();
+  if (!question || aiController) {$('question').focus(); return;}
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID?.() || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+  session ||= {id, account, title: question.slice(0, 40), created: now, updated: now, turns: []};
+  const owner = session;
+  const history = recentHistory(owner.turns);
+  const turn = {question, source: $('ai-source').value, asked_at: now, pending: true};
+  owner.turns.push(turn);
+  owner.updated = now;
+  $('question').value = '';
+  renderThread();
   const controller = new AbortController();
   aiController = controller;
-  $('ai-result').hidden = true;
-  $('ai-result').replaceChildren();
   aiBusy(true);
-  status($('ai-status'), '正在选择数据源并查询记录…');
   try {
-    const result = await api('ask', {question, source: $('ai-source').value}, controller);
-    if (aiController !== controller) return;
-    const messages = {complete: '分析完成', partial: '部分数据源未返回资料', needs_input: '请补充查询条件', unavailable: '此时无法取得完整资料'};
-    status($('ai-status'), messages[result.status] || '查询完成');
-    $('ai-result').hidden = false;
-    $('ai-result').append(el('h3', '回答'), answerView(result.answer || '未取得回答。'));
-    const evidence = Array.isArray(result.evidence) ? result.evidence : [];
-    if (evidence.length) $('ai-result').append(el('h3', '本次查询依据'));
-    evidence.forEach((item, i) => {
-      const itemButton = button('', event => {
-        event.currentTarget.focus({preventScroll: true});
-        openEvidence(item, i + 1);
-      }, 'ops-evidence');
-      itemButton.append(el('strong', (i + 1) + ' · ' + actionLabel(item.action)),
-        el('small', (sourceNames[item.source] || item.source) + ' · ' + (item.status === 'ok' ? '查看记录' : '查看未取得资料的原因')));
-      $('ai-result').append(itemButton);
-    });
+    const result = await api('ask', {question, source: turn.source, history}, controller);
+    Object.assign(turn, {status: result.status, answer: result.answer || '',
+      evidence: Array.isArray(result.evidence) ? result.evidence : []});
   } catch (error) {
-    if (aiController === controller && error.name !== 'AbortError') status($('ai-status'), error.message, true);
+    turn.error = error.name === 'AbortError' ? '已取消本次分析。' : error.message;
   } finally {
+    delete turn.pending;
     if (aiController === controller) {aiController = null; aiBusy(false);}
   }
+  owner.updated = new Date().toISOString();
+  if (owner === session) renderThread();
+  await persist(owner);
 }
 
 $('query-form').addEventListener('submit', event => {event.preventDefault(); runQuery();});
@@ -798,16 +1054,39 @@ $('reload').addEventListener('click', loadCatalog);
 $('detail-close').addEventListener('click', () => $('detail').close());
 $('detail').addEventListener('close', () => {
   if ($('detail').open) return;
-  stopDetail();
+  if (detailTarget === modalTarget) stopDetail();
   $('detail-body').replaceChildren();
 });
 $('ai-form').addEventListener('submit', event => {event.preventDefault(); ask();});
-$('ai-cancel').addEventListener('click', () => {
-  aiController?.abort();
-  aiController = null;
-  aiBusy(false);
-  status($('ai-status'), '已取消本次分析。');
+$('ai-cancel').addEventListener('click', () => aiController?.abort());
+$('question').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    $('ai-form').requestSubmit();
+  }
 });
+$('ai-new').addEventListener('click', startSession);
+$('ai-clear').addEventListener('click', async () => {
+  if (!window.confirm('清空本浏览器中保存的全部运维 AI 历史对话？')) return;
+  await clearSessions(account).catch(() => {});
+  startSession();
+});
+$('ai-history-toggle').addEventListener('click', () => showHistory(!$('ai-drawer').classList.contains('show-history')));
+$('ai-pane-close').addEventListener('click', closePane);
+const WIDE_KEY = 'shdr-operations-ai-wide';
+function setWide(wide) {
+  $('ai-drawer').classList.toggle('is-wide', wide);
+  $('ai-size').setAttribute('aria-pressed', String(wide));
+  $('ai-size').setAttribute('aria-label', wide ? '切换为侧边栏' : '展开为大窗口');
+  $('ai-size').querySelector('span').textContent = wide ? '侧边栏' : '大窗口';
+  showHistory(wide);
+  if (!wide) closePane();
+  try { localStorage.setItem(WIDE_KEY, wide ? '1' : '0'); } catch { /* preference only */ }
+}
+$('ai-size').addEventListener('click', () => setWide(!$('ai-drawer').classList.contains('is-wide')));
+try { setWide(localStorage.getItem(WIDE_KEY) !== '0'); } catch { setWide(true); }
+renderThread(false);
+renderSessions();
 for (const node of root.querySelectorAll('[data-example]')) {
   node.addEventListener('click', () => {
     $('question').value = node.dataset.example;
@@ -834,9 +1113,7 @@ for (const trigger of aiTriggers) {
     aiDrawer.showModal();
     for (const entry of aiTriggers) entry.setAttribute('aria-expanded', 'true');
     sizeAiDrawer();
-    if (!window.matchMedia('(max-width: 620px)').matches && $('ai-result').hidden) {
-      $('question').focus({preventScroll: true});
-    }
+    if (!window.matchMedia('(max-width: 620px)').matches) $('question').focus({preventScroll: true});
   });
 }
 window.visualViewport?.addEventListener('resize', sizeAiDrawer);

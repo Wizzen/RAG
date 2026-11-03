@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="{% static 'operations_workbench/assistant.css' %}?v={{ asset_version }}">
 {% endblock %}
 {% block content %}
-<section class="ops-workbench" id="ops-workbench" aria-labelledby="ops-title">
+<section class="ops-workbench" id="ops-workbench" aria-labelledby="ops-title" data-account="{{ request.user.pk }}">
   <svg class="ops-icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
       <symbol id="ops-i-maximo" viewBox="0 0 24 24"><rect x="5" y="5.5" width="14" height="15" rx="2.5"/><rect x="9" y="3" width="6" height="4.5" rx="1.3"/><path d="M9 12h6m-6 4h4"/></symbol>

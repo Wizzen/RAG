@@ -1,5 +1,7 @@
 """Direct, structured Splunk Apex queries using the portal's fixed index and sourcetype."""
 
+import hashlib
+import hmac
 import json
 import re
 import ssl
@@ -32,6 +34,41 @@ class SplunkUnavailable(Exception):
     pass
 
 
+class _PinnedContext(ssl.SSLContext):
+    """Accept only the configured server certificate, checked before any request bytes are sent."""
+
+    pin = b""
+
+    def wrap_socket(self, *args, **kwargs):
+        sock = super().wrap_socket(*args, **kwargs)
+        der = sock.getpeercert(binary_form=True)
+        if not der or not hmac.compare_digest(hashlib.sha256(der).digest(), self.pin):
+            sock.close()
+            raise ssl.SSLCertVerificationError("Splunk 证书与已固定的指纹不一致。")
+        return sock
+
+
+def _fingerprint(value):
+    digest = re.sub(r"[\s:]", "", value).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise SplunkUnavailable("Splunk 证书指纹配置无效，须为 SHA-256。")
+    return bytes.fromhex(digest)
+
+
+def _tls():
+    # Splunk's factory certificate is issued by a CA shared by every install and
+    # does not name the host, so it is trusted only by an explicit pin.
+    ca_bundle, pinned = option("SPLUNK_CA_BUNDLE"), option("SPLUNK_CERT_SHA256")
+    if ca_bundle or not pinned:
+        return ssl.create_default_context(cafile=ca_bundle or None)
+    context = _PinnedContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    context.pin = _fingerprint(pinned)
+    return context
+
+
 def configured():
     return all(
         option(key)
@@ -49,8 +86,8 @@ def _request(method, path, **kwargs):
         or not 1 <= int(port) <= 65535
     ):
         raise SplunkUnavailable("Splunk 服务器地址或端口配置无效。")
+    tls = _tls()
     try:
-        tls = ssl.create_default_context(cafile=option("SPLUNK_CA_BUNDLE") or None)
         with httpx.Client(
             auth=(option("SPLUNK_USER"), option("SPLUNK_PASSWORD")),
             verify=tls,
@@ -77,6 +114,11 @@ def _request(method, path, **kwargs):
                     )
         data = json.loads(body)
     except (httpx.HTTPError, OSError) as exc:
+        if "CERTIFICATE_VERIFY_FAILED" in str(exc) or "指纹" in str(exc):
+            raise SplunkUnavailable(
+                "Splunk 服务器证书未通过校验。请在运维工作台连接配置中固定服务器证书指纹"
+                "（SPLUNK_CERT_SHA256）或提供 CA 证书（SPLUNK_CA_BUNDLE）。"
+            ) from exc
         raise SplunkUnavailable(
             "无法连接 Splunk，请检查公司网络、VPN 及服务器证书配置。"
         ) from exc

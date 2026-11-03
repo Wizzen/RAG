@@ -95,10 +95,6 @@ def external(request, destination):
         return render(request, "vehicle_tracker/connection.html", {
             "message": str(exc), "code": code,
         }, status=400)
-    except integrations.ToolboxUnavailable as exc:
-        return render(request, "vehicle_tracker/connection.html", {
-            "message": str(exc), "code": code,
-        }, status=503)
     from django.urls import reverse
     from urllib.parse import urlencode
     return HttpResponseRedirect(reverse("vehicle_tracker:index") + "?" + urlencode({"inspect": destination, "code": code}))

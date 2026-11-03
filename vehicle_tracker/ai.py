@@ -157,12 +157,12 @@ def add_qaqc(context):
         context["qaqc"] = {"status": "unavailable", "reason": str(exc)}
         return
     if status != 200:
-        context["qaqc"] = {"status": "unavailable", "reason": "原工具箱未返回可用的该图号记录。"}
+        context["qaqc"] = {"status": "unavailable", "reason": str(data.get("detail") or "QAQC 本地记录中没有该图号。")[:200]}
         return
     totals = data.get("totals") if isinstance(data.get("totals"), dict) else {}
     rows = data.get("workorders") if isinstance(data.get("workorders"), list) else []
     context["qaqc"] = {
-        "status": "available", "part_no": code, "source": "工程工具箱本地同步记录",
+        "status": "available", "part_no": code, "source": "QAQC 本地同步记录", "data_through": text(data.get("data_through"), 20),
         "queried_at": text(data.get("queried_at"), 50),
         "totals": {key: value for key in ("inspections", "mrb_inspections", "mrb_cases", "mrb_rate")
                    if type(value := totals.get(key)) in (int, float)},

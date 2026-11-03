@@ -311,7 +311,7 @@ async function loadQaqc(code) {
     const body=await res.json().catch(()=>({}));
     if(res.ok)entry={data:body};
     else {const d=body.detail,message=typeof d==='string'?d:d?.message;entry=res.status===400?{empty:message||'QAQC 本地记录中没有此图号'}:{error:message||`QAQC 服务返回 ${res.status}`};}
-  } catch {entry={error:'无法连接 QAQC 服务，请确认 ToolBox 服务器正在运行'};}
+  } catch {entry={error:'QAQC 本地记录读取失败，请稍后重试'};}
   qaqcCache.set(code,entry);if(drawing===code)renderDrawing();
 }
 function drawingParts(s) {

@@ -40,11 +40,22 @@ def read_model_config():
     return cfg
 
 
+def child_environment():
+    """Environment for isolated helpers: same interpreter libraries and installed packages, nothing else."""
+    environment = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH") if key in os.environ}
+    # Deployments may run the bundled interpreter with packages supplied via PYTHONPATH rather than a venv.
+    packages = [entry for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep) if entry]
+    packages += [entry for entry in sys.path if entry and Path(entry).name in ("site-packages", "dist-packages")]
+    if packages:
+        environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(packages))
+    return environment
+
+
 def call_model(config, messages):
-    environment = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH") if key in os.environ}
+    environment = child_environment()
     try:
         result = subprocess.run(
-            [sys.executable, "-I", str(Path(__file__).with_name("isolated_model_worker.py"))],
+            [sys.executable, "-s", "-P", str(Path(__file__).with_name("isolated_model_worker.py"))],
             input=json.dumps({"config": config, "messages": messages}, ensure_ascii=False),
             text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             timeout=55, env=environment, check=False,

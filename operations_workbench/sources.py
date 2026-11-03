@@ -10,6 +10,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import BoundedSemaphore
 
+from fos_rag.isolated_model import child_environment
+
 from . import sources_splunk as splunk
 from .runtime import option, runtime_dir
 from .vendor import downtime_cache as cache
@@ -451,22 +453,12 @@ def run_action(action, params):
     if not _NETWORK_SLOTS.acquire(blocking=False):
         raise SourceError("实时查询正在处理中，请稍后重试。", 429)
     try:
-        env = {
-            k: v
+        env = child_environment()
+        env.update(
+            (k, v)
             for k, v in os.environ.items()
-            if k
-            in (
-                "PATH",
-                "LANG",
-                "LC_ALL",
-                "SYSTEMROOT",
-                "JAVA_HOME",
-                "PYTHONPATH",
-                "DYLD_FRAMEWORK_PATH",
-                "DYLD_LIBRARY_PATH",
-            )
-            or k.startswith("OPERATIONS_")
-        }
+            if k == "JAVA_HOME" or k.startswith("OPERATIONS_")
+        )
         env["OPERATIONS_RUNTIME_DIR"] = str(runtime_dir().resolve())
         result = subprocess.run(
             [sys.executable, "-m", "operations_workbench.source_worker"],

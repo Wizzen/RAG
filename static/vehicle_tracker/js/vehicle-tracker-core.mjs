@@ -126,7 +126,7 @@ for(const p of PARTS) if(p.parent) CHILDREN.get(p.parent).push(p.id);
 export const kindOf=id=>KINDS[PART_MAP.get(id)?.kind]||null;
 export const within=(child,parent)=>child===parent || (parent==='TRAIN' && PART_MAP.has(child)) || child.startsWith(parent+'-');
 
-// Deep links to the toolbox's Maximo modules; codes are validated so a record cannot inject a URL.
+// Links to the in-page Maximo / QAQC record viewers; codes are validated so a record cannot inject a URL.
 const CODE=/^[A-Za-z0-9][A-Za-z0-9-]{2,39}$/;
 export const linkable=value=>CODE.test(String(value??''));
 export const LINKS = {

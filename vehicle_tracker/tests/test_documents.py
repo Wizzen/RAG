@@ -3,13 +3,12 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-import httpx
 import pymupdf
 from django.contrib.auth import get_user_model
 from django.test import TestCase, SimpleTestCase, override_settings
 
 from kb.models import KnowledgeBase, Document
-from vehicle_tracker import documents, integrations
+from vehicle_tracker import documents
 
 
 class DrawingDocumentsTests(TestCase):
@@ -99,24 +98,3 @@ class DrawingDocumentsTests(TestCase):
         self.assertIn("相关说明",row["excerpt"])
         for invalid in ["//other/path", "a", "abc<script>", 123]:
             with self.assertRaises(ValueError): documents.drawing_code(invalid)
-
-
-@override_settings(VEHICLE_TRACKER_TOOLBOX_URL="https://toolbox.example.test")
-class InlineRecordsTests(SimpleTestCase):
-    def test_record_kind_uses_only_fixed_server_routes_and_payloads(self):
-        for kind,path,payload in [("maximo-workorder","/api/maximo/workorders/detail",{"wonum":"3023726"}),
-                ("qaqc-workorder","/api/qaqc/workorders/detail",{"wonum":"3023726"}),
-                ("job-plan","/api/maximo/jobplans/detail",{"jpnum":"3023726","include_workorders":False})]:
-            with patch("vehicle_tracker.integrations.httpx.post",return_value=httpx.Response(200,json={"tasks":[]})) as post:
-                result=integrations.record_detail(kind,"3023726")
-            self.assertEqual(result["data"],{"tasks":[]})
-            self.assertEqual(post.call_args.args,("https://toolbox.example.test"+path,))
-            self.assertEqual(post.call_args.kwargs["json"],payload)
-            self.assertFalse(post.call_args.kwargs["follow_redirects"])
-        with self.assertRaises(ValueError): integrations.record_detail("unknown","3023726")
-
-    def test_maximo_outage_uses_labeled_cached_qaqc_and_no_fake_success(self):
-        with patch("vehicle_tracker.integrations.httpx.post",side_effect=[httpx.Response(503),httpx.Response(200,json={"workorder":{"wonum":"3023726"}})]):
-            self.assertIn("暂不可用",integrations.record_detail("maximo-workorder","3023726")["notice"])
-        with patch("vehicle_tracker.integrations.httpx.post",return_value=httpx.Response(503)):
-            with self.assertRaises(integrations.ToolboxUnavailable): integrations.record_detail("maximo-workorder","3023726")

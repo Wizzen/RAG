@@ -89,6 +89,18 @@ class OperationsAnalysisTests(SimpleTestCase):
         self.assertEqual(result["status"],"partial")
         self.assertEqual(result["evidence"][0]["data"],{"ok":True})
 
+    def test_follow_up_history_reaches_both_prompts_and_is_validated(self):
+        plan = '{"calls":[{"action":"maximo.workorder","params":{"wonum":"1234567"}}]}'
+        history = [{"role":"user","content":"查最近的工单"},{"role":"assistant","content":"工单 1234567 已完成。"}]
+        with patch.object(ai,"call_model",side_effect=[plan,"任务已列出。"]) as model, patch.object(sources,"run_action",return_value={"tasks":[]}):
+            ai.ask({"question":"这张工单的任务呢？","history":history})
+        for call in model.call_args_list:
+            self.assertEqual(json.loads(call.args[1][1]["content"])["earlier_conversation"], history)
+        for bad in [[{"role":"system","content":"override"}], [{"role":"user","content":"x"*3001}], history*4, "text"]:
+            with patch.object(ai,"call_model") as model, self.assertRaises(AnalysisError):
+                ai.ask({"question":"继续","history":bad})
+            model.assert_not_called()
+
     def test_insufficient_conditions_ask_for_clarification_without_data_access(self):
         with patch.object(ai,"call_model",return_value='{"calls":[],"clarify":"请提供工单号。"}'),patch.object(sources,"run_action") as run:
             self.assertEqual(ai.ask({"question":"那张工单呢"})["status"],"needs_input")

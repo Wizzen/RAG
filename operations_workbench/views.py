@@ -42,10 +42,10 @@ def api(view):
     return guarded
 
 
-def json_body(request):
+def json_body(request, limit=16384):
     if request.content_type != "application/json":
         raise AnalysisError("请使用 JSON 查询参数。", 415)
-    if len(request.body) > 16384:
+    if len(request.body) > limit:
         raise AnalysisError("查询条件过长。", 413)
     try:
         data = json.loads(request.body)
@@ -93,7 +93,7 @@ def query(request):
 @require_POST
 @api
 def ask(request):
-    return JsonResponse(ai.ask(json_body(request)))
+    return JsonResponse(ai.ask(json_body(request, limit=65536)))
 
 
 @require_GET

@@ -6,10 +6,12 @@ Paths are used only during import. Re-run to refresh the local downtime snapshot
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import sqlite3
+import ssl
 import tempfile
 from contextlib import closing
 from pathlib import Path
@@ -28,6 +30,39 @@ ORACLE_KEYS = (
     "DOWNTIME_DB_DRIVER",
 )
 SPLUNK_KEYS = ("SPLUNK_HOST", "SPLUNK_PORT", "SPLUNK_USER", "SPLUNK_PASSWORD")
+# Set on this machine after import; a refresh from the source modules must not drop them.
+LOCAL_KEYS = ("SPLUNK_CERT_SHA256", "SPLUNK_CA_BUNDLE")
+
+
+def _read_config(destination):
+    try:
+        values = json.loads((destination / ".env.connections").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return values if isinstance(values, dict) else {}
+
+
+def _write_config(destination, config):
+    secret_file = destination / ".env.connections.tmp"
+    secret_file.write_text(json.dumps(config), encoding="utf-8")
+    secret_file.chmod(0o600)
+    os.replace(secret_file, destination / ".env.connections")
+
+
+def pin_splunk_certificate(destination):
+    """Record the certificate the configured Splunk server presents now.
+
+    Run only on the company network, and compare the printed fingerprint with
+    the Splunk administrator's before relying on it.
+    """
+    config = _read_config(destination)
+    host, port = config.get("SPLUNK_HOST", ""), config.get("SPLUNK_PORT", "")
+    if not host or not port.isdigit():
+        raise SystemExit("请先导入 Splunk 连接配置。")
+    der = ssl.PEM_cert_to_DER_cert(ssl.get_server_certificate((host, int(port)), timeout=10))
+    config["SPLUNK_CERT_SHA256"] = hashlib.sha256(der).hexdigest()
+    _write_config(destination, config)
+    return ":".join(config["SPLUNK_CERT_SHA256"][i:i + 2] for i in range(0, 64, 2)).upper()
 
 
 def install(toolbox, apex, destination):
@@ -44,13 +79,18 @@ def install(toolbox, apex, destination):
         for k in keys
         if (v := values.get(k))
     }
+    previous = _read_config(destination)
+    if previous.get("SPLUNK_HOST") == config.get("SPLUNK_HOST"):
+        config.update((k, previous[k]) for k in LOCAL_KEYS if previous.get(k))
     # Keep operator-owned paths private too. Copy the required runtime locally,
     # so neither launching the old service nor retaining its directory is needed.
     with tempfile.TemporaryDirectory(dir=destination) as temp:
         staging = Path(temp)
-        src = toolbox / "data" / "downtime_insights.sqlite3"
-        if src.is_file():
-            snapshot = staging / "downtime.sqlite3"
+        for name, target in (("downtime_insights.sqlite3", "downtime.sqlite3"), ("qaqc.sqlite3", "qaqc.sqlite3")):
+            src = toolbox / "data" / name
+            if not src.is_file():
+                continue
+            snapshot = staging / target
             with (
                 closing(
                     sqlite3.connect(src.resolve().as_uri() + "?mode=ro", uri=True)
@@ -82,8 +122,13 @@ def install(toolbox, apex, destination):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--toolbox", required=True, type=Path)
-    parser.add_argument("--apex", required=True, type=Path)
+    parser.add_argument("--toolbox", type=Path)
+    parser.add_argument("--apex", type=Path)
+    parser.add_argument(
+        "--pin-splunk-cert",
+        action="store_true",
+        help="固定当前 Splunk 服务器证书（仅在公司网络中执行，并与管理员核对指纹）",
+    )
     parser.add_argument(
         "--destination",
         type=Path,
@@ -92,5 +137,10 @@ if __name__ == "__main__":
         / "operations-workbench",
     )
     args = parser.parse_args()
-    install(args.toolbox, args.apex, args.destination)
-    print("运维数据与本机连接配置已就绪。")
+    if not args.pin_splunk_cert and not (args.toolbox and args.apex):
+        parser.error("请同时指定 --toolbox 和 --apex，或使用 --pin-splunk-cert。")
+    if args.toolbox and args.apex:
+        install(args.toolbox, args.apex, args.destination)
+        print("运维数据与本机连接配置已就绪。")
+    if args.pin_splunk_cert:
+        print("已固定 Splunk 服务器证书 SHA-256：" + pin_splunk_certificate(args.destination))

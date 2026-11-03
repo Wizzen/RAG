@@ -517,9 +517,9 @@ def validate_lang(value: Any) -> str:
 
 
 def escape_like_pattern(keyword: str) -> str:
-    """Escape LIKE metacharacters and wrap with wildcards for a contains match."""
+    """Escape LIKE metacharacters and wrap with wildcards for a contains match; ``*`` matches anything."""
     escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    return f"%{escaped.replace('*', '%')}%"
 
 
 def code_to_like(code: str) -> str:
@@ -554,7 +554,7 @@ def _validate_keyword(value: Any) -> str:
     keyword = str(value or "").strip()
     if len(keyword) > MAX_KEYWORD_LEN:
         raise DowntimeSearchError(f"关键词最多 {MAX_KEYWORD_LEN} 个字符。")
-    return keyword
+    return keyword if keyword.replace("*", "").strip() else ""
 
 
 def _validate_choices(value: Any, allowed: set[str], name: str) -> list[str]:

@@ -146,6 +146,39 @@ class SourceTests(SimpleTestCase):
             "SDR_SDL_Seven Dwarfs Mine Train", query.call_args.kwargs["data"]["search"]
         )
 
+    def test_splunk_uses_pinned_certificate_only_when_configured(self):
+        (self.folder / ".env.connections").write_text(json.dumps({"SPLUNK_CERT_SHA256": "AB:" * 31 + "AB"}))
+        context = sources_splunk._tls()
+        self.assertIsInstance(context, sources_splunk._PinnedContext)
+        self.assertEqual(context.pin, bytes.fromhex("ab" * 32))
+        (self.folder / ".env.connections").write_text(json.dumps({"SPLUNK_CERT_SHA256": "not-a-digest"}))
+        with self.assertRaises(sources_splunk.SplunkUnavailable):
+            sources_splunk._tls()
+        (self.folder / ".env.connections").write_text("{}")
+        self.assertNotIsInstance(sources_splunk._tls(), sources_splunk._PinnedContext)
+
+    def test_isolated_model_worker_starts_with_installed_packages(self):
+        import subprocess
+        import sys
+
+        from fos_rag import isolated_model
+
+        worker = Path(isolated_model.__file__).with_name("isolated_model_worker.py")
+        result = subprocess.run(
+            [sys.executable, "-s", "-P", str(worker)], input="{}", text=True,
+            capture_output=True, env=isolated_model.child_environment(), timeout=30, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(json.loads(result.stdout)["ok"])
+
+    def test_maximo_keyword_asterisk_is_a_wildcard(self):
+        from operations_workbench.vendor import maximo_workbench as maximo
+
+        self.assertEqual(maximo.escape_like_pattern("*更换*"), "%%更换%%")
+        self.assertEqual(maximo.escape_like_pattern("PR3*水"), "%PR3%水%")
+        self.assertEqual(maximo.escape_like_pattern("50%_"), "%50\\%\\_%")
+        self.assertEqual(maximo._validate_keyword(" ** "), "")
+
     def test_original_print_layouts_render_pdf_for_both_detail_types(self):
         for kind, key in [("workorder", "wonum"), ("jobplan", "jpnum")]:
             with patch.object(
