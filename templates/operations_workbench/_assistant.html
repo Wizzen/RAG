@@ -1,0 +1,40 @@
+<button id="ops-ai-launcher" class="ops-ai-launcher" type="button" aria-label="打开运维 AI"
+        aria-haspopup="dialog" aria-controls="ops-ai-drawer" aria-expanded="false">
+  {% include 'kb/_assistant_avatar.html' %}
+  <span>运维 AI</span>
+</button>
+
+<dialog id="ops-ai-drawer" class="ops-assistant" aria-labelledby="ops-ai-title">
+  <header class="ops-assistant-head">
+    <span class="ops-assistant-avatar">{% include 'kb/_assistant_avatar.html' %}</span>
+    <div><small lang="en">OPERATIONS AI</small><h2 id="ops-ai-title">运维 AI</h2></div>
+    <button id="ops-ai-close" class="ops-assistant-close" type="button" aria-label="收起运维 AI" autofocus>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+  </header>
+  <div class="ops-assistant-body">
+    <p class="ops-assistant-intro">查询工单、设备日志和停机事件。每次回答下方可展开查看查询依据。</p>
+    <form id="ops-ai-form">
+      <label>查询来源
+        <select id="ops-ai-source">
+          <option value="auto">自动选择</option><option value="maximo">Maximo</option>
+          <option value="splunk">Splunk</option><option value="downtime">Downtime</option>
+        </select>
+      </label>
+      <label>你的问题
+        <textarea id="ops-question" required maxlength="1200" rows="3" placeholder="最近 7 天，哪些设备停机时间最长？"></textarea>
+      </label>
+      <div class="ops-assistant-examples" role="group" aria-label="问题示例">
+        <button type="button" data-example="查询最近 7 天的停机事件，按停机时长汇总。">停机概览</button>
+        <button type="button" data-example="查询最近 7 天描述包含轴承的 Maximo 工单。">工单排查</button>
+        <button type="button" data-example="查询过去 1 小时的 Splunk Apex 消息，并列出时间和设备。">近期日志</button>
+      </div>
+      <div class="ops-assistant-actions">
+        <button id="ops-ask" type="submit">向 AI 提问<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-5-5 5 5-5 5"/></svg></button>
+        <button id="ops-ai-cancel" class="ops-link" type="button" hidden>取消分析</button>
+      </div>
+    </form>
+    <p id="ops-ai-status" class="ops-inline-status" role="status" hidden></p>
+    <section id="ops-ai-result" class="ops-ai-result" aria-label="AI 回答" hidden></section>
+  </div>
+</dialog>

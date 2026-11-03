@@ -10,6 +10,8 @@ urlpatterns = [
     path("accounts/", include("accounts.urls")),
     path("kb/", include("kb.urls")),
     path("dashboard/", include("dashboard.urls")),
+    path("tools/operations/", include("operations_workbench.urls")),
+    path("tools/", include("vehicle_tracker.urls")),
     # 首页：简单导航
     path("", views.home, name="home"),
     # 设计原型（可移除）

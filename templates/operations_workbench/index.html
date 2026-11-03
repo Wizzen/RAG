@@ -1,0 +1,92 @@
+{% extends "kb/_base.html" %}
+{% load static %}
+{% block title %}运维数据工作台 · SHDR RAG{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'operations_workbench/workbench.css' %}?v={{ asset_version }}">
+<link rel="stylesheet" href="{% static 'operations_workbench/assistant.css' %}?v={{ asset_version }}">
+{% endblock %}
+{% block content %}
+<section class="ops-workbench" id="ops-workbench" aria-labelledby="ops-title">
+  <svg class="ops-icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <symbol id="ops-i-maximo" viewBox="0 0 24 24"><rect x="5" y="5.5" width="14" height="15" rx="2.5"/><rect x="9" y="3" width="6" height="4.5" rx="1.3"/><path d="M9 12h6m-6 4h4"/></symbol>
+      <symbol id="ops-i-splunk" viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="15" rx="3"/><path d="m6.5 9 3 3-3 3m6 .2h4.5"/></symbol>
+      <symbol id="ops-i-downtime" viewBox="0 0 24 24"><path d="M4.1 8a8.8 8.8 0 1 1-.8 5.9M3.3 4.5V9h4.5M12 7.5v5l3.5 2"/></symbol>
+      <symbol id="ops-i-probe" viewBox="0 0 24 24"><path d="M2.5 12h4l3.1-7 4.6 14 3.1-7h4.2"/></symbol>
+      <symbol id="ops-i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4.7 4.7"/></symbol>
+      <symbol id="ops-i-export" viewBox="0 0 24 24"><path d="M12 3.5v11m-4-4 4 4 4-4M4.5 15v3.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V15"/></symbol>
+      <symbol id="ops-i-filter" viewBox="0 0 24 24"><path d="M3 7h4m4 0h10M3 17h10m4 0h4"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></symbol>
+      <symbol id="ops-i-records" viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="17" rx="3"/><path d="M4 9h16m-12 4h3m-3 3.5h6"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="ops-masthead">
+    <header class="ops-page-head">
+      <div class="ops-head-copy">
+        <p class="ops-overline" lang="en"><span aria-hidden="true"></span>SHDR &ensp;/&ensp; OPERATIONS</p>
+        <h1 id="ops-title">运维数据工作台</h1>
+        <p class="ops-intro">查阅维护工单、设备日志与停机履历。</p>
+      </div>
+      <img class="ops-head-art" src="{% static 'operations_workbench/signal-stack.svg' %}?v={{ asset_version }}" alt="">
+    </header>
+    <div id="ops-sources" class="ops-sources" role="group" aria-label="选择数据源"></div>
+  </div>
+  <p id="ops-catalog-status" class="ops-inline-status" role="status">正在载入数据源…</p>
+  <button type="button" class="btn" id="ops-reload" hidden>重新载入数据源</button>
+
+  <div id="ops-content" class="ops-content" hidden>
+    <section class="ops-panel ops-query" aria-labelledby="ops-query-title">
+      <header class="ops-panel-head">
+        <div>
+          <span class="ops-section-label" id="ops-query-source"></span>
+          <h2 id="ops-query-title">查询条件</h2>
+        </div>
+        <div class="ops-head-tools">
+          <label class="ops-action-field" id="ops-action-field">
+            <span>查询视图</span><select id="ops-action"></select>
+          </label>
+          <button type="button" id="ops-probe" class="ops-tool">
+            <svg class="ops-icon" aria-hidden="true"><use href="#ops-i-probe"/></svg>检查连接
+          </button>
+        </div>
+      </header>
+      <p id="ops-probe-status" class="ops-inline-status" role="status" hidden></p>
+      <form id="ops-query-form">
+        {% csrf_token %}
+        <div id="ops-fields" class="ops-fields"></div>
+        <div class="ops-query-footer">
+          <details id="ops-more" class="ops-more" hidden>
+            <summary><svg class="ops-icon" aria-hidden="true"><use href="#ops-i-filter"/></svg>更多筛选条件</summary>
+            <div id="ops-extra-fields" class="ops-fields"></div>
+          </details>
+          <div class="ops-form-actions">
+            <button id="ops-reset" class="ops-text-button" type="button">重置条件</button>
+            <button id="ops-cancel" class="ops-link" type="button" hidden>取消查询</button>
+            <button id="ops-submit" class="btn primary" type="submit"><svg class="ops-icon" aria-hidden="true"><use href="#ops-i-search"/></svg>查询记录</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <section class="ops-panel ops-results" aria-labelledby="ops-results-title">
+      <header class="ops-panel-head">
+        <h2 id="ops-results-title">查询结果</h2>
+        <button type="button" id="ops-export" class="ops-tool" disabled><svg class="ops-icon" aria-hidden="true"><use href="#ops-i-export"/></svg>导出 CSV</button>
+      </header>
+      <p id="ops-query-status" class="ops-inline-status" role="status"></p>
+      <div id="ops-summary"></div>
+      <div id="ops-result-view"></div>
+    </section>
+  </div>
+  <dialog id="ops-detail" class="ops-dialog" aria-labelledby="ops-detail-title">
+    <header><div><div class="ops-kicker" id="ops-detail-source">记录详情</div><h2 id="ops-detail-title">详情</h2></div>
+      <button type="button" class="btn" id="ops-detail-close" aria-label="关闭详情">关闭</button></header>
+    <div class="ops-detail-body" id="ops-detail-body"></div>
+  </dialog>
+  {% include 'operations_workbench/_assistant.html' %}
+  <noscript>请启用浏览器的 JavaScript 以查询运维数据。</noscript>
+</section>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{% static 'operations_workbench/workbench.mjs' %}?v={{ asset_version }}"></script>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "kb/_base.html" %}
+{% block title %}设备模型知识库 · 外部查询{% endblock %}
+{% block content %}
+<section class="card" style="max-width:680px;margin:48px auto;padding:28px">
+  <h1>设备模型知识库 · 外部查询</h1>
+  <p style="margin:20px 0">{{ message }}</p>
+  {% if code %}<p>查询编号：<strong>{{ code }}</strong></p>{% endif %}
+  <p style="margin:20px 0">车辆项目仍保存在当前浏览器，部件定位、追踪记录、附件和完整备份可以继续使用。</p>
+  <a class="btn primary" href="{% url 'vehicle_tracker:index' %}">返回车辆模型</a>
+</section>
+{% endblock %}

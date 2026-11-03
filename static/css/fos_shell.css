@@ -53,9 +53,10 @@ html[data-theme="dark"] body{
   background:radial-gradient(260px 160px at 20% 0,rgba(59,130,246,.22),transparent 70%)}
 .side-brand{position:relative;display:flex;align-items:center;gap:12px;padding:4px 8px 26px;color:#fff}
 .side-logo{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;flex-shrink:0;
-  background:var(--brand-grad);box-shadow:0 10px 24px -8px rgba(37,99,235,.8),inset 0 1px 0 rgba(255,255,255,.28)}
-.side-logo .brand-mark{width:25px;height:20px;color:#fff}
-.side-logo .brand-mark circle{fill:none;stroke:currentColor;stroke-width:26}
+  box-shadow:0 10px 24px -8px rgba(106,92,246,.6)}
+.side-logo .brand-mark{display:block;width:40px;height:40px}
+.fos-topbar .brand-mark{display:block;width:30px;height:30px}
+.pe-tile img.brand-mark{display:block;width:100%;height:100%;border-radius:inherit}
 .side-name{display:flex;flex-direction:column;font-weight:700;font-size:16.5px;letter-spacing:.02em;line-height:1.15}
 .side-name .dot{color:#60A5FA;margin:0 3px}
 .side-name small{margin-top:4px;font-size:11.5px;font-weight:500;letter-spacing:.02em;color:var(--side-mute)}

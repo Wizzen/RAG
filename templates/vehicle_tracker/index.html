@@ -1,0 +1,109 @@
+{% extends "kb/_base.html" %}
+{% block title %}七个小矮人矿山车 · 设备模型知识库 · SHDR RAG{% endblock %}
+{% block extra_head %}
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <script>document.documentElement.classList.add('vehicle-workbench');</script>
+  <link rel="stylesheet" href="/static/vehicle_tracker/css/vehicle_tracker.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/vehicle_tracker/css/vehicle_tracker_ai.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/vehicle_tracker/css/vehicle_workspace.css?v={{ asset_version }}">
+  <script type="importmap">{{ import_map_json|safe }}</script>
+{% endblock %}
+{% block content %}
+<div class="vt-scope">
+
+<div id="vt-app" class="vt-app" aria-busy="true">
+  <header class="vt-header">
+    <div class="vt-heading"><div><a class="vt-eyebrow" href="{% url 'vehicle_tracker:equipment_library' %}">← 设备模型知识库</a><h1>七个小矮人矿山车</h1><p>车辆模型 · 部件追踪与学习</p></div></div>
+    <div class="vt-overview" aria-label="车辆资料概览"><span><b>5</b> 节车厢</span><span><b>20</b> 个轮架</span><span><b id="vt-overview-records">0</b> 条记录</span><span><b id="vt-overview-bound">0</b> 已绑定</span></div>
+    <div class="vt-header-right"><button id="vt-focus-mode" type="button" aria-pressed="false">专注模式</button><button id="vt-ai-open" class="vt-ai-launcher" type="button" aria-expanded="false" aria-controls="vt-ai-panel">✦ 车辆 AI</button><button id="vt-help" class="vt-icon" title="使用指南" aria-label="操作说明">?</button></div>
+  </header>
+  <div class="vt-toolbar">
+    <div class="vt-toolgroup"><label for="vt-project">项目</label><select id="vt-project" aria-label="切换项目"></select><button id="vt-projects" title="新建及编辑项目">项目管理</button></div>
+    <label class="vt-search">⌕ <input id="vt-search" type="search" placeholder="搜索部件、位置码、工单号、序列号或图号…" aria-label="全局搜索"></label>
+    <div class="vt-toolgroup"><button id="vt-import">↓ 导入追踪表</button><button id="vt-backup">↑ 完整备份</button><button id="vt-restore">恢复备份</button></div>
+  </div>
+  <div class="vt-workspace" id="vt-workspace">
+    <aside class="vt-panel vt-tree-panel" id="vt-left">
+      <div class="vt-panel-head"><div><span class="vt-eyebrow">STRUCTURE</span><h2>设备结构 <span id="vt-part-count"></span></h2></div><button class="vt-icon" id="vt-collapse-left" title="折叠结构树" aria-label="折叠结构树">‹</button></div>
+      <div class="vt-tree-tools"><button id="vt-expand-tree">全部展开</button><button id="vt-fold-tree">全部折叠</button></div>
+      <div id="vt-tree" class="vt-tree" role="tree" aria-label="设备部件结构"></div>
+      <div class="vt-tree-foot"><span><i class="vt-dot teal"></i> 已有追踪记录</span><span><i class="vt-dot gray"></i> 待关联</span></div>
+    </aside>
+    <div class="vt-resizer" id="vt-resize-left" role="separator" aria-label="调整结构树宽度" aria-orientation="vertical" tabindex="0"></div>
+    <section class="vt-viewport" aria-label="部件可视化工作区">
+      <div class="vt-viewbar">
+        <div class="vt-toolgroup"><button id="vt-show-left" class="vt-icon" hidden title="展开结构树" aria-label="展开结构树">▤</button><div class="vt-segment"><button data-view="model" class="active">三维模型</button><button data-view="reference">参考图标注 <span id="vt-ref-count">0</span></button></div></div>
+        <div class="vt-toolgroup"><select id="vt-camera" aria-label="模型视角"><option value="perspective">透视视角</option><option value="top">俯视</option><option value="side">侧视</option><option value="front">端视</option></select><button id="vt-focus" title="聚焦选中部件（F）">⊙ 聚焦</button><button id="vt-fit" title="显示完整列车">全车</button><button id="vt-show-right" class="vt-icon" hidden title="展开详情" aria-label="展开详情">▥</button></div>
+      </div>
+      <div id="vt-model" class="vt-model" tabindex="0" aria-label="三维列车：左键旋转，滚轮缩放，右键平移，单击选择，双击聚焦">
+        <div class="vt-model-title"><span class="vt-eyebrow">SEVEN DWARFS MINE TRAIN · SDLDWARMV0001</span><strong>七个小矮人矿山车 · 列车部件定位</strong><small>结构依据 SDLDWARTP0001 Rev L · 车厢参照 SDLDWARMV0002 · 轮架参照 SDLDWARMV0822 · 几何为示意</small></div>
+        <div class="vt-canvas" id="vt-canvas"></div>
+        <div class="vt-model-legend" aria-hidden="true"><span><i class="pin"></i>枢轴销</span><span><i class="spindle"></i>心轴 / 轴</span><span><i class="wheel"></i>聚氨酯车轮</span></div>
+        <nav id="vt-nav" class="vt-nav" aria-label="轮架速查"></nav>
+        <div class="vt-model-tools"><button id="vt-xray" aria-pressed="false" title="隐藏座舱、底盘、C 型架与轭架，直接选择销轴和车轮">透视车底</button><button id="vt-isolate" aria-pressed="false">隔离所选</button><button id="vt-zoom-in" aria-label="放大模型">＋</button><button id="vt-zoom-out" aria-label="缩小模型">−</button></div>
+        <div id="vt-model-error" class="vt-model-error" hidden></div>
+        <div id="vt-hover" class="vt-hover" hidden></div>
+        <div class="vt-model-bottom"><span class="vt-crumbs"><i class="vt-dot teal"></i> <span id="vt-selection-label">全车</span></span><span>左键旋转 · 滚轮缩放 · 右键平移 · 双击聚焦 · Esc 返回上级</span></div>
+        <span class="vt-axis" aria-hidden="true"><b>X</b><i>Y</i><em>Z</em></span>
+      </div>
+      <div id="vt-reference" class="vt-reference" hidden>
+        <div class="vt-refbar"><select id="vt-reference-select" aria-label="选择参考图"></select><button id="vt-reference-upload">上传参考图</button><button id="vt-annotate" aria-pressed="false">＋ 添加热点</button><button id="vt-delete-hotspot" disabled>删除所选热点</button></div>
+        <div id="vt-reference-drop" class="vt-reference-drop">
+          <div id="vt-reference-empty" class="vt-empty"><span class="vt-empty-mark">▧</span><h3>把设备参考图放到这里</h3><p>拖入 PNG、JPG 或 WebP 图片，也可以使用「上传参考图」。</p><small>选中部件后，在图片上添加与之关联的热点。</small></div>
+          <div id="vt-reference-image-wrap" class="vt-reference-image-wrap" hidden><img id="vt-reference-image" alt="设备参考图"><div id="vt-hotspots"></div></div>
+        </div>
+        <div class="vt-refhint" id="vt-refhint">热点坐标相对于图片保存，调整窗口和侧栏后仍保持定位。</div>
+      </div>
+    </section>
+    <div class="vt-resizer" id="vt-resize-right" role="separator" aria-label="调整详情面板宽度" aria-orientation="vertical" tabindex="0"></div>
+    <aside id="vt-right" class="vt-panel vt-details-panel">
+      <div class="vt-panel-head"><div><span class="vt-eyebrow">COMPONENT INSPECTOR</span><h2>部件详情</h2></div><button class="vt-icon" id="vt-collapse-right" aria-label="折叠详情" title="折叠详情">›</button></div>
+      <div id="vt-selected" class="vt-selected"></div>
+      <div class="vt-detail-tabs" role="tablist" aria-label="部件资料"><button data-detail="info" role="tab" aria-selected="true" class="active">资料</button><button data-detail="records" role="tab" aria-selected="false">追踪 <span id="vt-bound-count">0</span></button><button data-detail="files" role="tab" aria-selected="false">附件 <span id="vt-file-count">0</span></button><button data-detail="history" role="tab" aria-selected="false">履历</button></div>
+      <div class="vt-detail-body" id="vt-detail-body">
+        <form id="vt-info" data-detail-panel="info"><div id="vt-spec"></div><label>部件显示名称<input id="vt-part-name" maxlength="200" required></label><label>固定部件编号<input id="vt-part-id" readonly></label><label>位置<input id="vt-part-position" readonly></label><label>核对备注<textarea id="vt-part-notes" rows="5" maxlength="10000" placeholder="记录检验、换件或核对说明…"></textarea></label><button class="vt-primary" type="submit">保存部件资料</button><p class="vt-subtle">部件编号固定，修改显示名称不会改变追踪关联。</p></form>
+        <div id="vt-detail-records" data-detail-panel="records" hidden></div>
+        <div data-detail-panel="files" hidden><div class="vt-upload" id="vt-attachment-drop"><span>↥</span><strong>拖入附件</strong><small>关联到当前选中部件 · 单文件 ≤ 20 MB</small><button id="vt-attachment-upload">选择文件</button></div><div id="vt-files"></div></div>
+        <div id="vt-history" data-detail-panel="history" hidden></div>
+      </div>
+      <section id="vt-drawing" class="vt-drawing" aria-label="图号详情" hidden></section>
+    </aside>
+  </div>
+  <section class="vt-table-panel" id="vt-table-panel" aria-label="追踪记录核对表">
+    <div class="vt-table-head"><div class="vt-table-title"><span class="vt-eyebrow">TRACEABILITY</span><h2>追踪记录 <span id="vt-record-count">0</span></h2><span id="vt-table-stats" class="vt-subtle"></span></div><div class="vt-toolgroup"><select id="vt-record-filter" aria-label="筛选追踪记录"><option value="all">全部记录</option><option value="unbound">仅未绑定</option><option value="selected">所选部件及下级</option></select><button id="vt-csv">导出 CSV</button><button id="vt-table-expand" aria-expanded="false">⛶ 展开核对</button></div></div>
+    <div class="vt-bindingbar"><span id="vt-binding-target">绑定目标：全车</span><span id="vt-checked-count">未勾选记录</span><button class="vt-primary" id="vt-bind" disabled>绑定到所选部件</button><button id="vt-unbind" disabled>解除绑定</button><span class="vt-subtle">需人工选择记录和部件后确认</span><div class="vt-paging"><button id="vt-prev" aria-label="上一页">‹</button><span id="vt-page"></span><button id="vt-next" aria-label="下一页">›</button></div></div>
+    <div class="vt-table-scroll" id="vt-table-drop"><table><thead><tr><th><input id="vt-check-page" type="checkbox" aria-label="选择当前页记录"></th><th>工单号</th><th>序列号</th><th>图号</th><th>QA 绿标（检验员 · 日期）</th><th>部件 / 绑定位置</th><th>报告位置码</th><th>来源</th></tr></thead><tbody id="vt-records"></tbody></table><div id="vt-records-empty" class="vt-table-empty" hidden>没有匹配的记录。可拖入 Excel / CSV / TSV 追踪表，或点击顶部导入按钮。</div></div>
+  </section>
+  <footer class="vt-status"><span id="vt-save-status" role="status">正在打开本地项目…</span><span id="vt-project-stats"></span><span>DESKTOP WORKSPACE <i>·</i> SHDR RSE</span></footer>
+</div>
+{% include "vehicle_tracker/_source.html" %}
+{% include "vehicle_tracker/_inspector.html" %}
+<div id="vt-toast" class="vt-toast" role="status" aria-live="polite" hidden></div>
+{% include "vehicle_tracker/_ai.html" %}
+<div id="vt-linkmenu" class="vt-linkmenu" role="menu" hidden></div>
+<dialog id="vt-dialog"><div class="vt-dialog-head"><h2 id="vt-dialog-title"></h2><button id="vt-dialog-close" class="vt-icon" aria-label="关闭对话框">×</button></div><div id="vt-dialog-body" class="vt-dialog-body"></div></dialog>
+<input type="file" id="vt-input-table" accept=".xlsx,.xls,.csv,.tsv" hidden>
+<input type="file" id="vt-input-reference" accept="image/png,image/jpeg,image/webp" multiple hidden>
+<input type="file" id="vt-input-attachment" multiple hidden>
+<input type="file" id="vt-input-restore" accept=".json" hidden>
+<script src="/static/vehicle_tracker/vendor/xlsx-0.20.3.full.min.js"></script>
+<div id="vt-boot-error" class="vt-boot-error" role="alert" hidden><strong>车辆模型未能启动</strong><p>请按 <kbd>Ctrl</kbd> + <kbd>F5</kbd> 强制刷新。如仍为空白：关闭其他车辆模型页面后再刷新；并确认使用最新版 Chrome 或 Edge 的普通窗口（非 InPrivate / 无痕），且允许此网站保存数据。</p><small id="vt-boot-detail"></small></div>
+<script>
+(function(){
+  var shown=false;
+  function fail(detail){
+    var app=document.getElementById('vt-app');
+    if(shown||!app||app.getAttribute('aria-busy')!=='true')return;
+    shown=true;document.getElementById('vt-boot-error').hidden=false;
+    if(detail)document.getElementById('vt-boot-detail').textContent=String(detail).slice(0,300);
+  }
+  window.addEventListener('error',function(e){if(e.filename&&e.filename.indexOf('/static/vehicle_tracker/js/vehicle-tracker')>=0)fail(e.message);});
+  window.addEventListener('unhandledrejection',function(e){fail(e.reason&&e.reason.message);});
+  if(!HTMLScriptElement.supports||!HTMLScriptElement.supports('importmap'))setTimeout(function(){fail('浏览器版本过旧，不支持 import map。');},0);
+  setTimeout(function(){fail('启动超过 15 秒仍未完成。');},15000);
+})();
+</script>
+<script type="module" src="/static/vehicle_tracker/js/vehicle-tracker.mjs?v={{ asset_version|default:"0" }}" onerror="document.getElementById('vt-boot-error').hidden=false"></script>
+
+</div>
+{% endblock %}

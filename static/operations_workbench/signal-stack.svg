@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 145" fill="none">
+  <defs>
+    <radialGradient id="halo">
+      <stop stop-color="#399ADA" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#268EBB" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="signal" x1="12" y1="96" x2="257" y2="76" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6DDAEB" stop-opacity="0"/>
+      <stop offset=".56" stop-color="#65CCEA" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#9CF2EB" stop-opacity=".75"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="220" y1="62" x2="374" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5487CF" stop-opacity=".29"/>
+      <stop offset=".54" stop-color="#70CDE5" stop-opacity=".48"/>
+      <stop offset="1" stop-color="#AEF3EE" stop-opacity=".66"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="203" y1="50" x2="396" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#688DC5" stop-opacity=".38"/>
+      <stop offset=".58" stop-color="#A5E9FA" stop-opacity=".8"/>
+      <stop offset="1" stop-color="#B7FFF0"/>
+    </linearGradient>
+    <linearGradient id="facet" x1="204" y1="67" x2="395" y2="67" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#303F78"/>
+      <stop offset=".54" stop-color="#4A86B1"/>
+      <stop offset=".55" stop-color="#489AB6"/>
+      <stop offset="1" stop-color="#78D9DC"/>
+    </linearGradient>
+    <linearGradient id="core" x1="269" y1="58" x2="326" y2="33" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#77B4DE"/>
+      <stop offset=".56" stop-color="#9AE2EA"/>
+      <stop offset="1" stop-color="#E8FFF9"/>
+    </linearGradient>
+    <g id="plate">
+      <path d="M204 52 306 88Q310 89.5 314 87.8L395 53V59Q395 60.8 392.4 62L315 95.2Q310.7 97 306 95.3L207 60.3Q204 59.2 204 57.4Z" fill="url(#facet)" opacity=".81"/>
+      <path d="M206 49.6 285.5 16Q289.2 14.4 293 15.7L392.7 50.6Q397.2 52.3 392.7 54.3L314.7 87.8Q310.5 89.6 306.1 88L206 52.7Q202.4 51.3 206 49.6Z" fill="url(#glass)" stroke="url(#edge)" stroke-width=".95" stroke-linejoin="round"/>
+      <path d="m311 90.2 80-34.4" stroke="#C0FFF4" stroke-opacity=".77" stroke-width=".8"/>
+    </g>
+  </defs>
+
+  <ellipse cx="306" cy="88" rx="139" ry="55" fill="url(#halo)"/>
+  <g stroke="url(#signal)" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11 108h67l43-18h33l42-18h49"/>
+    <path d="M48 126h33l65-27h27l42-18h26" opacity=".7"/>
+    <path d="M84 60h45l23 8h28l34-14h22" opacity=".6"/>
+    <path d="m361 91 34 12h36" opacity=".2"/>
+  </g>
+  <g fill="#90DCEC">
+    <circle cx="154" cy="90" r="1.7" opacity=".59"/>
+    <circle cx="146" cy="99" r="1.4" opacity=".38"/>
+    <circle cx="129" cy="60" r="1.2" opacity=".3"/>
+  </g>
+
+  <use href="#plate" transform="translate(0 39)" opacity=".36"/>
+  <use href="#plate" transform="translate(0 26)" opacity=".53"/>
+  <use href="#plate" transform="translate(0 13)" opacity=".73"/>
+  <use href="#plate"/>
+
+  <g stroke="#CEF9FC" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m221 50 23 8 13-5 13 5 10-4" opacity=".52"/>
+    <path d="m255 41 15 5 9-4" opacity=".63"/>
+    <path d="m328 48 16-7 15 5 8-3" opacity=".65"/>
+    <path d="m317 60 12 4 17-7 9 3" opacity=".48"/>
+    <path d="m291 67 13 5 5-2" opacity=".48"/>
+  </g>
+  <path d="m269 52 29-12 34 12v3l-29 12-34-12z" fill="#468DAF" opacity=".87"/>
+  <path d="m270 50.5 26.8-11.6a3 3 0 0 1 2.2 0l32.3 11.3q1.8.6 0 1.4l-27.2 11.7a3.4 3.4 0 0 1-2.4 0l-31.7-11.2q-1.9-.7 0-1.6Z" fill="url(#core)" stroke="#D6FFF9" stroke-opacity=".86" stroke-width=".75"/>
+  <path d="m276 50 21-9 17 6" stroke="#F0FFFC" stroke-width=".8" stroke-opacity=".7"/>
+  <g fill="#D1FBF9">
+    <ellipse cx="221" cy="50" rx="1.8" ry=".83" opacity=".74"/>
+    <ellipse cx="367" cy="43" rx="1.7" ry=".8" opacity=".88"/>
+    <ellipse cx="355" cy="60" rx="1.5" ry=".75" opacity=".75"/>
+  </g>
+  <path d="m315 89 38-16.3" stroke="#D3FFF6" stroke-linecap="round" stroke-width="1.5" opacity=".82"/>
+</svg>
