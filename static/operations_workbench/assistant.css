@@ -140,6 +140,12 @@ html:has(#ops-ai-drawer[open]) { overflow: hidden; }
   text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; white-space: nowrap;
 }
 .ops-ai-ref:hover { background: var(--brand); color: var(--surface); text-decoration: none; }
+.ops-ai-coverage { margin: 10px 0 0; padding: 8px 11px; border-left: 3px solid var(--rule); border-radius: 0 8px 8px 0; background: var(--surface-2); color: var(--dim); font-size: 12.5px; line-height: 1.55; }
+.ops-ai-coverage.is-partial { border-left-color: var(--warn); background: var(--warn-soft); color: var(--text); }
+.ops-ai-results { margin-top: 8px; border: 1px solid var(--rule-soft); border-radius: 10px; padding: 7px 10px; }
+.ops-ai-results > summary { cursor: pointer; color: var(--brand); font-size: 13px; font-weight: 600; }
+.ops-ai-results .ops-table-wrap { margin-top: 8px; max-height: 420px; overflow: auto; }
+.ops-ai-results .ops-row-actions { margin-top: 6px; }
 .ops-ai-evidence-list { margin-top: 14px; display: grid; gap: 7px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .ops-ai-evidence-list h4 { grid-column: 1 / -1; margin: 0; font: 650 13px/1.4 var(--fb); color: var(--dim); }
 .ops-assistant .ops-evidence {

@@ -33,6 +33,7 @@ _enrichment_cache_lock = Lock()
 
 _SQL = """
 SELECT * FROM (
+ SELECT q.*, ROWNUM AS row_number_ FROM (
   SELECT
     w.wonum,
     w.status,
@@ -119,8 +120,10 @@ SELECT * FROM (
     {attraction_filter}
     {classification_filter}
   ORDER BY maximo.wdw_utctosite(w.reportdate, w.siteid) DESC, w.wonum
+ ) q WHERE ROWNUM <= TO_NUMBER(:row_end)
 )
-WHERE ROWNUM <= :result_limit
+WHERE row_number_ > TO_NUMBER(:row_offset)
+ORDER BY row_number_
 """
 
 
@@ -240,7 +243,7 @@ def _parse_date(value: Any, name: str) -> date:
         raise DowntimeSearchError(f"{name} 必须是 YYYY-MM-DD 日期。") from exc
 
 
-def _validated_request(payload: dict[str, Any]) -> dict[str, Any]:
+def _validated_request(payload: dict[str, Any], max_results: int = MAX_RESULTS) -> dict[str, Any]:
     start = _parse_date(payload.get("start_date"), "开始日期")
     end_inclusive = _parse_date(payload.get("end_date"), "结束日期")
     end = end_inclusive + timedelta(days=1)
@@ -267,10 +270,13 @@ def _validated_request(payload: dict[str, Any]) -> dict[str, Any]:
 
     try:
         limit = int(payload.get("limit", 200))
+        offset = int(payload.get("offset", 0))
     except (TypeError, ValueError) as exc:
         raise DowntimeSearchError("结果数量格式无效。") from exc
-    if not 1 <= limit <= MAX_RESULTS:
-        raise DowntimeSearchError(f"结果数量必须在 1 到 {MAX_RESULTS} 之间。")
+    if not 1 <= limit <= max_results:
+        raise DowntimeSearchError(f"结果数量必须在 1 到 {max_results} 之间。")
+    if not 0 <= offset <= 1_000_000:
+        raise DowntimeSearchError("记录偏移须在 0 到 1000000 之间。")
 
     return {
         "start_date": start,
@@ -280,6 +286,7 @@ def _validated_request(payload: dict[str, Any]) -> dict[str, Any]:
         "classification": classification,
         "include_104": payload.get("include_104") is True,
         "limit": limit,
+        "offset": offset,
     }
 
 
@@ -552,10 +559,10 @@ def _enrich_downtime_rows(
     return None
 
 
-def search_downtime(payload: dict[str, Any]) -> dict[str, Any]:
+def search_downtime(payload: dict[str, Any], *, max_results: int = MAX_RESULTS) -> dict[str, Any]:
     """Execute the fixed downtime query with validated bind variables only."""
     started = monotonic()
-    query = _validated_request(payload)
+    query = _validated_request(payload, max_results)
     code_binds = ", ".join(f":code_{index}" for index in range(len(query["codes"])))
     include_104 = (
         "OR (w.worktype = 'PRJ' AND w.cust_downtimecode = '104')"
@@ -595,7 +602,8 @@ def search_downtime(payload: dict[str, Any]) -> dict[str, Any]:
         "orgid": "WDPR",
         "start_date": query["start_date"].isoformat(),
         "end_date": query["end_date"].isoformat(),
-        "result_limit": query["limit"],
+        "row_offset": query["offset"],
+        "row_end": query["offset"] + query["limit"],
     }
     binds.update({f"code_{index}": code for index, code in enumerate(query["codes"])})
     if query["location"]:
@@ -608,6 +616,7 @@ def search_downtime(payload: dict[str, Any]) -> dict[str, Any]:
     rows = [dict(zip(columns, row)) for row in raw_rows]
 
     for row in rows:
+        row.pop("row_number_", None)
         attraction = attraction_for_location(row.get("location"))
         row["attraction_code"] = attraction["location"] if attraction else ""
         row["attraction_name_zh"] = attraction["name_zh"] if attraction else ""
@@ -630,6 +639,7 @@ def search_downtime(payload: dict[str, Any]) -> dict[str, Any]:
         "source": "Maximo reportdate / assetstatus; business rule review pending",
         "items": rows,
         "count": len(rows),
+        "offset": query["offset"],
         "truncated": len(rows) == query["limit"],
         "warning": enrichment_warning,
         "filters": {
@@ -640,6 +650,7 @@ def search_downtime(payload: dict[str, Any]) -> dict[str, Any]:
             "classification": query["classification"],
             "include_104": query["include_104"],
             "limit": query["limit"],
+            "offset": query["offset"],
         },
     }
 

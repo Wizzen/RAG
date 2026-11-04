@@ -25,6 +25,7 @@ MAX_JP_RESULTS = 200
 DEFAULT_JP_RESULTS = 100
 MAX_JP_WO_RESULTS = 100
 DEFAULT_JP_WO_RESULTS = 50
+MAX_OFFSET = 1_000_000
 MAX_KEYWORD_LEN = 40
 MAX_CODE_LEN = 30
 MIN_WILDCARD_LITERALS = 2
@@ -129,8 +130,26 @@ def _local(column: str, alias: str, site_alias: str = "w") -> str:
     return f"TO_CHAR(maximo.wdw_utctosite({column}, {site_alias}.siteid), 'YYYY-MM-DD HH24:MI:SS') AS {alias}"
 
 
-_SQL_WO_SEARCH = """
+_WO_SEARCH_WHERE = """w.woclass = 'WORKORDER'
+     AND w.istask = 0
+     AND w.historyflag = 0
+     AND w.siteid = :siteid
+     AND w.orgid = :orgid
+     AND maximo.wdw_utctosite(w.reportdate, w.siteid) >= TO_DATE(:start_date, 'YYYY-MM-DD')
+     AND maximo.wdw_utctosite(w.reportdate, w.siteid) < TO_DATE(:end_date, 'YYYY-MM-DD')
+     {filters}"""
+
+# Classic ROWNUM paging keeps the proven ordered inline view and adds an offset.
+_PAGE = """
 SELECT * FROM (
+  SELECT q.*, ROWNUM AS row_number_ FROM (
+{inner}
+  ) q WHERE ROWNUM <= TO_NUMBER(:row_end)
+) WHERE row_number_ > TO_NUMBER(:row_offset)
+ORDER BY row_number_
+"""
+
+_SQL_WO_SEARCH = _PAGE.replace("{inner}", """
   SELECT w.wonum,
          w.workorderid,
          w.status,
@@ -147,16 +166,25 @@ SELECT * FROM (
          {actstart_local},
          {actfinish_local}
     FROM maximo.workorder w
-   WHERE w.woclass = 'WORKORDER'
-     AND w.istask = 0
-     AND w.historyflag = 0
-     AND w.siteid = :siteid
-     AND w.orgid = :orgid
-     AND maximo.wdw_utctosite(w.reportdate, w.siteid) >= TO_DATE(:start_date, 'YYYY-MM-DD')
-     AND maximo.wdw_utctosite(w.reportdate, w.siteid) < TO_DATE(:end_date, 'YYYY-MM-DD')
-     {filters}
-   ORDER BY w.reportdate DESC, w.workorderid DESC
-) WHERE ROWNUM <= :result_limit
+   WHERE """ + _WO_SEARCH_WHERE + """
+   ORDER BY w.reportdate DESC, w.workorderid DESC""")
+
+# One statement returns the exact total and full-match breakdowns (GROUPING SETS () = total).
+SQL_WO_SUMMARY = """
+WITH filtered AS (
+  SELECT w.status, w.worktype, w.persongroup, w.location,
+         TO_CHAR(maximo.wdw_utctosite(w.reportdate, w.siteid), 'YYYY-MM-DD') AS report_day
+    FROM maximo.workorder w
+   WHERE """ + _WO_SEARCH_WHERE + """
+)
+SELECT CASE WHEN GROUPING(status) = 0 THEN 'status'
+            WHEN GROUPING(worktype) = 0 THEN 'worktype'
+            WHEN GROUPING(persongroup) = 0 THEN 'persongroup'
+            WHEN GROUPING(location) = 0 THEN 'location'
+            WHEN GROUPING(report_day) = 0 THEN 'report_day' ELSE 'total' END AS group_kind,
+       status, worktype, persongroup, location, report_day, COUNT(*) AS row_count
+  FROM filtered
+ GROUP BY GROUPING SETS ((), (status), (worktype), (persongroup), (location), (report_day))
 """
 
 _SQL_WO_DETAIL = """
@@ -251,11 +279,20 @@ _JP_PICK_REVISION = """
    ) WHERE ROWNUM = 1)
 """
 
-_SQL_JP_SEARCH = """
-SELECT * FROM (
+_JP_RANKED = """
+      SELECT {columns},
+             ROW_NUMBER() OVER (
+               PARTITION BY jp.jpnum
+               ORDER BY CASE WHEN jp.status = 'ACTIVE' THEN 0 ELSE 1 END, jp.pluscrevnum DESC, jp.jobplanid DESC
+             ) AS rev_rank
+        FROM maximo.jobplan jp
+       WHERE jp.siteid = :siteid
+         AND jp.orgid = :orgid
+         {filters}"""
+
+_SQL_JP_SEARCH = _PAGE.replace("{inner}", """
   SELECT ranked.*
-    FROM (
-      SELECT jp.jpnum,
+    FROM (""" + _JP_RANKED.replace("{columns}", """jp.jpnum,
              jp.jobplanid,
              jp.status,
              jp.pluscrevnum,
@@ -267,19 +304,20 @@ SELECT * FROM (
              jp.cust_jptype,
              jp.cust_attraction,
              jp.cust_wrenchtime,
-             TO_CHAR(jp.pluscchangedate, 'YYYY-MM-DD HH24:MI') AS changedate_utc,
-             ROW_NUMBER() OVER (
-               PARTITION BY jp.jpnum
-               ORDER BY CASE WHEN jp.status = 'ACTIVE' THEN 0 ELSE 1 END, jp.pluscrevnum DESC, jp.jobplanid DESC
-             ) AS rev_rank
-        FROM maximo.jobplan jp
-       WHERE jp.siteid = :siteid
-         AND jp.orgid = :orgid
-         {filters}
+             TO_CHAR(jp.pluscchangedate, 'YYYY-MM-DD HH24:MI') AS changedate_utc""") + """
     ) ranked
    WHERE ranked.rev_rank = 1
-   ORDER BY ranked.jpnum
-) WHERE ROWNUM <= :result_limit
+   ORDER BY ranked.jpnum""")
+
+SQL_JP_SUMMARY = """
+SELECT CASE WHEN GROUPING(status) = 0 THEN 'status'
+            WHEN GROUPING(cust_craft) = 0 THEN 'craft'
+            WHEN GROUPING(cust_jpfreq) = 0 THEN 'frequency' ELSE 'total' END AS group_kind,
+       status, cust_craft, cust_jpfreq, COUNT(*) AS row_count
+  FROM (""" + _JP_RANKED.replace("{columns}", "jp.jpnum, jp.status, jp.cust_craft, jp.cust_jpfreq") + """
+  ) ranked
+ WHERE ranked.rev_rank = 1
+ GROUP BY GROUPING SETS ((), (status), (cust_craft), (cust_jpfreq))
 """
 
 _SQL_JP_HEADER = """
@@ -333,6 +371,24 @@ SELECT j.jptask,
  ORDER BY j.jptask
 """
 
+_JP_WO_WHERE = """w.jpnum = :jpnum
+     AND w.siteid = :siteid
+     AND w.orgid = :orgid
+     AND w.woclass = 'WORKORDER'
+     AND w.istask = 0
+     AND w.historyflag = 0
+     AND w.status <> 'CAN'
+     AND maximo.wdw_utctosite(w.reportdate, w.siteid) >= TO_DATE(:start_date, 'YYYY-MM-DD')
+     AND maximo.wdw_utctosite(w.reportdate, w.siteid) < TO_DATE(:end_date, 'YYYY-MM-DD')"""
+
+SQL_JP_WO_SUMMARY = """
+SELECT CASE WHEN GROUPING(w.status) = 0 THEN 'status' ELSE 'total' END AS group_kind,
+       w.status, COUNT(*) AS row_count
+  FROM maximo.workorder w
+ WHERE """ + _JP_WO_WHERE + """
+ GROUP BY GROUPING SETS ((), (w.status))
+"""
+
 _SQL_JP_WORKORDERS = """
 SELECT * FROM (
   SELECT w.wonum,
@@ -345,15 +401,7 @@ SELECT * FROM (
          {report_local},
          {actfinish_local}
     FROM maximo.workorder w
-   WHERE w.jpnum = :jpnum
-     AND w.siteid = :siteid
-     AND w.orgid = :orgid
-     AND w.woclass = 'WORKORDER'
-     AND w.istask = 0
-     AND w.historyflag = 0
-     AND w.status <> 'CAN'
-     AND maximo.wdw_utctosite(w.reportdate, w.siteid) >= TO_DATE(:start_date, 'YYYY-MM-DD')
-     AND maximo.wdw_utctosite(w.reportdate, w.siteid) < TO_DATE(:end_date, 'YYYY-MM-DD')
+   WHERE """ + _JP_WO_WHERE + """
    ORDER BY w.reportdate DESC, w.workorderid DESC
 ) WHERE ROWNUM <= :wo_limit
 """
@@ -462,9 +510,50 @@ def _rows(columns: list[str], raw_rows: list[tuple]) -> list[dict[str, Any]]:
     return [dict(zip(columns, row)) for row in raw_rows]
 
 
+_BIND = re.compile(r"(?<![A-Za-z0-9_]):([A-Za-z][A-Za-z0-9_]*)")
+
+
 def _query(sql: str, binds: dict[str, Any]) -> list[dict[str, Any]]:
-    columns, raw_rows = _execute(sql, binds)
+    # The page and summary statements share one bind dict; drivers reject unused names.
+    used = set(_BIND.findall(sql))
+    columns, raw_rows = _execute(sql, {key: value for key, value in binds.items() if key in used})
     return _rows(columns, raw_rows)
+
+
+def _grouped(rows: list[dict[str, Any]], columns: dict[str, str]) -> tuple[int, dict[str, dict[str, int]]]:
+    """Read GROUPING SETS rows into the exact total and per-dimension counts, largest first."""
+    total = 0
+    groups: dict[str, dict[str, int]] = {kind: {} for kind in columns}
+    for row in rows:
+        count = int(float(row.get("row_count") or 0))
+        kind = row.get("group_kind")
+        if kind == "total":
+            total = count
+        elif kind in columns:
+            label = str(row.get(columns[kind]) or "—")
+            groups[kind][label] = groups[kind].get(label, 0) + count
+    return total, {kind: dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+                   for kind, counts in groups.items()}
+
+
+def _by_attraction(locations: dict[str, int]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for location, count in locations.items():
+        attraction = attraction_for_location(None if location == "—" else location)
+        label = attraction["name_zh"] if attraction else "未映射景点"
+        counts[label] = counts.get(label, 0) + count
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _page_meta(total: int, offset: int, limit: int, returned: int) -> dict[str, Any]:
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "count": returned,
+        "has_more": offset + returned < total,
+        "truncated": total > returned,
+    }
 
 
 def _parallel(jobs: dict[str, Callable[[], Any]]) -> dict[str, Any]:
@@ -627,14 +716,6 @@ def _annotate_attraction(rows: list[dict[str, Any]]) -> None:
         row["attraction_name_en"] = attraction["name_en"] if attraction else ""
 
 
-def _count_by(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for row in rows:
-        label = str(row.get(key) or "—")
-        counts[label] = counts.get(label, 0) + 1
-    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
-
-
 # ---------------------------------------------------------------- config
 
 
@@ -683,7 +764,7 @@ def module_config() -> dict[str, Any]:
 # ---------------------------------------------------------------- work orders
 
 
-def _validated_wo_search(payload: dict[str, Any]) -> dict[str, Any]:
+def _validated_wo_search(payload: dict[str, Any], max_limit: int = MAX_WO_RESULTS) -> dict[str, Any]:
     start, end, end_inclusive = _date_window(payload, 30)
     location = str(payload.get("location") or "").strip().upper()
     if location and location not in {item["location"] for item in ATTRACTIONS}:
@@ -712,19 +793,21 @@ def _validated_wo_search(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "has_jobplan": payload.get("has_jobplan") is True,
         "include_cancelled": payload.get("include_cancelled") is True,
-        "limit": _int_in_range(payload.get("limit"), DEFAULT_WO_RESULTS, 1, MAX_WO_RESULTS, "结果数量"),
+        "limit": _int_in_range(payload.get("limit"), DEFAULT_WO_RESULTS, 1, max_limit, "结果数量"),
+        "offset": _int_in_range(payload.get("offset"), 0, 0, MAX_OFFSET, "记录偏移"),
     }
 
 
-def search_workorders(payload: dict[str, Any]) -> dict[str, Any]:
+def search_workorders(payload: dict[str, Any], *, max_limit: int = MAX_WO_RESULTS) -> dict[str, Any]:
     started = monotonic()
-    query = _validated_wo_search(payload)
+    query = _validated_wo_search(payload, max_limit)
     binds: dict[str, Any] = {
         "siteid": SITEID,
         "orgid": ORGID,
         "start_date": query["start_date"].isoformat(),
         "end_date": query["end_date"].isoformat(),
-        "result_limit": query["limit"],
+        "row_offset": query["offset"],
+        "row_end": query["offset"] + query["limit"],
     }
     filters: list[str] = []
     if query["keyword"]:
@@ -760,9 +843,19 @@ def search_workorders(payload: dict[str, Any]) -> dict[str, Any]:
     if not query["include_cancelled"] and "CAN" not in query["statuses"]:
         filters.append("AND w.status <> 'CAN'")
 
-    sql = SQL_WO_SEARCH.replace("{filters}", "\n     ".join(item for item in filters if item))
-    rows = _query(sql, binds)
+    where = "\n     ".join(item for item in filters if item)
+    results = _parallel({
+        "page": lambda: _query(SQL_WO_SEARCH.replace("{filters}", where), binds),
+        "summary": lambda: _query(SQL_WO_SUMMARY.replace("{filters}", where), binds),
+    })
+    rows = results["page"]
+    for row in rows:
+        row.pop("row_number_", None)
     _annotate_attraction(rows)
+    total, groups = _grouped(results["summary"], {
+        "status": "status", "worktype": "worktype", "persongroup": "persongroup",
+        "location": "location", "report_day": "report_day",
+    })
     return {
         "mode": "workorders",
         "query_id": uuid4().hex,
@@ -770,17 +863,19 @@ def search_workorders(payload: dict[str, Any]) -> dict[str, Any]:
         "elapsed_seconds": round(monotonic() - started, 3),
         "timezone": TIMEZONE,
         "items": rows,
-        "count": len(rows),
-        "truncated": len(rows) >= query["limit"],
+        **_page_meta(total, query["offset"], query["limit"], len(rows)),
         "facets": {
-            "status": _count_by(rows, "status"),
-            "worktype": _count_by(rows, "worktype"),
-            "attraction": _count_by(rows, "attraction_name_zh"),
+            "status": groups["status"],
+            "worktype": groups["worktype"],
+            "persongroup": groups["persongroup"],
+            "attraction": _by_attraction(groups["location"]),
+            "report_day": dict(sorted(groups["report_day"].items())),
         },
+        "facets_complete": True,
         "filters": {
             **{key: query[key] for key in (
                 "keyword", "wonum", "jpnum", "assetnum", "pmnum", "location", "worktypes",
-                "statuses", "priorities", "persongroups", "has_jobplan", "include_cancelled", "limit",
+                "statuses", "priorities", "persongroups", "has_jobplan", "include_cancelled", "limit", "offset",
             )},
             "start_date": query["start_date"].isoformat(),
             "end_date": query["end_inclusive"].isoformat(),
@@ -820,7 +915,7 @@ def workorder_detail(payload: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------- job plans
 
 
-def _validated_jp_search(payload: dict[str, Any]) -> dict[str, Any]:
+def _validated_jp_search(payload: dict[str, Any], max_limit: int = MAX_JP_RESULTS) -> dict[str, Any]:
     query = {
         "jpnum": validate_code(payload.get("jpnum"), "Job Plan 编号"),
         "keyword": _validate_keyword(payload.get("keyword")),
@@ -832,7 +927,8 @@ def _validated_jp_search(payload: dict[str, Any]) -> dict[str, Any]:
             payload.get("types"), {item["value"] for item in JP_TYPE_OPTIONS}, "计划类型"
         ),
         "attractions": _validate_choices(payload.get("attractions"), set(JP_ATTRACTION_OPTIONS), "景点代码"),
-        "limit": _int_in_range(payload.get("limit"), DEFAULT_JP_RESULTS, 1, MAX_JP_RESULTS, "结果数量"),
+        "limit": _int_in_range(payload.get("limit"), DEFAULT_JP_RESULTS, 1, max_limit, "结果数量"),
+        "offset": _int_in_range(payload.get("offset"), 0, 0, MAX_OFFSET, "记录偏移"),
     }
     if not query["jpnum"] and not query["keyword"] and not any(
         query[key] for key in ("compliance", "crafts", "frequencies", "types", "attractions")
@@ -841,10 +937,11 @@ def _validated_jp_search(payload: dict[str, Any]) -> dict[str, Any]:
     return query
 
 
-def search_jobplans(payload: dict[str, Any]) -> dict[str, Any]:
+def search_jobplans(payload: dict[str, Any], *, max_limit: int = MAX_JP_RESULTS) -> dict[str, Any]:
     started = monotonic()
-    query = _validated_jp_search(payload)
-    binds: dict[str, Any] = {"siteid": SITEID, "orgid": ORGID, "result_limit": query["limit"]}
+    query = _validated_jp_search(payload, max_limit)
+    binds: dict[str, Any] = {"siteid": SITEID, "orgid": ORGID, "row_offset": query["offset"],
+                             "row_end": query["offset"] + query["limit"]}
     filters: list[str] = []
     if query["jpnum"]:
         filters.append(_code_filter("jp.jpnum", query["jpnum"], "jpnum", binds))
@@ -865,10 +962,17 @@ def search_jobplans(payload: dict[str, Any]) -> dict[str, Any]:
     filters.append(_in_filter("jp.cust_jptype", query["types"], "ty", binds))
     filters.append(_in_filter("jp.cust_attraction", query["attractions"], "at", binds))
 
-    sql = _SQL_JP_SEARCH_BASE.replace("{filters}", "\n         ".join(item for item in filters if item))
-    rows = _query(sql, binds)
+    where = "\n         ".join(item for item in filters if item)
+    results = _parallel({
+        "page": lambda: _query(_SQL_JP_SEARCH_BASE.replace("{filters}", where), binds),
+        "summary": lambda: _query(SQL_JP_SUMMARY.replace("{filters}", where), binds),
+    })
+    rows = results["page"]
     for row in rows:
         row.pop("rev_rank", None)
+        row.pop("row_number_", None)
+    total, groups = _grouped(results["summary"], {"status": "status", "craft": "cust_craft",
+                                                  "frequency": "cust_jpfreq"})
     return {
         "mode": "jobplans",
         "query_id": uuid4().hex,
@@ -876,13 +980,9 @@ def search_jobplans(payload: dict[str, Any]) -> dict[str, Any]:
         "elapsed_seconds": round(monotonic() - started, 3),
         "timezone": TIMEZONE,
         "items": rows,
-        "count": len(rows),
-        "truncated": len(rows) >= query["limit"],
-        "facets": {
-            "status": _count_by(rows, "status"),
-            "craft": _count_by(rows, "cust_craft"),
-            "frequency": _count_by(rows, "cust_jpfreq"),
-        },
+        **_page_meta(total, query["offset"], query["limit"], len(rows)),
+        "facets": groups,
+        "facets_complete": True,
         "filters": query,
     }
 
@@ -905,6 +1005,7 @@ def jobplan_detail(payload: dict[str, Any]) -> dict[str, Any]:
         wo_binds = {**binds, "start_date": start.isoformat(), "end_date": end.isoformat(), "wo_limit": wo_limit}
         wo_filters = {"start_date": start.isoformat(), "end_date": end_inclusive.isoformat(), "limit": wo_limit}
         jobs["workorders"] = lambda: _query(SQL_JP_WORKORDERS, wo_binds)
+        jobs["wo_summary"] = lambda: _query(SQL_JP_WO_SUMMARY, wo_binds)
     results = _parallel(jobs)
     if not results["header"]:
         raise DowntimeSearchError(f"未找到 Job Plan：{jpnum}（{SITEID} / {ORGID}）。")
@@ -914,6 +1015,7 @@ def jobplan_detail(payload: dict[str, Any]) -> dict[str, Any]:
     _normalize_long(tasks)
     workorders = results.get("workorders", [])
     _annotate_attraction(workorders)
+    wo_total, wo_groups = _grouped(results.get("wo_summary", []), {"status": "status"})
     return {
         "mode": "jobplan_detail",
         "query_id": uuid4().hex,
@@ -927,8 +1029,9 @@ def jobplan_detail(payload: dict[str, Any]) -> dict[str, Any]:
             "included": include_wos,
             "items": workorders,
             "count": len(workorders),
-            "truncated": include_wos and len(workorders) >= wo_filters.get("limit", 0),
-            "status_summary": _count_by(workorders, "status"),
+            "total": wo_total if include_wos else 0,
+            "truncated": include_wos and wo_total > len(workorders),
+            "status_summary": wo_groups["status"],
             "filters": wo_filters,
         },
     }

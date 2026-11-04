@@ -35,7 +35,12 @@ def _text(value, label):
     return value.strip()
 
 
-def validate(payload, history=False, max_days=MAX_DAYS):
+DRILL_COLUMNS = dict(day='report_day', attraction='attraction_code', reason='reason_code', code='downtime_code',
+                     asset='assetnum')
+TOP_ASSETS = 15
+
+
+def validate(payload, history=False, max_days=MAX_DAYS, max_page_size=100):
     try:
         first = date.fromisoformat(str(payload.get('start_date', '')))
         last = date.fromisoformat(str(payload.get('end_date', '')))
@@ -67,7 +72,7 @@ def validate(payload, history=False, max_days=MAX_DAYS):
         if name in payload and not isinstance(payload[name], bool):
             raise db.DowntimeSearchError('历史工单及 104 开关必须为布尔值。')
     drill = payload.get('drill') or {}
-    if not isinstance(drill, dict) or drill.get('kind', '') not in ('', 'day', 'attraction', 'reason', 'code'):
+    if not isinstance(drill, dict) or drill.get('kind', '') not in ('', *DRILL_COLUMNS):
         raise db.DowntimeSearchError('图表筛选无效。')
     kind = drill.get('kind', '')
     key = _text(drill.get('key'), '图表筛选值')
@@ -87,7 +92,7 @@ def validate(payload, history=False, max_days=MAX_DAYS):
                 equipment_location=equipment_location, maintenance=maintenance,
                 include_history=payload.get('include_history', True), include_104=payload.get('include_104', False),
                 page=_integer(payload.get('page', 1), '页码', 1, 1_000_000),
-                page_size=_integer(payload.get('page_size', 25), '每页数量', 1, 100),
+                page_size=_integer(payload.get('page_size', 25), '每页数量', 1, max_page_size),
                 drill=dict(kind=kind, key=key))
 
 
@@ -166,9 +171,9 @@ def _drill_where(query, binds):
     kind, key = query['drill']['kind'], query['drill']['key']
     if not kind:
         return '1 = 1'
-    column = dict(day='report_day', attraction='attraction_code', reason='reason_code', code='downtime_code')[kind]
+    column = DRILL_COLUMNS[kind]
     if key == '__UNKNOWN__':
-        return f'{column} IS NULL' if kind == 'reason' else f"{column} = '__UNKNOWN__'"
+        return f'{column} IS NULL' if kind in ('reason', 'asset') else f"{column} = '__UNKNOWN__'"
     binds['drill_key'] = key
     return f'{column} = :drill_key'
 
@@ -203,13 +208,23 @@ NAMES = {a['location']: a['name_zh'] for a in ATTRACTIONS}
 
 def summarize(groups, query):
     """Turn (group_kind, key columns, metric) rows into the dashboard summary."""
-    summary = dict(totals=_metrics({}), daily=[], attractions=[], reasons=[], codes=[])
+    summary = dict(totals=_metrics({}), daily=[], attractions=[], reasons=[], codes=[], assets=[], heatmap=[])
     names = NAMES
     for row in groups:
         metrics = _metrics(row)
         kind = row['group_kind']
         if kind == 'total':
             summary['totals'] = metrics
+            continue
+        if kind == 'day_attraction':
+            code = str(row.get('attraction_code') or '__UNKNOWN__')
+            summary['heatmap'].append(dict(day=str(row.get('report_day')), key=code,
+                                           label=names.get(code, '未映射景点'), **metrics))
+            continue
+        if kind == 'asset':
+            key = str(row.get('assetnum') or '__UNKNOWN__')
+            summary['assets'].append(dict(key=key, label='未关联资产' if key == '__UNKNOWN__' else key,
+                                          location=row.get('sample_location'), **metrics))
             continue
         column, target = dict(day=('report_day', 'daily'), attraction=('attraction_code', 'attractions'),
                               reason=('reason_code', 'reasons'), code=('downtime_code', 'codes'))[kind]
@@ -227,7 +242,17 @@ def summarize(groups, query):
         day += timedelta(days=1)
     for target in ('attractions', 'reasons', 'codes'):
         summary[target].sort(key=lambda r: (-r['event_count'], r['key']))
+    summary['asset_count'] = len(summary['assets'])
+    summary['assets'] = sorted(summary['assets'], key=lambda r: (-r['minutes'], -r['event_count'], r['key']))[:TOP_ASSETS]
+    summary['heatmap'].sort(key=lambda r: (r['day'], r['key']))
     return summary
+
+
+def previous_window(query):
+    """The equal-length window immediately before the query, for period-over-period cards."""
+    first, last = date.fromisoformat(query['start_date']), date.fromisoformat(query['end_date'])
+    days = (last - first).days + 1
+    return (first - timedelta(days=days)).isoformat(), (first - timedelta(days=1)).isoformat()
 
 
 def finish_items(items):
@@ -249,27 +274,58 @@ def result(query, summary, items, started, history, source):
                 has_more=query['page'] * query['page_size'] < total, complete_aggregation=True, source=source)
 
 
-def search(payload, history=False):
-    started = monotonic()
-    query = validate(payload, history)
-    cte, binds = _base(query)
-    summary_sql = cte + '''SELECT
-      CASE WHEN GROUPING(report_day) = 0 THEN 'day'
+_SUMMARY_SQL = '''SELECT
+      CASE WHEN GROUPING(report_day) = 0 AND GROUPING(attraction_code) = 0 THEN 'day_attraction'
+           WHEN GROUPING(report_day) = 0 THEN 'day'
            WHEN GROUPING(attraction_code) = 0 THEN 'attraction'
            WHEN GROUPING(reason_code) = 0 THEN 'reason'
-           WHEN GROUPING(downtime_code) = 0 THEN 'code' ELSE 'total' END AS group_kind,
-      report_day, attraction_code, reason_code, downtime_code,
+           WHEN GROUPING(downtime_code) = 0 THEN 'code'
+           WHEN GROUPING(assetnum) = 0 THEN 'asset' ELSE 'total' END AS group_kind,
+      report_day, attraction_code, reason_code, downtime_code, assetnum,
       COUNT(*) AS event_count, COUNT(downtime_minutes) AS duration_count,
       SUM(downtime_minutes) AS minutes, SUM(ongoing) AS ongoing_count,
-      MAX(reason_description) AS reason_description
-      FROM scoped GROUP BY GROUPING SETS ((), (report_day), (attraction_code), (reason_code), (downtime_code))'''
-    summary = summarize(_rows(summary_sql, binds), query)
+      MAX(reason_description) AS reason_description, MAX(location) AS sample_location
+      FROM scoped GROUP BY GROUPING SETS ((), (report_day), (attraction_code), (reason_code), (downtime_code),
+                                          (assetnum), (report_day, attraction_code))'''
+_TOTAL_SQL = '''SELECT 'total' AS group_kind, COUNT(*) AS event_count, COUNT(downtime_minutes) AS duration_count,
+      SUM(downtime_minutes) AS minutes, SUM(ongoing) AS ongoing_count FROM scoped'''
+
+
+def summary_only(payload, history=False):
+    """Full-match aggregates without a record page (pairs with the fixed live event query)."""
+    query = validate(payload, history)
+    cte, binds = _base(query)
+    return summarize(_rows(cte + _SUMMARY_SQL, binds), query)
+
+
+def previous_totals(query):
+    start, end = previous_window(query)
+    earlier = dict(query, start_date=start, end_date=end,
+                   end_exclusive=(date.fromisoformat(end) + timedelta(days=1)).isoformat(), drill=dict(kind='', key=''))
+    cte, binds = _base(earlier)
+    rows = _rows(cte + _TOTAL_SQL, binds)
+    return dict(start_date=start, end_date=end, totals=_metrics(rows[0] if rows else {}))
+
+
+def search(payload, history=False, *, max_page_size=100, compare=True):
+    started = monotonic()
+    query = validate(payload, history, max_page_size=max_page_size)
+    cte, binds = _base(query)
+    summary = summarize(_rows(cte + _SUMMARY_SQL, binds), query)
+    comparison = None
+    if compare and not history and not query['drill']['kind']:
+        try:
+            comparison = previous_totals(query)
+        except db.DowntimeSearchError:
+            comparison = None
     binds.update(start_row=(query['page'] - 1) * query['page_size'], end_row=query['page'] * query['page_size'])
     page_sql = cte + '''SELECT * FROM (
       SELECT scoped.*, ROW_NUMBER() OVER (ORDER BY report_local DESC, workorderid DESC) AS row_number_ FROM scoped
       ) WHERE row_number_ > TO_NUMBER(:start_row) AND row_number_ <= TO_NUMBER(:end_row) ORDER BY row_number_'''
     items = finish_items(_rows(page_sql, binds))
-    return result(query, summary, items, started, history, 'Maximo · SDLR / WDPR · read only')
+    data = result(query, summary, items, started, history, 'Maximo · SDLR / WDPR · read only')
+    data['comparison'] = comparison
+    return data
 
 
 def detail(payload):

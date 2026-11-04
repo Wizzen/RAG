@@ -4,6 +4,7 @@
 {% block extra_head %}
 <link rel="stylesheet" href="{% static 'operations_workbench/workbench.css' %}?v={{ asset_version }}">
 <link rel="stylesheet" href="{% static 'operations_workbench/assistant.css' %}?v={{ asset_version }}">
+<link rel="stylesheet" href="{% static 'operations_workbench/detail.css' %}?v={{ asset_version }}">
 {% endblock %}
 {% block content %}
 <section class="ops-workbench" id="ops-workbench" aria-labelledby="ops-title" data-account="{{ request.user.pk }}">
@@ -16,6 +17,10 @@
       <symbol id="ops-i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4.7 4.7"/></symbol>
       <symbol id="ops-i-export" viewBox="0 0 24 24"><path d="M12 3.5v11m-4-4 4 4 4-4M4.5 15v3.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V15"/></symbol>
       <symbol id="ops-i-filter" viewBox="0 0 24 24"><path d="M3 7h4m4 0h10M3 17h10m4 0h4"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></symbol>
+      <symbol id="ops-i-alert" viewBox="0 0 24 24"><path d="M10.3 4.2 2.8 17.5a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0ZM12 9.5v4.5m0 3.2v.1"/></symbol>
+      <symbol id="ops-i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+      <symbol id="ops-i-gauge" viewBox="0 0 24 24"><path d="M4.2 17.5a8.5 8.5 0 1 1 15.6 0M12 13.5l3.5-4"/><circle cx="12" cy="14" r="1.3"/></symbol>
+      <symbol id="ops-i-pulse" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M5.6 5.6a9 9 0 0 0 0 12.8m12.8 0a9 9 0 0 0 0-12.8"/></symbol>
       <symbol id="ops-i-records" viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="17" rx="3"/><path d="M4 9h16m-12 4h3m-3 3.5h6"/></symbol>
     </defs>
   </svg>
@@ -71,7 +76,8 @@
     <section class="ops-panel ops-results" aria-labelledby="ops-results-title">
       <header class="ops-panel-head">
         <h2 id="ops-results-title">查询结果</h2>
-        <button type="button" id="ops-export" class="ops-tool" disabled><svg class="ops-icon" aria-hidden="true"><use href="#ops-i-export"/></svg>导出 CSV</button>
+        <button type="button" id="ops-export" class="ops-tool" disabled title="导出本批结果（应用当前过滤）"><svg class="ops-icon" aria-hidden="true"><use href="#ops-i-export"/></svg>导出本批</button>
+        <button type="button" id="ops-export-all" class="ops-tool" disabled title="从服务器读取全部匹配记录，单次最多 5000 条"><svg class="ops-icon" aria-hidden="true"><use href="#ops-i-export"/></svg>导出全部 CSV</button>
       </header>
       <p id="ops-query-status" class="ops-inline-status" role="status"></p>
       <div id="ops-summary"></div>

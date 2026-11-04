@@ -108,33 +108,59 @@ def _where(query, binds):
     return ' AND '.join(where)
 
 
-def search(payload, history=False, *, event_limit=None):
+KEYS = ['report_day', 'attraction_code', 'reason_code', 'downtime_code', 'assetnum']
+GROUPS = [('total', []), ('day', ['report_day']), ('attraction', ['attraction_code']),
+          ('reason', ['reason_code']), ('code', ['downtime_code']), ('asset', ['assetnum']),
+          ('day_attraction', ['report_day', 'attraction_code'])]
+
+
+def _summary_sql(groups=GROUPS):
+    selects = []
+    for kind, columns in groups:
+        fields = ', '.join(k if k in columns else f'NULL AS {k}' for k in KEYS)
+        selects.append(f'''SELECT '{kind}' AS group_kind, {fields}, COUNT(*) AS event_count,
+          COUNT(downtime_minutes) AS duration_count, SUM(downtime_minutes) AS minutes,
+          SUM(ongoing) AS ongoing_count, MAX(reason_description) AS reason_description,
+          MAX(location) AS sample_location
+          FROM scoped''' + (f" GROUP BY {', '.join(columns)}" if columns else ''))
+    return ' UNION ALL '.join(selects)
+
+
+def _scoped(query, binds):
+    return f'''WITH scoped AS (SELECT * FROM workorders WHERE {_where(query, binds)}
+      AND {live._drill_where(query, binds)}) '''
+
+
+def _previous(query, connection, info):
+    start, end = live.previous_window(query)
+    if start < info['first_day'] or any(start[:7] <= gap <= end[:7] for gap in info['gaps']):
+        return None
+    earlier = dict(query, start_date=start, end_date=end, drill=dict(kind='', key=''))
+    binds = {}
+    rows = [dict(row) for row in connection.execute(_scoped(earlier, binds) + _summary_sql(GROUPS[:1]), binds)]
+    return dict(start_date=start, end_date=end, totals=live._metrics(rows[0] if rows else {}))
+
+
+def search(payload, history=False, *, event_limit=None, event_offset=None):
     started = monotonic()
     query = live.validate(payload, history, MAX_DAYS)
     if event_limit is not None:
         query['page_size'] = event_limit
+    offset = event_offset if event_offset is not None else (query['page'] - 1) * query['page_size']
     binds = {}
-    cte = f'''WITH scoped AS (SELECT * FROM workorders WHERE {_where(query, binds)}
-      AND {live._drill_where(query, binds)}) '''
-    keys = ['report_day', 'attraction_code', 'reason_code', 'downtime_code']
-    selects = []
-    for kind, column in [('total', None), ('day', 'report_day'), ('attraction', 'attraction_code'),
-                         ('reason', 'reason_code'), ('code', 'downtime_code')]:
-        fields = ', '.join(k if k == column else f'NULL AS {k}' for k in keys)
-        selects.append(f'''SELECT '{kind}' AS group_kind, {fields}, COUNT(*) AS event_count,
-          COUNT(downtime_minutes) AS duration_count, SUM(downtime_minutes) AS minutes,
-          SUM(ongoing) AS ongoing_count, MAX(reason_description) AS reason_description
-          FROM scoped''' + (f' GROUP BY {column}' if column else ''))
+    cte = _scoped(query, binds)
     with closing(_connect()) as connection:
         info = _check_covered(query, connection)
-        groups = [dict(row) for row in connection.execute(cte + ' UNION ALL '.join(selects), binds)]
-        page = dict(binds, limit=query['page_size'], offset=(query['page'] - 1) * query['page_size'])
+        groups = [dict(row) for row in connection.execute(cte + _summary_sql(), binds)]
+        page = dict(binds, limit=query['page_size'], offset=offset)
         items = [dict(row) for row in connection.execute(
             cte + 'SELECT * FROM scoped ORDER BY report_local DESC, workorderid DESC LIMIT :limit OFFSET :offset', page)]
+        comparison = None if history or query['drill']['kind'] else _previous(query, connection, info)
     summary = live.summarize(groups, query)
     data_through = info['data_through']
     result = live.result(query, summary, live.finish_items(items), started, history,
                          f'服务器记录 · 数据截至 {data_through}')
+    result['comparison'] = comparison
     result['cache'] = dict(data_through=data_through, synced_at=info['synced_at'],
                            stale=query['end_date'] > data_through)
     if result['cache']['stale']:

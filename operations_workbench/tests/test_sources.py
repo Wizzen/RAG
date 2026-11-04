@@ -106,9 +106,16 @@ class SourceTests(SimpleTestCase):
             {"apexmssgtext": "正常", "_time": "2026-01-01"},
             {"_raw": 'attrname="Train" apexmssgtext="联锁"'},
         ]
-        with patch.object(
-            sources_splunk, "_request", return_value={"results": rows}
-        ) as http:
+
+        def reply(method, path, **kwargs):
+            search = kwargs["data"]["search"]
+            if "stats count by attrname" in search:
+                return {"results": [{"attrname": "Train", "count": "5"}, {"attrname": "—", "count": "1"}]}
+            if "| top " in search:
+                return {"results": [{"apexmssgmnemonic": "DOOR", "count": "4"}]}
+            return {"results": rows}
+
+        with patch.object(sources_splunk, "_request", side_effect=reply) as http:
             result = sources_splunk.search(
                 {
                     "start_time": "2026-01-01T09:30",
@@ -119,8 +126,10 @@ class SourceTests(SimpleTestCase):
                     "offset": 4,
                 }
             )
-        payload = http.call_args.kwargs["data"]
-        self.assertEqual(http.call_args.args, ("POST", "/services/search/jobs"))
+        calls = [call for call in http.call_args_list if "| fields " in call.kwargs["data"]["search"]]
+        self.assertEqual(len(calls), 1)
+        payload = calls[0].kwargs["data"]
+        self.assertEqual(calls[0].args, ("POST", "/services/search/jobs"))
         self.assertEqual(payload["exec_mode"], "oneshot")
         self.assertIn(
             'apexmssgtarget="MTR1" OR apexmssgtarget="MTR2"', payload["search"]
@@ -128,6 +137,10 @@ class SourceTests(SimpleTestCase):
         self.assertIn("where _ops_row>4", payload["search"])
         self.assertFalse(result["has_more"])
         self.assertEqual(result["items"][1]["apexmssgtext"], "联锁")
+        self.assertEqual(result["total"], 6)
+        self.assertEqual(result["facets"]["mnemonic"], {"DOOR": 4})
+        for call in http.call_args_list:
+            self.assertIn('apexmssgtext="*door*"', call.kwargs["data"]["search"])
 
     def test_downtime_log_window_scoped_to_its_attraction(self):
         with patch.object(

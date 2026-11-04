@@ -21,6 +21,13 @@ from .vendor import maximo_workbench as maximo
 from .vendor.downtime_catalog import ATTRACTIONS, CLASSIFICATIONS
 
 
+EXPORT_CAP = 5000
+EXPORTABLE = ("maximo.workorders", "maximo.jobplans", "splunk.search",
+              "downtime.search", "downtime.dashboard", "downtime.history")
+DRILL_KINDS = [{"value": kind, "label": label} for kind, label in (
+    ("day", "日期"), ("attraction", "景点"), ("reason", "分类"), ("code", "停机代码"), ("asset", "资产"))]
+
+
 class SourceError(Exception):
     def __init__(self, message, status=400):
         super().__init__(message)
@@ -96,6 +103,8 @@ def _actions(now, cache_day):
         classifications,
         codes,
         _field("include_104", "含 104 闭园后停机", "checkbox", default=False),
+        _field("drill_kind", "图表筛选", "select", options=DRILL_KINDS, hidden=True),
+        _field("drill_key", "图表筛选值", hidden=True),
     ]
     asset = _field("assetnum", "资产编号")
     equipment = _field("equipment_location", "精确设备位置")
@@ -134,6 +143,7 @@ def _actions(now, cache_day):
         _field("has_jobplan", "已关联作业计划", "checkbox"),
         _field("include_cancelled", "包含取消工单", "checkbox"),
         _field("limit", "结果上限", "number", min=1, max=500, default=50),
+        _field("offset", "记录偏移", "number", min=0, default=0),
     ]
     jp_fields = [
         jpnum,
@@ -155,6 +165,7 @@ def _actions(now, cache_day):
             options=maximo.JP_ATTRACTION_OPTIONS,
         ),
         _field("limit", "结果上限", "number", min=1, max=200, default=50),
+        _field("offset", "记录偏移", "number", min=0, default=0),
     ]
     return [
         _action("maximo.workorders", "工单检索", wo_fields),
@@ -214,6 +225,7 @@ def _actions(now, cache_day):
             [
                 *incident_filters,
                 _field("limit", "结果上限", "number", min=1, max=500, default=50),
+                _field("offset", "记录偏移", "number", min=0, default=0),
             ],
         ),
         _action("downtime.dashboard", "停机统计", insight_filters),
@@ -359,10 +371,23 @@ def _cache_detail(params):
     }
 
 
-def _downtime(action, params):
+def _events_result(result, offset, limit):
+    total = result["total"]
+    for key in ("page", "page_size"):
+        result.pop(key, None)
+    count = len(result["items"])
+    result.update(mode="events", count=count, offset=offset, limit=limit,
+                  has_more=offset + count < total, truncated=total > count)
+    return result
+
+
+def _downtime(action, params, export=False):
     local = params.pop("source", "cache") == "cache"
     if action == "downtime.detail":
         return _cache_detail(params) if local else insights.detail(params)
+    kind, key = params.pop("drill_kind", ""), params.pop("drill_key", "")
+    if kind or key:
+        params["drill"] = {"kind": kind, "key": key}
     if "end_date" not in params:
         last = cache.coverage().get("data_through") if local else None
         params["end_date"] = last or datetime.now(splunk.TZ).date().isoformat()
@@ -370,26 +395,48 @@ def _downtime(action, params):
         params["start_date"] = (
             date.fromisoformat(params["end_date"]) - timedelta(days=6)
         ).isoformat()
+    history = action == "downtime.history"
     if action == "downtime.search":
-        if not local:
-            return db.search_downtime(params)
-        limit = params.pop("limit", 50)
-        if not 1 <= limit <= 500:
+        limit, offset = params.pop("limit", 50), params.pop("offset", 0)
+        if export:
+            limit, offset = EXPORT_CAP, 0
+        elif not 1 <= limit <= 500:
             raise SourceError("结果上限须在 1–500 以内。")
-        result = cache.search(params, event_limit=limit)
-        for key in ("page", "page_size", "has_more"):
-            result.pop(key, None)
-        result.update(
-            mode="events", count=len(result["items"]), truncated=result["total"] > limit
-        )
-        return result
+        if local:
+            return _events_result(cache.search(params, event_limit=limit, event_offset=offset), offset, limit)
+        if params.get("drill"):
+            # The fixed live event query has no chart drill-down; the aggregate query does.
+            page = dict(params, page=offset // limit + 1, page_size=limit)
+            return _events_result(insights.search(page, max_page_size=max(limit, 100), compare=False), offset, limit)
+        result = db.search_downtime(dict(params, limit=limit, offset=offset),
+                                    max_results=EXPORT_CAP if export else db.MAX_RESULTS)
+        # Same scope as the fixed event query (it always excludes history records).
+        summary = insights.summary_only(dict(params, include_history=False))
+        result.update(summary=summary, total=summary["totals"]["event_count"], complete_aggregation=True)
+        return _events_result(result, offset, limit)
+    if export:
+        params.pop("page_size", None)
+        params["page"] = 1
+        if local:
+            return cache.search(params, history, event_limit=EXPORT_CAP, event_offset=0)
+        return insights.search(dict(params, page_size=EXPORT_CAP), history, max_page_size=EXPORT_CAP, compare=False)
     search = cache.search if local else insights.search
-    return search(params, history=action == "downtime.history")
+    return search(params, history=history)
 
 
-def _run_direct(action, params):
+def _export_values(action, values):
+    if action not in EXPORTABLE:
+        raise SourceError("此查询不支持导出。")
+    if action.startswith("maximo.") or action == "splunk.search":
+        return {**values, "limit": EXPORT_CAP, "offset": 0}
+    return values
+
+
+def _run_direct(action, params, export=False):
     try:
         values = _check_fields(action, params)
+        if export:
+            values = _export_values(action, values)
         if action.endswith(".probe"):
             if action == "splunk.probe":
                 result = splunk.probe()
@@ -406,7 +453,11 @@ def _run_direct(action, params):
         if action == "downtime.splunk":
             return splunk.linked_search(values)
         if action.startswith("downtime."):
-            return _downtime(action, values)
+            return _downtime(action, values, export)
+        if export:
+            caps = {"maximo.workorders": maximo.search_workorders, "maximo.jobplans": maximo.search_jobplans,
+                    "splunk.search": splunk.search}
+            return caps[action](values, max_limit=EXPORT_CAP)
         functions = {
             "maximo.workorders": maximo.search_workorders,
             "maximo.workorder": maximo.workorder_detail,
@@ -432,13 +483,15 @@ def _run_direct(action, params):
 _NETWORK_SLOTS = BoundedSemaphore(4)
 
 
-def run_action(action, params):
+def run_action(action, params, *, export=False):
     """Serve mirror pages locally. Run fixed live operations in a separate process.
 
     The RAG process restricts all socket connections. The isolated worker only
     accepts catalog operations and resolves endpoints from server configuration.
     """
     values = _check_fields(action, params)
+    if export and action not in EXPORTABLE:
+        raise SourceError("此查询不支持导出。")
     if (
         action
         in (
@@ -449,7 +502,7 @@ def run_action(action, params):
         )
         and values.get("source", "cache") == "cache"
     ):
-        return _run_direct(action, values)
+        return _run_direct(action, values, export)
     if not _NETWORK_SLOTS.acquire(blocking=False):
         raise SourceError("实时查询正在处理中，请稍后重试。", 429)
     try:
@@ -464,7 +517,7 @@ def run_action(action, params):
             [sys.executable, "-m", "operations_workbench.source_worker"],
             cwd=Path(__file__).resolve().parents[1],
             env=env,
-            input=json.dumps({"action": action, "params": values}),
+            input=json.dumps({"action": action, "params": values, **({"export": True} if export else {})}),
             text=True,
             capture_output=True,
             timeout=125,
@@ -482,6 +535,20 @@ def run_action(action, params):
         raise SourceError("当前数据源连接不可用，请稍后重试。", 503) from exc
     finally:
         _NETWORK_SLOTS.release()
+
+
+def export(action, params):
+    """Full result rows for CSV, up to EXPORT_CAP, with the exact match count."""
+    if action not in EXPORTABLE:
+        raise SourceError("此查询不支持导出。")
+    data = run_action(action, params, export=True)
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    total = data.get("total")
+    if not isinstance(total, int):
+        total = len(items)
+    return {"action": action, "items": items[:EXPORT_CAP], "exported": min(len(items), EXPORT_CAP),
+            "total": total, "cap": EXPORT_CAP, "capped": total > EXPORT_CAP,
+            "queried_at": data.get("queried_at")}
 
 
 def render_pdf(kind, code, lang="CN"):

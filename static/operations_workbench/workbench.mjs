@@ -1,5 +1,9 @@
-import {clearSessions, deleteSession, listSessions, saveSession} from './ai-history.mjs';
-import {cellText, csvContent, fieldLabel, recordsFrom, sourceNames, tableColumns} from './presentation.mjs';
+// Submodules share the page's asset version so a cached copy never mixes with a newer entry script.
+const version = new URL(import.meta.url).search;
+const [{clearSessions, deleteSession, listSessions, saveSession},
+  {RAW_TIME_PAIRS, cellText, csvContent, fieldLabel, formatField, recordsFrom, sourceNames, tableColumns},
+  {taskSection, workorderView}] = await Promise.all(
+  ['./ai-history.mjs', './presentation.mjs', './workorder-view.mjs'].map(path => import(path + version)));
 
 const root = document.getElementById('ops-workbench');
 const $ = id => document.getElementById('ops-' + id);
@@ -79,6 +83,11 @@ function searchCatalog(id) {
 
 function actionLabel(id) {
   return searchCatalog(id)?.label || id;
+}
+
+function worktypeLabel(code) {
+  const field = searchCatalog('maximo.workorders')?.fields?.find(item => item.name === 'worktypes');
+  return field?.options?.find(option => option.value === code)?.label || code;
 }
 
 async function loadCatalog() {
@@ -262,6 +271,7 @@ function clearResult() {
   $('result-view').replaceChildren(empty);
   $('results-title').textContent = '查询结果';
   $('export').disabled = true;
+  $('export-all').disabled = true;
   status($('query-status'));
 }
 
@@ -294,29 +304,109 @@ async function runQuery(params = readFields()) {
   }
 }
 
+const OFFSET_PAGED = ['maximo.workorders', 'maximo.jobplans', 'splunk.search', 'downtime.search'];
+const PAGE_PAGED = ['downtime.dashboard', 'downtime.history'];
+const EXPORTABLE = [...OFFSET_PAGED, ...PAGE_PAGED];
+
+function totalOf(data) {
+  return Number.isInteger(data?.total) ? data.total : null;
+}
+
+function batchStart(id, params, data) {
+  if (PAGE_PAGED.includes(id)) {
+    const size = Number(data.page_size || params.page_size || recordsFrom(data).length || 1);
+    return (Number(data.page || params.page || 1) - 1) * size;
+  }
+  return Number(data.offset ?? params.offset ?? 0);
+}
+
+// Parameters for the neighbouring server batch, or null when there is none.
+function batchParams(id, params, data, step) {
+  if (OFFSET_PAGED.includes(id)) {
+    const offset = Number(data.offset ?? params.offset ?? 0);
+    const limit = Number(data.limit || params.limit || recordsFrom(data).length || 50);
+    if (step > 0) return data.has_more ? {...params, offset: offset + limit} : null;
+    return offset > 0 ? {...params, offset: Math.max(0, offset - limit)} : null;
+  }
+  if (PAGE_PAGED.includes(id)) {
+    const num = Number(data.page || params.page || 1);
+    if (step > 0) return data.has_more ? {...params, page: num + 1} : null;
+    return num > 1 ? {...params, page: num - 1} : null;
+  }
+  return null;
+}
+
+function countText(id, params, data) {
+  const rows = recordsFrom(data).length;
+  const total = totalOf(data);
+  if (total == null) return '返回 ' + rows + ' 条';
+  if (!rows || rows >= total) return '共 ' + total + ' 条';
+  const start = batchStart(id, params, data);
+  return '共 ' + total + ' 条，本批第 ' + (start + 1) + '–' + (start + rows) + ' 条';
+}
+
+function downloadCsv(rows, source, label) {
+  const blob = new Blob([csvContent(rows, source)], {type: 'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const link = el('a');
+  link.href = url;
+  const exportDate = new Intl.DateTimeFormat('sv-SE', {timeZone: 'Asia/Shanghai'}).format(new Date());
+  link.download = label + '-' + exportDate + '.csv';
+  root.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+async function exportAll(id, params, label, note, trigger) {
+  trigger.disabled = true;
+  status(note, '正在读取全部匹配记录…');
+  try {
+    const data = await api('export', {action: id, params});
+    if (!data.items.length) {
+      status(note, '当前条件下没有可导出的记录。');
+      return;
+    }
+    downloadCsv(data.items, id.split('.')[0], label + '-全部');
+    status(note, data.capped
+      ? '已导出前 ' + data.exported + ' 条（共 ' + data.total + ' 条，单次导出上限 ' + data.cap + ' 条）。请缩小日期或条件范围，分批导出其余记录。'
+      : '已导出全部 ' + data.exported + ' 条。');
+  } catch (error) {
+    status(note, error.message, true);
+  } finally {
+    trigger.disabled = false;
+  }
+}
+
 function renderResults() {
   const rows = recordsFrom(response);
-  const messages = ['返回 ' + rows.length + ' 条'];
+  const messages = [countText(action.id, resultParams, response)];
   if (response.queried_at) messages.push('查询时间 ' + response.queried_at);
   if (resultParams.source === 'cache') messages.push('本地停机记录');
   if (response.cache?.data_through) messages.push('记录截至 ' + response.cache.data_through);
   if (response.cache?.stale) messages.push('查询结束日期超出已同步范围');
-  if (response.truncated) messages.push('已达返回上限，可缩小查询范围');
+  if (response.has_more || (response.truncated && response.has_more === undefined)) {
+    messages.push(EXPORTABLE.includes(action.id)
+      ? '其余记录可「读取下一批」或「导出全部 CSV」，也可缩小查询范围'
+      : '已达返回上限，可缩小查询范围');
+  }
   if (response.warning) messages.push(String(response.warning));
   if (Array.isArray(response.warnings)) messages.push(...response.warnings);
   status($('query-status'), messages.join(' · '));
   $('summary').replaceChildren();
-  if (response.summary) showSummary(response.summary);
+  if (response.summary && sourceId === 'downtime' && Array.isArray(response.summary.daily)) showDashboard();
+  else if (response.summary) showSummary(response.summary);
   const box = $('result-view');
   box.replaceChildren();
   $('export').disabled = !rows.length;
+  $('export-all').disabled = !rows.length || !EXPORTABLE.includes(action.id);
   if (!rows.length) {
     box.append(el('p', '当前条件下没有匹配的记录。', 'ops-empty'));
     addServerPager(box);
     return;
   }
   const head = el('div', null, 'ops-list-head');
-  const count = el('strong', '本次返回 ' + rows.length + ' 条');
+  const count = el('strong', countText(action.id, resultParams, response));
   const filter = el('input');
   filter.type = 'search';
   filter.setAttribute('aria-label', '在本次结果中过滤');
@@ -343,7 +433,7 @@ function renderResults() {
     const slice = filtered.slice(start, start + pageSize);
     list.append(makeTable(slice, columns, (row, cell) => {
       const actions = el('div', null, 'ops-row-actions');
-      actions.append(button('详情', () => showRow(row)));
+      actions.append(button('详情', () => {detailTarget = modalTarget; showRow(row);}));
       if (sourceId === 'downtime' && row.location && (row.downtime_start_local || row.report_local) && searchCatalog('downtime.splunk')) {
         actions.append(button('同段日志', () => showCorrelation(row)));
       }
@@ -387,18 +477,78 @@ function makeTable(rows, columns, renderAction) {
 }
 
 function addServerPager(box) {
-  if (!['downtime.dashboard', 'downtime.history', 'splunk.search'].includes(action.id)) return;
+  const previous = batchParams(action.id, resultParams, response, -1);
+  const next = batchParams(action.id, resultParams, response, 1);
+  if (!previous && !next) return;
   const remote = el('div', null, 'ops-pager');
-  const num = Number(response.page || resultParams.page || 1);
-  const offset = Number(resultParams.offset || 0);
-  if (!response.has_more && num <= 1 && offset <= 0) return;
-  const limit = Number(response.page_size || resultParams.limit || recordsFrom(response).length || 100);
-  const isSplunk = action.id === 'splunk.search';
-  if (num > 1 || offset > 0) remote.append(button('读取上一批', () => runQuery(
-    {...resultParams, ...(isSplunk ? {offset: Math.max(0, offset - limit)} : {page: num - 1})})));
-  if (response.has_more) remote.append(button('读取下一批', () => runQuery(
-    {...resultParams, ...(isSplunk ? {offset: offset + limit} : {page: num + 1})})));
+  remote.append(el('span', countText(action.id, resultParams, response)));
+  if (previous) remote.append(button('读取上一批', () => runQuery(previous)));
+  if (next) remote.append(button('读取下一批', () => runQuery(next)));
   box.append(remote);
+}
+
+const DRILL_NAMES = {day: '日期', attraction: '景点', reason: '分类', code: '停机代码', asset: '资产'};
+const drillLabels = new Map();
+let chartView = null;
+let chartsModule = null;
+
+function withoutPaging(params) {
+  const {page, offset, drill_kind, drill_key, ...rest} = params;
+  return rest;
+}
+
+// Charts describe the whole query scope; paging and chart drill-down only change the event table.
+function scopeKey(params) {
+  const {limit, page_size, ...rest} = withoutPaging(params);
+  return JSON.stringify([action.id, rest]);
+}
+
+function drillTo(kind, key, label) {
+  drillLabels.set(kind + ':' + key, label);
+  runQuery({...withoutPaging(resultParams), drill_kind: kind, drill_key: String(key)});
+}
+
+function drillChip() {
+  const kind = resultParams.drill_kind;
+  const key = resultParams.drill_key;
+  const chip = el('div', null, 'ops-dt-drill');
+  chip.setAttribute('role', 'status');
+  const label = drillLabels.get(kind + ':' + key) || key;
+  chip.append(el('span', '已筛选 ' + (DRILL_NAMES[kind] || kind) + '：'), el('strong', label),
+    el('span', ' · 共 ' + (totalOf(response) ?? recordsFrom(response).length) + ' 条事件'),
+    button('清除筛选', () => runQuery(withoutPaging(resultParams))));
+  return chip;
+}
+
+function showDashboard() {
+  const box = $('summary');
+  const key = scopeKey(resultParams);
+  if (chartView?.key !== key) {
+    chartView?.handle?.dispose();
+    const node = el('div', null, 'ops-dt');
+    const view = {key, node, handle: null, summary: response.summary};
+    chartView = view;
+    const comparison = response.comparison;
+    chartsModule ??= import('./charts.mjs' + version);
+    chartsModule.then(module => {
+      if (chartView !== view) return;
+      view.handle = module.renderCharts(node, view.summary, comparison, {onDrill: drillTo, fileName: action.label});
+    }).catch(() => {
+      chartsModule = null;
+      if (chartView !== view) return;
+      node.replaceChildren(el('p', '图表组件载入失败，已改为显示统计表。', 'ops-notice'));
+      showSummary(view.summary, node);
+    });
+  }
+  box.append(chartView.node);
+  if (resultParams.drill_kind) box.append(drillChip());
+  const tables = el('details', null, 'ops-breakdown ops-dt-tables');
+  tables.append(el('summary', '查看统计数据表'));
+  const summary = chartView.summary;
+  tables.addEventListener('toggle', () => {
+    if (tables.open && tables.children.length === 1) showSummary(summary, tables);
+  });
+  box.append(tables);
 }
 
 function showSummary(summary, target = $('summary')) {
@@ -410,7 +560,7 @@ function showSummary(summary, target = $('summary')) {
     stats.append(metric);
   }
   target.append(stats);
-  for (const key of ['daily', 'attractions', 'reasons', 'codes']) {
+  for (const key of ['daily', 'attractions', 'reasons', 'codes', 'assets']) {
     if (!Array.isArray(summary[key]) || !summary[key].length) continue;
     const title = key === 'codes' ? '停机类型分布' : fieldLabel(key);
     const disclosure = el('details', null, 'ops-breakdown');
@@ -454,7 +604,11 @@ function objectView(record) {
   for (const [key, value] of Object.entries(record)) {
     if (value == null || value === '') continue;
     if (typeof value !== 'object') {
-      facts.append(el('dt', fieldLabel(key)), el('dd', cellText(value)));
+      if (key in RAW_TIME_PAIRS && record[RAW_TIME_PAIRS[key]]) continue;
+      const shown = el('dd', formatField(key, value));
+      const raw = Object.keys(RAW_TIME_PAIRS).find(name => RAW_TIME_PAIRS[name] === key);
+      if (raw && record[raw]) shown.title = 'Maximo 原值（UTC）：' + formatField(raw, record[raw]);
+      facts.append(el('dt', fieldLabel(key)), shown);
       continue;
     }
     if (Array.isArray(value) && !value.length) continue;
@@ -519,22 +673,21 @@ function openDetail(source, title) {
   return detailTarget.body;
 }
 
-function showRow(row) {
-  detailTarget = modalTarget;
+function showRow(row, source = sourceId, origin = resultParams) {
   const title = row.wonum || row.jpnum || row.apexmssgmnemonic || '记录详情';
   let id;
   let params;
-  if (sourceId === 'maximo' && row.wonum) {
+  if (source === 'maximo' && row.wonum) {
     id = 'maximo.workorder'; params = {wonum: row.wonum};
-  } else if (sourceId === 'maximo' && row.jpnum) {
+  } else if (source === 'maximo' && row.jpnum) {
     id = 'maximo.jobplan'; params = {jpnum: row.jpnum};
-  } else if (sourceId === 'downtime' && row.workorderid) {
-    id = 'downtime.detail'; params = {workorderid: String(row.workorderid), source: resultParams.source || 'cache'};
+  } else if (source === 'downtime' && row.workorderid) {
+    id = 'downtime.detail'; params = {workorderid: String(row.workorderid), source: origin.source || 'cache'};
   }
   if (id && searchCatalog(id)) {
     queryDetail(id, params, title, row);
   } else {
-    const body = openDetail(sourceNames[sourceId], title);
+    const body = openDetail(sourceNames[source], title);
     body.append(objectView(row));
   }
 }
@@ -567,9 +720,22 @@ async function queryDetail(id, params, title, row) {
   try {
     const {data} = await api('query', {action: id, params}, controller);
     if (detailController !== controller) return;
-    status(note, data.queried_at ? '查询时间 ' + data.queried_at : '资料已载入');
+    status(note, data.queried_at ? '查询时间 ' + formatField('queried_at', data.queried_at) : '资料已载入');
     const header = data.workorder || data.jobplan;
-    if (header) {
+    if (id === 'maximo.workorder' && data.workorder) {
+      note.hidden = true;
+      const back = () => queryDetail(id, params, title, row);
+      const actions = ['CN', 'EN'].map(lang => ({label: lang === 'CN' ? '中文 PDF' : '英文 PDF',
+        onClick: () => showPdf('workorder', params.wonum, lang, back)}));
+      const openJobplan = header.jpnum ? () => queryDetail('maximo.jobplan', {jpnum: header.jpnum}, header.jpnum) : null;
+      if (openJobplan) actions.push({label: '查看作业计划', onClick: openJobplan});
+      remote.append(workorderView(header, {
+        actions, openJobplan, queriedAt: data.queried_at, worktypeLabel,
+        openWorkorder: wonum => queryDetail('maximo.workorder', {wonum}, wonum),
+        tasks: data.tasks, statusHistory: data.status_history,
+      }));
+      if (data.warnings) remote.append(objectView({warnings: data.warnings}));
+    } else if (header) {
       remote.append(objectView(header));
       const links = el('div', null, 'ops-row-actions');
       if (id === 'maximo.workorder' || id === 'maximo.jobplan') {
@@ -582,9 +748,15 @@ async function queryDetail(id, params, title, row) {
       if (id !== 'maximo.jobplan' && header.jpnum) links.append(button('查看作业计划', () => queryDetail('maximo.jobplan', {jpnum: header.jpnum}, header.jpnum)));
       if (id === 'downtime.detail' && header.wonum) links.append(button('查看 Maximo 工单', () => queryDetail('maximo.workorder', {wonum: header.wonum}, header.wonum)));
       remote.append(links);
+      if (Array.isArray(data.tasks) && id === 'maximo.jobplan') {
+        const steps = el('details', null, 'ops-wo-group');
+        steps.open = true;
+        steps.append(el('summary', '任务步骤（' + data.tasks.length + '）'), taskSection(data.tasks));
+        remote.append(steps);
+      }
       const rest = {};
-      for (const key of ['tasks', 'status_history', 'status_events', 'related', 'workorders', 'warnings']) {
-        if (data[key]) rest[key] = data[key];
+      for (const key of ['tasks', 'status_events', 'related', 'workorders', 'warnings']) {
+        if (data[key] && !(key === 'tasks' && id === 'maximo.jobplan')) rest[key] = data[key];
       }
       remote.append(objectView(rest));
     } else if (id === 'downtime.splunk') {
@@ -603,6 +775,31 @@ async function queryDetail(id, params, title, row) {
   }
 }
 
+const PDFJS_BASE = '/static/operations_workbench/vendor/pdfjs-4.10.38/';
+
+// Maximo reports use the non-embedded STSong-Light CID font (UniGB-UCS2-H); without
+// the CMaps PDF.js draws only the rules. Relative URLs would resolve against the worker.
+function pdfOptions(bytes) {
+  const base = new URL(PDFJS_BASE, window.location.origin).href;
+  return {data: new Uint8Array(bytes), isEvalSupported: false, enableXfa: false, useSystemFonts: true,
+    cMapUrl: base + 'cmaps/', cMapPacked: true, standardFontDataUrl: base + 'standard_fonts/'};
+}
+
+function pdfFallback(path, message) {
+  const box = el('div', null, 'ops-pdf-fallback');
+  box.append(el('p', message, 'ops-notice'));
+  const actions = el('div', null, 'ops-row-actions');
+  const open = el('a', '在新窗口打开', 'ops-row-open');
+  open.href = path;
+  open.target = '_blank';
+  open.rel = 'noopener';
+  const save = el('a', '下载原 PDF', 'ops-row-open');
+  save.href = path + '&download=1';
+  actions.append(open, save);
+  box.append(actions);
+  return box;
+}
+
 async function showPdf(kind, code, lang, back) {
   const body = openDetail('Maximo 报表', code + (lang === 'CN' ? ' · 中文 PDF' : ' · 英文 PDF'));
   const controller = new AbortController();
@@ -610,19 +807,31 @@ async function showPdf(kind, code, lang, back) {
   const note = el('p', '正在生成 PDF…', 'ops-inline-status');
   note.setAttribute('role', 'status');
   body.append(button('返回记录详情', back, 'ops-link'), note);
+  const path = '/tools/operations/api/pdf/' + kind + '/' + encodeURIComponent(code) + '/?lang=' + lang;
+  let fallback;
+  const offerOriginal = message => {
+    if (fallback || detailController !== controller) return;
+    fallback = pdfFallback(path, message);
+    note.after(fallback);
+  };
   let loading;
   try {
-    const path = '/tools/operations/api/pdf/' + kind + '/' + encodeURIComponent(code) + '/?lang=' + lang;
     const res = await fetch(path, {credentials: 'same-origin', redirect: 'error', signal: controller.signal});
     if (!res.ok || !res.headers.get('Content-Type')?.includes('application/pdf')) {
       const error = await res.json().catch(() => ({}));
       throw new Error(error.detail || '原始 PDF 暂时不可用，请稍后重试。');
     }
     const bytes = await res.arrayBuffer();
-    const lib = await import('/static/vehicle_tracker/vendor/pdfjs/pdf.min.mjs');
+    let lib;
+    try {
+      lib = await import(PDFJS_BASE + 'pdf.min.mjs');
+    } catch {
+      offerOriginal('页面内预览组件未能载入，可直接打开或下载原 PDF。');
+      throw new Error('PDF 预览暂时不可用。');
+    }
     if (detailController !== controller) return;
-    lib.GlobalWorkerOptions.workerSrc = '/static/vehicle_tracker/vendor/pdfjs/pdf.worker.min.mjs';
-    loading = lib.getDocument({data: new Uint8Array(bytes), isEvalSupported: false, enableXfa: false, useSystemFonts: true});
+    lib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.mjs';
+    loading = lib.getDocument(pdfOptions(bytes));
     controller.signal.addEventListener('abort', () => { if (!pdfDocument) loading.destroy(); }, {once: true});
     const doc = await loading.promise;
     if (detailController !== controller) {doc.destroy(); return;}
@@ -653,8 +862,15 @@ async function showPdf(kind, code, lang, back) {
         await pdfRender.promise;
         count.textContent = '第 ' + index + ' / ' + doc.numPages + ' 页 · ' + Math.round(100 * zoom) + '%';
         status(note);
+        const text = await sheet.getTextContent();
+        if (detailController === controller && !text.items.some(item => item.str?.trim())) {
+          offerOriginal('此页未识别到文字，可能缺少字体资源。可直接打开或下载原 PDF 核对。');
+        }
       } catch (error) {
-        if (detailController === controller) status(note, '此页无法显示，请重新打开报表。', true);
+        if (detailController === controller && error?.name !== 'RenderingCancelledException') {
+          status(note, '此页无法显示，请重新打开报表。', true);
+          offerOriginal('页面内预览失败，可直接打开或下载原 PDF。');
+        }
       } finally {
         if (detailController === controller) {
           prev.disabled = index <= 1;
@@ -672,8 +888,9 @@ async function showPdf(kind, code, lang, back) {
     body.append(tools, scroll);
     await render();
   } catch (error) {
-    if (detailController === controller) {
+    if (detailController === controller && error?.name !== 'AbortError') {
       status(note, error.message || 'PDF 加载失败。', true);
+      if (loading) offerOriginal('页面内预览失败，可直接打开或下载原 PDF。');
       body.append(button('重试', () => showPdf(kind, code, lang, back)));
     }
   }
@@ -712,7 +929,7 @@ function openEvidence(evidence, index) {
   }
   const rows = recordsFrom(data);
   if (rows.length) {
-    body.append(el('h3', '返回记录'));
+    body.append(el('h3', '返回记录（' + countText(evidence.action, evidence.params || {}, data) + '）'));
     pagedDetails(body, rows, tableColumns(rows, evidence.source));
   } else if (data.workorder || data.jobplan) body.append(objectView(data.workorder || data.jobplan));
   const details = el('details');
@@ -879,6 +1096,88 @@ function timeLabel(value) {
   return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false}).format(date);
 }
 
+const LOADED_ROWS_LIMIT = 2000;
+
+function coverageText(item, index) {
+  const span = item.coverage;
+  const parts = [span.total != null ? '共 ' + span.total + ' 条匹配'
+    : '本次返回 ' + span.returned + ' 条' + (span.truncated ? '，还有更多记录' : '')];
+  if (span.truncated || span.returned > span.sampled) {
+    parts.push('计数与分布来自服务器对全部匹配记录的统计，回答中列举的是前 ' + span.sampled + ' 条样本');
+  }
+  if (span.suggestions?.length) parts.push('如需更精确，可补充' + span.suggestions.join('、') + '缩小范围');
+  return '依据 ' + index + ' · ' + actionLabel(item.action) + '：' + parts.join('；') + '。';
+}
+
+function resultTable(item) {
+  const wrap = el('div');
+  const rows = [...recordsFrom(item.data)];
+  const columns = tableColumns(rows, item.source);
+  let last = item.data;
+  let params = {...item.params};
+  let index = 0;
+  const tableBox = el('div');
+  const pager = el('div', null, 'ops-pager');
+  const note = el('p', '', 'ops-inline-status');
+  note.setAttribute('role', 'status');
+  const tools = el('div', null, 'ops-row-actions');
+  const more = button('从服务器读取更多', loadMore);
+  tools.append(more);
+  if (EXPORTABLE.includes(item.action)) {
+    const all = button('导出全部 CSV', () => exportAll(item.action, item.params, actionLabel(item.action), note, all));
+    tools.append(all);
+  }
+  function paint() {
+    const slice = rows.slice(index, index + pageSize);
+    tableBox.replaceChildren(makeTable(slice, columns, (row, cell) => {
+      cell.append(button('详情', () => openFromAi(() => showRow(row, item.source, item.params))));
+    }));
+    const total = totalOf(last);
+    const previous = button('上一页', () => {index -= pageSize; paint();});
+    const next = button('下一页', () => {index += pageSize; paint();});
+    previous.disabled = index === 0;
+    next.disabled = index + pageSize >= rows.length;
+    pager.replaceChildren(el('span', (index + 1) + '–' + (index + slice.length) + ' / 已读取 ' + rows.length + ' 条'
+      + (total != null ? '，共 ' + total + ' 条' : '')), previous, next);
+    const capped = rows.length >= LOADED_ROWS_LIMIT;
+    more.hidden = capped || !batchParams(item.action, params, last, 1);
+    if (capped && batchParams(item.action, params, last, 1)) status(note, '已在页面读取 ' + rows.length + ' 条，其余记录请导出 CSV 查看。');
+  }
+  async function loadMore() {
+    const following = batchParams(item.action, params, last, 1);
+    if (!following) return;
+    more.disabled = true;
+    status(note, '正在读取更多记录…');
+    try {
+      const payload = await api('query', {action: item.action, params: following});
+      const added = recordsFrom(payload.data);
+      last = payload.data;
+      params = following;
+      if (added.length) index = Math.floor(rows.length / pageSize) * pageSize;
+      rows.push(...added);
+      status(note);
+      paint();
+    } catch (error) {
+      status(note, error.message, true);
+    } finally {
+      more.disabled = false;
+    }
+  }
+  wrap.append(tableBox, pager, tools, note);
+  paint();
+  return wrap;
+}
+
+function resultBrowser(item, index) {
+  const box = el('details', null, 'ops-ai-results');
+  const total = totalOf(item.data);
+  box.append(el('summary', '依据 ' + index + ' 的完整结果' + (total != null ? '（共 ' + total + ' 条）' : '')));
+  box.addEventListener('toggle', () => {
+    if (box.open && box.children.length === 1) box.append(resultTable(item));
+  });
+  return box;
+}
+
 function turnView(turn) {
   const article = el('article', null, 'ops-ai-turn');
   const asked = el('div', null, 'ops-ai-question');
@@ -896,6 +1195,11 @@ function turnView(turn) {
     const evidence = Array.isArray(turn.evidence) ? turn.evidence : [];
     reply.append(el('span', outcome[turn.status] || '查询完成', 'ops-ai-outcome' + (turn.status === 'complete' ? '' : ' is-warn')));
     reply.append(answerView(turn.answer || '未取得回答。', evidenceLinks(evidence)));
+    evidence.forEach((item, i) => {
+      if (item.status !== 'ok' || !item.coverage) return;
+      reply.append(el('p', coverageText(item, i + 1), 'ops-ai-coverage' + (item.coverage.truncated ? ' is-partial' : '')));
+      if (recordsFrom(item.data).length) reply.append(resultBrowser(item, i + 1));
+    });
     if (evidence.length) {
       const list = el('div', null, 'ops-ai-evidence-list');
       list.append(el('h4', '本次查询依据'));
@@ -1137,16 +1441,11 @@ aiDrawer.addEventListener('close', () => {
   (sidebarHidden ? aiLauncher : aiOpener).focus({preventScroll: true});
 });
 $('export').addEventListener('click', () => {
-  if (!filtered.length) return;
-  const blob = new Blob([csvContent(filtered, sourceId)], {type: 'text/csv;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const link = el('a');
-  link.href = url;
-  const exportDate = new Intl.DateTimeFormat('sv-SE', {timeZone: 'Asia/Shanghai'}).format(new Date());
-  link.download = action.label + '-' + exportDate + '.csv';
-  root.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  if (filtered.length) downloadCsv(filtered, sourceId, action.label);
+});
+$('export-all').addEventListener('click', event => {
+  if (response && EXPORTABLE.includes(action.id)) {
+    exportAll(action.id, resultParams, action.label, $('query-status'), event.currentTarget);
+  }
 });
 loadCatalog();

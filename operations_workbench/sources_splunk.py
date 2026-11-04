@@ -5,6 +5,7 @@ import hmac
 import json
 import re
 import ssl
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -28,6 +29,7 @@ RAW_FIELDS = re.compile(
     r'\b(apexmssgdatetime|attrname|apexmssgtarget|apexmssgmnemonic|apexmssgtext)="((?:\\.|[^"\\])*)"'
 )
 MAX_RESPONSE = 8 * 1024 * 1024
+EXPORT_RESPONSE = 24 * 1024 * 1024
 
 
 class SplunkUnavailable(Exception):
@@ -76,7 +78,7 @@ def configured():
     )
 
 
-def _request(method, path, **kwargs):
+def _request(method, path, max_response=MAX_RESPONSE, **kwargs):
     if not configured():
         raise SplunkUnavailable("尚未配置 Splunk 只读连接。")
     host, port = option("SPLUNK_HOST"), option("SPLUNK_PORT")
@@ -108,7 +110,7 @@ def _request(method, path, **kwargs):
             body = bytearray()
             for chunk in response.iter_bytes():
                 body.extend(chunk)
-                if len(body) > MAX_RESPONSE:
+                if len(body) > max_response:
                     raise SplunkUnavailable(
                         "查询结果过大，请缩小时间范围或每页数量。"
                     )
@@ -162,10 +164,47 @@ def _number(value, minimum, maximum, label):
     return int(value)
 
 
-def _events(filters, earliest, latest, attractions):
+def _oneshot(search, earliest, latest, count, max_response=MAX_RESPONSE):
+    data = _request(
+        "POST",
+        "/services/search/jobs",
+        max_response=max_response,
+        data={
+            "search": search,
+            "earliest_time": str(int(earliest.timestamp())),
+            "latest_time": str(int(latest.timestamp())),
+            "exec_mode": "oneshot",
+            "output_mode": "json",
+            "count": str(count),
+        },
+    )
+    rows = data.get("results")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise SplunkUnavailable("Splunk 返回结果格式异常。")
+    if any(
+        isinstance(message, dict)
+        and str(message.get("type")).upper() in ("ERROR", "FATAL")
+        for message in (data.get("messages") or [])
+    ):
+        raise SplunkUnavailable("Splunk 未能完成本次查询，请核对账号权限及查询条件。")
+    return rows
+
+
+def _counts(rows, field):
+    counts = {}
+    for row in rows:
+        label = str(row.get(field) or "—")
+        try:
+            counts[label] = counts.get(label, 0) + int(float(row.get("count") or 0))
+        except ValueError:
+            continue
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _events(filters, earliest, latest, attractions, max_limit=200):
     if latest <= earliest or latest - earliest > timedelta(days=31):
         raise ValueError("日志结束时间需晚于开始时间，最多可查 31 天。")
-    limit = _number(filters.get("limit", 50), 1, 200, "每页数量")
+    limit = _number(filters.get("limit", 50), 1, max_limit, "每页数量")
     offset = _number(filters.get("offset", 0), 0, 1000000, "记录偏移")
     if any(name not in KNOWN_ATTRACTIONS for name in attractions):
         raise ValueError("请选择目录中的有效 Splunk 景点。")
@@ -204,33 +243,32 @@ def _events(filters, earliest, latest, attractions):
         terms.append(
             "| eval _op_sec=(_apex_sort+28800)%86400 | where _op_sec>=25200 AND _op_sec<79200"
         )
-    terms.append(
-        f"| sort 0 {direction}_apex_sort {direction}_time | head {offset + limit + 1}"
-    )
-    if offset:
-        terms.append(f"| streamstats count as _ops_row | where _ops_row>{offset}")
-    terms.append("| fields " + " ".join((*EVENT_FIELDS, "_raw")))
-    data = _request(
-        "POST",
-        "/services/search/jobs",
-        data={
-            "search": " ".join(terms),
-            "earliest_time": str(int(earliest.timestamp())),
-            "latest_time": str(int(latest.timestamp())),
-            "exec_mode": "oneshot",
-            "output_mode": "json",
-            "count": str(limit + 1),
-        },
-    )
-    rows = data.get("results")
-    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        raise SplunkUnavailable("Splunk 返回结果格式异常。")
-    if any(
-        isinstance(message, dict)
-        and str(message.get("type")).upper() in ("ERROR", "FATAL")
-        for message in (data.get("messages") or [])
-    ):
-        raise SplunkUnavailable("Splunk 未能完成本次查询，请核对账号权限及查询条件。")
+    scope = " ".join(terms)
+    page = [
+        f"| sort 0 {direction}_apex_sort {direction}_time | head {offset + limit + 1}",
+        *([f"| streamstats count as _ops_row | where _ops_row>{offset}"] if offset else []),
+        "| fields " + " ".join((*EVENT_FIELDS, "_raw")),
+    ]
+    exporting = max_limit > 200
+    text_cap = 4000 if exporting else 16000
+    jobs = {
+        "page": lambda: _oneshot(" ".join([scope, *page]), earliest, latest, limit + 1,
+                                 EXPORT_RESPONSE if exporting else MAX_RESPONSE),
+        "attractions": lambda: _oneshot(
+            scope + ' | fillnull value="—" attrname | stats count by attrname', earliest, latest, 0),
+        "mnemonics": lambda: _oneshot(
+            scope + " | top limit=10 showperc=false apexmssgmnemonic", earliest, latest, 0),
+    }
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futures = {key: pool.submit(job) for key, job in jobs.items()}
+        rows = futures["page"].result()
+        warnings, facets, total = [], {}, None
+        try:
+            facets["attraction"] = _counts(futures["attractions"].result(), "attrname")
+            facets["mnemonic"] = _counts(futures["mnemonics"].result(), "apexmssgmnemonic")
+            total = sum(facets["attraction"].values())
+        except SplunkUnavailable:
+            warnings.append("未能统计日志总数，仅显示本页记录。")
     items = []
     for event in rows[:limit]:
         raw = str(event.get("_raw") or "")
@@ -239,31 +277,38 @@ def _events(filters, earliest, latest, attractions):
             for key, value in RAW_FIELDS.findall(raw)
         }
         row = {
-            key: str(event.get(key) or fields.get(key) or "")[:16000]
+            key: str(event.get(key) or fields.get(key) or "")[:text_cap]
             for key in EVENT_FIELDS
         }
         if not row["apexmssgtext"]:
-            row["apexmssgtext"] = raw[:16000]
+            row["apexmssgtext"] = raw[:text_cap]
         items.append(row)
-    return {
+    has_more = len(rows) > limit
+    result = {
         "items": items,
         "count": len(items),
         "limit": limit,
         "offset": offset,
-        "has_more": len(rows) > limit,
+        "has_more": has_more,
         "source": "Splunk Apex · 实时",
         "queried_at": datetime.now(TZ).isoformat(timespec="seconds"),
         "start_time": earliest.isoformat(),
         "end_time": latest.isoformat(),
+        "warnings": warnings,
     }
+    if total is not None:
+        # Live logs keep arriving between the page and count searches.
+        total = max(total, offset + len(items) + (1 if has_more else 0))
+        result.update(total=total, truncated=total > len(items), facets=facets, facets_complete=True)
+    return result
 
 
-def search(params):
+def search(params, max_limit=200):
     now = datetime.now(TZ)
     start = _instant(params.get("start_time") or (now - timedelta(hours=1)).isoformat())
     end = _instant(params.get("end_time") or now.isoformat())
     attraction = params.get("attraction")
-    return _events(params, start, end, [attraction] if attraction else [])
+    return _events(params, start, end, [attraction] if attraction else [], max_limit)
 
 
 def linked_search(params):

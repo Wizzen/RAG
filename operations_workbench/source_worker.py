@@ -9,7 +9,7 @@ from .sources import SourceError, _run_direct
 def main():
     try:
         request = json.loads(sys.stdin.read(65536))
-        data = _run_direct(request["action"], request["params"])
+        data = _run_direct(request["action"], request["params"], request.get("export") is True)
         reply = {"ok": True, "data": data}
     except SourceError as exc:
         reply = {"ok": False, "message": str(exc), "status": exc.status}

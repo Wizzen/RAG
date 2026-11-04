@@ -3,6 +3,7 @@ from functools import wraps
 import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 
 from django.conf import settings
@@ -66,7 +67,8 @@ def index(request):
     assets = Path(settings.BASE_DIR) / "static" / "operations_workbench"
     digest = hashlib.sha256()
     for asset in sorted(assets.glob("**/*")):
-        if asset.is_file():
+        # Vendored libraries carry their version in the directory name.
+        if asset.is_file() and "vendor" not in asset.relative_to(assets).parts:
             digest.update(asset.read_bytes())
     return render(request, "operations_workbench/index.html", {"operations_workspace": True,
                   "asset_version": digest.hexdigest()[:12]})
@@ -92,6 +94,16 @@ def query(request):
 
 @require_POST
 @api
+def export(request):
+    data = json_body(request)
+    action, params = data.get("action"), data.get("params", {})
+    if not isinstance(action, str) or not isinstance(params, dict):
+        raise AnalysisError("请选择操作，并填写有效的查询条件。")
+    return JsonResponse(sources.export(action, params))
+
+
+@require_POST
+@api
 def ask(request):
     return JsonResponse(ai.ask(json_body(request, limit=65536)))
 
@@ -99,8 +111,12 @@ def ask(request):
 @require_GET
 @api
 def pdf(request, kind, code):
-    content = sources.render_pdf(kind, code, request.GET.get("lang", "CN"))
+    lang = request.GET.get("lang", "CN")
+    content = sources.render_pdf(kind, code, lang)
     response = HttpResponse(content, content_type="application/pdf")
-    response["Content-Disposition"] = 'inline; filename="operations-report.pdf"'
+    name = "-".join(re.sub(r"[^A-Za-z0-9._-]", "_", part)[:40] for part in (kind, code, lang))
+    disposition = "attachment" if request.GET.get("download") == "1" else "inline"
+    response["Content-Disposition"] = f'{disposition}; filename="{name}.pdf"'
+    response["Content-Length"] = str(len(content))
     response["X-Content-Type-Options"] = "nosniff"
     return response
