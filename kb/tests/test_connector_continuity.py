@@ -114,11 +114,11 @@ class DialogueContinuityTests(TestCase):
         with patch('kb.connector_browser.collect',return_value=data):
             parent,_=self.execute(parent,[call('browser_open',{'url':web_spec()['url']}),call('test_browser_connector',{'spec':web_spec()},'preview')])
         self.assertEqual(parent.status,'ready',parent.error)
-        with patch('kb.connector_views.start_feed'):
+        with patch('kb.collector_api.start_feed'):
             enabled=self.client.post(reverse('kb:connector_enable',args=[parent.pk]),'{}',content_type='application/json')
         self.assertEqual(enabled.status_code,200,enabled.content);feed_id=enabled.json()['feed_id']
         candidate=web_spec();candidate['body_fields'].append({'label':'duration','computed':{'op':'duration','start':'start','end':'end','format':'hhmm','unit':'hours'}})
-        with patch('kb.connector_views.start_async'):
+        with patch('kb.collector_api.start_async'):
             reply=self.client.post(reverse('kb:connector_refine',args=[parent.pk]),json.dumps({'feedback':'增加duration字段，单位小时'}),content_type='application/json')
         child=ConnectorDraft.objects.get(pk=reply.json()['job']['id']);self.jobs.append(child.pk)
         with patch('kb.connector_browser.collect') as recollect:
@@ -127,7 +127,7 @@ class DialogueContinuityTests(TestCase):
         self.assertTrue(child.metrics['context_resumed']);self.assertEqual(child.preview['preview'][0]['fields']['duration'],12)
         self.assertIn('observed-detail-42',str(model.messages[0]));self.browser.close.assert_not_called()
         KnowledgeFeed.objects.filter(pk=feed_id).update(lease_token='',lease_until=None)
-        with patch('kb.connector_views.start_feed'):
+        with patch('kb.collector_api.start_feed'):
             result=self.client.post(reverse('kb:connector_enable',args=[child.pk]),'{}',content_type='application/json')
         self.assertEqual(result.status_code,200,result.content);self.assertEqual(result.json()['feed_id'],feed_id)
         self.assertEqual(KnowledgeFeed.objects.count(),1);self.assertEqual(KnowledgeBase.objects.count(),1)

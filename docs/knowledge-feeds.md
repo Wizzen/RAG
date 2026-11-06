@@ -85,6 +85,11 @@ Provide source access information in the dialogue when needed: a Bearer Token, a
 Basic or webpage login username/password, or custom header name/value pairs. The agent binds it to the source through
 `set_source_access`. The data-source management page also supports credential rotation and a direct connection test.
 The app automatically encrypts and stores credentials; users do not edit environment variables or backend files.
+For an intranet source (10.x, 192.168.x, 172.16-31.x, 127.0.0.1), a global administrator ticks
+**允许访问内网或本机 API** in the collapsible **内网配置** panel above the composer before sending the requirement.
+The switch belongs to that conversation, is inherited by every later reply in the same thread, and is saved onto the
+data source when the preview is approved, so the scheduled runs keep working. Non-administrators get a clear message
+instead of a doomed run, and link-local/metadata, multicast and unspecified addresses stay blocked in every mode.
 
 Available tools:
 
@@ -129,6 +134,55 @@ There is no autonomous retry loop. Mapping repairs use the same budget; expired 
 Each network tool reads at most 2 MB, uses a 30-second elapsed-response bound plus connection/read timeouts,
 pins DNS, preserves TLS validation, and rejects redirects. Credentials and common authentication fields are redacted
 before samples reach the model. Server permissions are rechecked during the task and when enabling it.
+
+### Entry points: page, in-process service and command line
+
+Every entry point calls the same implementation in `kb/collector_api.py`, so permissions, intranet switches,
+credential ownership, cron calculation, the CAS state machine and the first import behave identically everywhere.
+The service layer takes plain arguments, raises `ValueError` for business errors and never touches `request`.
+
+| Function | Purpose |
+| --- | --- |
+| `create_draft(user, requirement, api_url=…, authentication=…, allow_private=…, kb=…, created_via=…)` | start generation in a background thread and return the draft immediately |
+| `refine_draft(user, job, requirement, …)` | next conversation turn; keeps credential, intranet flag and thread |
+| `approve(user, job, write_mode=…, department=…, run_now=True)` | the only place that creates/enables the scheduled source (page **确认数据并开始自动更新**) |
+| `cancel(user, job)` / `status(job)` / `source_url(job)` | stop, non-HTTP status view, effective source host |
+
+Command line (same rules as the page; the key is read from an environment variable so it never reaches argv,
+shell history or the task title):
+
+```sh
+# 默认等最多 15 分钟，实时把工具活动打到 stderr，结束后打印真实样例与候选脚本
+.venv/bin/python manage.py build_feed "每天13点拉 http://host/api/v1/lightboard/board/ 的每车当前里程" \
+  --url http://host/api/v1/lightboard/board/ --token-env LIGHTBOARD_TOKEN --private
+
+# 看过样例后批准，建立定时数据源并立即首跑
+.venv/bin/python manage.py build_feed "……" --token-env LIGHTBOARD_TOKEN --wait 900 --approve
+
+# 事后批准已生成好的任务
+.venv/bin/python manage.py build_feed --job 6c1f… --approve
+```
+
+生成跑在命令自己的进程里，所以 `--wait 0`（立即返回）会让任务停在「进行中」直到两小时后被回收——
+需要长时间后台运行请用页面。
+
+Exit status: `0` approved/ready, `1` failed, `2` the agent still needs information (printed as questions).
+`--json` prints the same status payload used by automation. No entry point approves on its own: the model can only
+produce a candidate script plus real samples, and a human (or an explicit `--approve`) publishes it.
+
+### Credential shapes
+
+`parse_auth` requires an explicit `type`, and infers it only when the shape is unambiguous:
+`{"token": …}` → `bearer`, `{"username", "password"}` → `basic`, `{"headers": [{"name", "value"}]}` → `headers`.
+Anything else without `type` — including `{"type": null}` or `{"api_key": …}` whose header name is unknown —
+raises an error that lists the accepted shapes. A missing `type` is never treated as "no authentication":
+the earlier silent fallback stored no credential while reporting success, so every later request answered 401 and
+the assistant concluded the key was wrong. `set_source_access` now returns `credentials_attached` plus a
+remediation note when nothing was stored, and an explicitly replaced credential row is discarded.
+
+Attaching the credential when the draft is created (page form, `--token-env`, or a structured `authentication`)
+also replaces the key with `[REDACTED]` in the stored requirement, so the model reads the bound credential
+through `request_headers()` instead of copying a secret into a URL or query parameter.
 
 ### Credential storage and updates
 
@@ -375,7 +429,8 @@ FOS_FEED_REPORT_AUTH=Bearer replace-with-upstream-token
 
 Restart the worker after changing its environment. Values are never returned through source configuration.
 Only names beginning `FOS_FEED_` are accepted; other application secrets cannot be referenced.
-Private/loopback APIs require the global administrator's explicit **允许访问内网或本机 API** switch.
+Private/loopback APIs require the global administrator's explicit **允许访问内网或本机 API** switch — in the data-source
+form, or in the **内网配置** panel of the AI builder composer (see [Generate a connector from a prompt](#generate-a-connector-from-a-prompt)).
 Link-local/metadata, multicast and unspecified destinations remain blocked. DNS is validated and pinned for each request,
 TLS hostname verification remains enabled, environment proxies are ignored, and redirects do not forward credentials.
 

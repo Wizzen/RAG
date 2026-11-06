@@ -36,7 +36,7 @@ class SavedContextTests(TestCase):
         parent,_=self.execute(parent,[call('probe_api',{'url':spec()['url']}),call('show_data_preview',{'spec':spec()},'preview')])
         self.assertEqual(parent.status,'ready',parent.error);self.assertTrue(parent.context_snapshot)
         self.assertNotIn('设备日报',parent.context_snapshot)
-        with patch('kb.connector_views.start_feed'):
+        with patch('kb.collector_api.start_feed'):
             enabled=self.client.post(reverse('kb:connector_enable',args=[parent.pk]),'{}',content_type='application/json')
         self.assertEqual(enabled.status_code,200,enabled.content);feed_id=enabled.json()['feed_id']
         forgotten=self.client.post(reverse('kb:connector_forget'),json.dumps({'ids':[str(parent.pk)]}),content_type='application/json')
@@ -45,7 +45,7 @@ class SavedContextTests(TestCase):
         resumed=self.client.post(reverse('kb:connector_resume'),json.dumps({'feed':feed_id}),content_type='application/json')
         self.assertEqual(resumed.status_code,200,resumed.content);self.assertEqual(resumed.json()['thread'][-1]['id'],str(parent.pk))
         self.assertNotIn('context_snapshot',resumed.content.decode())
-        with patch('kb.connector_views.start_async'):
+        with patch('kb.collector_api.start_async'):
             response=self.client.post(reverse('kb:connector_refine',args=[parent.pk]),json.dumps({'feedback':'增加采集日期字段'}),content_type='application/json')
         child=ConnectorDraft.objects.get(pk=response.json()['job']['id']);self.assertTrue(child.retain_context)
         candidate=spec();candidate['body_fields'].append({'label':'采集日期','source':'today'})
@@ -55,7 +55,7 @@ class SavedContextTests(TestCase):
         self.assertTrue(prior);self.assertIn('temperature',str(prior));self.assertIn('设备日报',str(model.messages[0]))
         self.assertIn('重新实际取数',str(model.messages[0]))
         KnowledgeFeed.objects.filter(pk=feed_id).update(lease_token='',lease_until=None)
-        with patch('kb.connector_views.start_feed'):
+        with patch('kb.collector_api.start_feed'):
             updated=self.client.post(reverse('kb:connector_enable',args=[child.pk]),'{}',content_type='application/json')
         self.assertEqual(updated.status_code,200,updated.content);self.assertEqual(updated.json()['feed_id'],feed_id)
         self.assertEqual(KnowledgeFeed.objects.count(),1)
@@ -124,7 +124,7 @@ class SavedContextTests(TestCase):
         unrelated.refresh_from_db();self.assertEqual(unrelated.context_snapshot,'other-context')
         resumed=self.client.post(reverse('kb:connector_resume'),json.dumps({'feed':str(feed.pk)}),content_type='application/json')
         self.assertEqual([job['id'] for job in resumed.json()['thread']],[str(fresh.pk)])
-        with patch('kb.connector_views.start_async') as start:
+        with patch('kb.collector_api.start_async') as start:
             stale=self.client.post(reverse('kb:connector_refine',args=[child.pk]),json.dumps({'feedback':'stale edit'}),content_type='application/json')
         self.assertEqual(stale.status_code,400);start.assert_not_called()
 
@@ -134,7 +134,7 @@ class SavedContextTests(TestCase):
         parent=ConnectorDraft.objects.create(user=self.user,kb=kb,feed=feed,status='enabled',prompt='OLD HISTORY MARKER',spec=spec())
         save(parent,{'messages':[HumanMessage(content='OLD MODEL MARKER')],'memory':WorkingMemory(),'sources':[]})
         response=self.reset_context(feed);fresh_id=response.json()['thread'][0]['id']
-        with patch('kb.connector_views.start_async'):
+        with patch('kb.collector_api.start_async'):
             result=self.client.post(reverse('kb:connector_refine',args=[fresh_id]),json.dumps({'feedback':'增加采集日期'}),content_type='application/json')
         child=ConnectorDraft.objects.get(pk=result.json()['job']['id'])
         child,model=self.execute(child,[call('probe_api',{'url':spec()['url']}),call('show_data_preview',{'spec':spec()},'preview-reset')])

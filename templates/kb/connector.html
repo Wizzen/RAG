@@ -23,6 +23,13 @@
       </div>
     </div>
     <div class="cx-composer">
+      {% if is_global_admin %}<details class="cx-setup" id="connectorPrivatePanel">
+        <summary>内网配置（仅全局管理员）</summary>
+        <div class="cx-setup-form">
+          <label><input type="checkbox" id="connectorPrivate"> 允许访问内网或本机 API</label>
+          <p class="cx-setup-note">用于 10.x、192.168.x、172.16-31.x、127.0.0.1 等内网接口。开关属于当前对话，确认启用后随定时任务一并保存；链路本地、组播和未指定地址始终禁止。</p>
+        </div>
+      </details>{% endif %}
       <form id="composerForm" class="cx-composer-box">
         {% csrf_token %}
         <textarea id="connectorPrompt" rows="1" maxlength="10000" placeholder="描述要采集的数据，或回答 AI 的问题…（Enter 发送，Shift+Enter 换行）"></textarea>
@@ -33,6 +40,6 @@
   </section>
 </div>
 <link rel="stylesheet" href="{% static 'css/feeds.css' %}">
-<link rel="stylesheet" href="{% static 'css/connector_chat.css' %}?v=6">
+<link rel="stylesheet" href="{% static 'css/connector_chat.css' %}?v=7">
 {% endblock %}
-{% block scripts %}<script src="{% static 'js/vendor/marked.min.js' %}" defer></script><script src="{% static 'js/vendor/purify.min.js' %}" defer></script><script src="{% static 'js/connector.js' %}?v=11" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'js/vendor/marked.min.js' %}" defer></script><script src="{% static 'js/vendor/purify.min.js' %}" defer></script><script src="{% static 'js/connector.js' %}?v=12" defer></script>{% endblock %}

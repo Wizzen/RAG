@@ -4,6 +4,11 @@
   const messages = document.getElementById('connectorMessages'), welcome = document.getElementById('connectorWelcome');
   const composer = document.getElementById('composerForm');
   const prompt = document.getElementById('connectorPrompt'), send = document.getElementById('connectorSend'), hint = document.getElementById('connectorHint');
+  // 内网开关只在后端已经认出全局管理员时才会渲染；普通用户看不到，也不能自己改。static 代码不能当安全边界。
+  const privatePanel = document.getElementById('connectorPrivatePanel');
+  const privateAccess = document.getElementById('connectorPrivate');
+  const PRIVATE_HOST = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost|0\.0\.0\.0|::1)/i;
+  const mentionsPrivate = (text) => [...text.matchAll(/https?:\/\/([^\/:?#\s]+)/gi)].some(match => PRIVATE_HOST.test(match[1]));
   const newTask = document.getElementById('connectorNew');
   const clearContext = document.getElementById('connectorClearContext');
   let thread = [], timer = null, generation = 0, submitting=false, stopping=false, confirming=false, clearing=false;
@@ -193,8 +198,13 @@
     for(const node of old)if(!thread.some(job=>job.id===node.dataset.jobId))node.remove();
     messages.scrollTop=nearBottom?messages.scrollHeight:scroll;
   }
+  function syncPrivate(job) {
+    if (!privateAccess) return;
+    if (job && typeof job.allow_private === 'boolean') privateAccess.checked = job.allow_private;
+  }
   function syncComposer(job) {
     const running = job?.status === 'running';
+    if (privateAccess) privateAccess.disabled = running || submitting || confirming || clearing;
     send.disabled=submitting||stopping||confirming||clearing;prompt.disabled=running||submitting||confirming||clearing;newTask.disabled=running||submitting||stopping||confirming||clearing;
     clearContext.hidden=!page.dataset.feedId&&!thread.some(turn=>turn.feed_id);
     clearContext.disabled=running||job?.status==='enabling'||submitting||stopping||confirming||clearing;
@@ -215,7 +225,7 @@
   function activate(jobs) {
     for(const job of jobs||[])for(const event of job.events||[])if(event.kind==='tool_end')completedTools.add(job.id+':'+(event.turn||0)+':'+event.call_id);
     thread = (jobs||[]).map(mergeJob); generation++; clearTimeout(timer); render();
-    const last = jobs.at(-1); syncComposer(last);
+    const last = jobs.at(-1); syncPrivate(last); syncComposer(last);
     if(last)poll(thread.at(-1),generation);
   }
   async function poll(job, gen) {
@@ -240,11 +250,18 @@
       const last = thread.at(-1);
       if (last && !['ready', 'needs_info', 'failed', 'cancelled','enabled'].includes(last.status)) throw new Error('当前任务尚未结束，请稍候或先停止。');
       const data = last ? { feedback: text } : { prompt: text };
+      if (mentionsPrivate(text) && !(privateAccess ? privateAccess.checked : last?.allow_private)) {
+        if (privatePanel) privatePanel.open = true;
+        throw new Error(privateAccess
+          ? '你给出的地址是内网或本机地址。请先勾选输入框上方的「允许访问内网或本机 API」，再重新发送。'
+          : '内网或本机 API 需由全局管理员开启「允许访问内网或本机 API」；当前账号没有该开关，请改用公开地址或请管理员新建。');
+      }
+      if (privateAccess) data.allow_private = privateAccess.checked;
       const response = await request(last ? last.refine_url : page.dataset.createUrl, data);
       if(submittedGeneration!==generation)return;
       if(last&&last.status!=='enabled')last.status='revised';
       prompt.value = ''; prompt.style.height = 'auto';
-      thread.push(mergeJob(response.job)); generation++; clearTimeout(timer); render(); syncComposer(response.job);
+      thread.push(mergeJob(response.job)); generation++; clearTimeout(timer); render(); syncPrivate(response.job); syncComposer(response.job);
       poll(response.job, generation);
     } catch (error) { hint.textContent = error.message; } finally { submitting=false;syncComposer(thread.at(-1)); }
   });
@@ -278,7 +295,7 @@
   }
   newTask.addEventListener('click',async()=>{
     if(newTask.disabled)return;newTask.disabled=true;
-    try{const response=await forget();if(response&&!response.ok)throw new Error('临时记录清理失败，请稍后重试。');generation++;clearTimeout(timer);thread=[];eventCache.clear();detailStates.clear();completedTools.clear();writeModes.clear();page.dataset.feedId='';prompt.value='';const url=new URL(location.href);url.searchParams.delete('feed');history.replaceState(null,'',url);page.querySelector('.cx-heading h1').textContent='AI 采集助手';page.querySelector('.cx-heading p').textContent='描述网页或接口 → 查看真实样例 → 对话调整 → 确认后自动更新到追踪表';render();syncComposer(null);prompt.focus();}
+    try{const response=await forget();if(response&&!response.ok)throw new Error('临时记录清理失败，请稍后重试。');generation++;clearTimeout(timer);thread=[];eventCache.clear();detailStates.clear();completedTools.clear();writeModes.clear();page.dataset.feedId='';prompt.value='';if(privateAccess)privateAccess.checked=false;const url=new URL(location.href);url.searchParams.delete('feed');history.replaceState(null,'',url);page.querySelector('.cx-heading h1').textContent='AI 采集助手';page.querySelector('.cx-heading p').textContent='描述网页或接口 → 查看真实样例 → 对话调整 → 确认后自动更新到追踪表';render();syncComposer(null);prompt.focus();}
     catch(error){hint.textContent=error.message;newTask.disabled=false;}
   });
   clearContext.addEventListener('click',async()=>{

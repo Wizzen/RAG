@@ -12,7 +12,7 @@ def complete(value):
     payload.update(model=config["model"], messages=value["messages"], temperature=config["temperature"],
                    max_tokens=config["max_tokens"], stream=False)
     try:
-        with httpx.Client(timeout=httpx.Timeout(45, connect=5), trust_env=False, follow_redirects=False) as client:
+        with httpx.Client(timeout=httpx.Timeout(150, connect=5), trust_env=False, follow_redirects=False) as client:
             response = client.post(config["base_url"].rstrip("/") + "/chat/completions",
                                    headers={"Authorization": "Bearer " + config["api_key"]}, json=payload)
         if response.status_code in (401, 403):
@@ -22,7 +22,8 @@ def complete(value):
         content = response.json()["choices"][0]["message"]["content"]
         if isinstance(content, list):
             content = "\n".join(row.get("text", "") for row in content if isinstance(row, dict))
-        return {"ok": True, "content": content[:16000] if isinstance(content, str) else ""}
+        # 上限与 fos_rag/isolated_model.call_model 保持一致。
+        return {"ok": True, "content": content[:24000] if isinstance(content, str) else ""}
     except httpx.TimeoutException:
         return {"ok": False, "message": "回答模型响应超时，请缩小范围后重试。"}
     except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError):

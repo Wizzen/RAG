@@ -127,7 +127,7 @@ class FeedHistoryViewsTests(TestCase):
 
     def test_user_can_override_agent_write_mode_on_approval(self):
         job=ConnectorDraft.objects.create(user=self.user,prompt='运营时间 '+spec()['url'],status='ready',spec=spec(write_mode='upsert'))
-        with patch('kb.connector_views.start_feed'):
+        with patch('kb.collector_api.start_feed'):
             result=self.client.post(reverse('kb:connector_enable',args=[job.pk]),json.dumps({'write_mode':'append'}),content_type='application/json')
         self.assertEqual(result.status_code,200,result.content)
         job.refresh_from_db();self.assertEqual(job.feed.write_mode,'append')

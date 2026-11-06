@@ -55,13 +55,13 @@ class ConversationTests(TestCase):
         kb=KnowledgeBase.objects.create(name='Existing',slug='existing-edit',is_folder=True,created_by=self.user)
         feed=KnowledgeFeed.objects.create(kb=kb,name='Existing',adapter_spec=spec(),created_by=self.user)
         parent=ConnectorDraft.objects.create(user=self.user,kb=kb,feed=feed,status='enabled',prompt='采集真实设备日报',spec=spec())
-        with patch('kb.connector_views.start_async'):
+        with patch('kb.collector_api.start_async'):
             response=self.client.post(reverse('kb:connector_refine',args=[parent.pk]),json.dumps({'feedback':'增加一个字段'}),content_type='application/json')
         self.assertEqual(response.status_code,202,response.content)
         child=ConnectorDraft.objects.get(pk=response.json()['job']['id']);child.status='ready';child.spec=spec(name='Updated');child.preview={'valid':True}
         child.save(update_fields=['status','spec','preview'])
         feed.refresh_from_db();self.assertEqual(feed.name,'Existing')
-        with patch('kb.connector_views.start_feed'):
+        with patch('kb.collector_api.start_feed'):
             response=self.client.post(reverse('kb:connector_enable',args=[child.pk]),'{}',content_type='application/json')
         self.assertEqual(response.status_code,200,response.content);self.assertEqual(response.json()['feed_id'],str(feed.pk))
         self.assertEqual(KnowledgeFeed.objects.count(),1);self.assertEqual(KnowledgeBase.objects.count(),1)
@@ -91,6 +91,37 @@ class ConversationTests(TestCase):
         active=ConnectorDraft.objects.create(user=self.user,prompt='Running')
         response=self.client.post(reverse('kb:connector_forget'),json.dumps({'ids':[str(active.pk)]}),content_type='application/json')
         self.assertEqual(response.status_code,400);self.assertTrue(ConnectorDraft.objects.filter(pk=active.pk).exists())
+
+    def test_chat_auth_shape_without_type_is_inferred_or_reported_not_falsely_saved(self):
+        """缺 type 的认证形状：形状明确的照常保存，含义不明的必须报错，不能假报已保存后静默裸奔。"""
+        from kb.connector_agent import run
+        from kb.tests.test_connector import FakeModel, call
+        from langchain_core.messages import AIMessageChunk
+        token = 'user-provided-test-token-4417'
+        job = ConnectorDraft.objects.create(user=self.user, prompt='从 https://api.example.test/reports 取数，token=' + token)
+        model = FakeModel([
+            call('set_source_access', {'url': 'https://api.example.test/reports', 'authentication': {'token': token}}),
+            call('set_source_access', {'url': 'https://api.example.test/reports', 'authentication': {'credential': token}}, identity='call-2'),
+            AIMessageChunk(content='{"questions":["请确认需要的字段"]}')])
+        with tempfile.TemporaryDirectory() as directory, self.settings(DATA_DIR=Path(directory)), patch('kb.agent._get_llm', return_value=model):
+            result = run(job.pk)
+        self.assertIsNotNone(result.credential_id)      # {'token': …} 形状明确，已按 bearer 保存
+        failed = [row for row in result.activity.values_list('payload', flat=True)
+                  if row.get('kind') == 'tool_end' and not row.get('ok', True)]
+        self.assertTrue(failed and any('type' in str(row.get('message', '')) for row in failed), failed)
+
+    def test_chat_auth_explicit_none_reports_no_credential_attached(self):
+        """显式 type=none 时工具结果必须说清「未绑定凭据」，否则代理会把 401 归因于密钥错误。"""
+        from kb.connector_agent import run
+        from kb.tests.test_connector import FakeModel, call
+        from langchain_core.messages import AIMessageChunk
+        job = ConnectorDraft.objects.create(user=self.user, prompt='从 https://api.example.test/reports 取数，该接口公开')
+        model = FakeModel([call('set_source_access', {'url': 'https://api.example.test/reports', 'authentication': {'type': 'none'}}),
+            AIMessageChunk(content='{"questions":["请确认需要的字段"]}')])
+        with tempfile.TemporaryDirectory() as directory, self.settings(DATA_DIR=Path(directory)), patch('kb.agent._get_llm', return_value=model):
+            result = run(job.pk)
+        self.assertIsNone(result.credential_id)
+        self.assertIn('credentials_attached', str(model.messages[-1]))   # 模型看到的是「未绑定凭据」，不是假的 saved
 
     def test_chat_auth_is_encrypted_and_omitted_from_activity(self):
         from kb.connector_agent import run

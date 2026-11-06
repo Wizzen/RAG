@@ -29,9 +29,9 @@ python manage.py check
 python manage.py runserver 127.0.0.1:8000 --noreload
 ```
 
-打开 [本机首页](http://127.0.0.1:8000/)，用刚创建的账号进入「站点配置」。先为回答模型和向量服务填写实际的 Base URL、模型 ID、认证所需的密钥，以及向量服务的输出维度，分别保存并测试。若回答服务在局域网或云端，还需开启远程回答许可。处理 PDF 时，在另一个已激活环境的终端运行 `mineru-api --host 127.0.0.1 --port 8888`，或在设置中指定已部署的 MinerU 4.x 服务。
+打开 [本机首页](http://127.0.0.1:8000/)，用刚创建的账号进入「站点配置」。先为回答模型和向量服务填写实际的 Base URL、模型 ID、认证所需的密钥，以及向量服务的输出维度，分别保存并测试。若回答服务在局域网或云端，还需开启远程回答许可。处理 PDF 时，在另一个已激活环境的终端运行 `mineru-api --host 127.0.0.1 --port 8888`，或在设置中指定已部署的 MinerU 4.0.x／4.1.x 服务（应用读取服务端版本号自动选择协议，无需开关）。
 
-Windows 可在准备好 Python 3.13 和本机配置后运行 [start_all.bat](start_all.bat)。脚本准备虚拟环境、迁移数据库、收集静态文件并启动 MinerU 与网站。首次建管理员账号可在项目目录运行 `.venv\Scripts\python.exe manage.py createsuperuser`。从旧版升级时，先执行 `.venv\Scripts\python.exe -m pip install -r requirements.txt` 更新依赖，确保 PDF 解析服务使用 4.x 文件 API。回答模型、向量服务和定时采集器各自配置、启动。
+Windows 可在准备好 Python 3.13 和本机配置后运行 [start_all.bat](start_all.bat)。脚本准备虚拟环境、迁移数据库、收集静态文件并启动 MinerU 与网站。首次建管理员账号可在项目目录运行 `.venv\Scripts\python.exe manage.py createsuperuser`。从旧版升级时，先执行 `.venv\Scripts\python.exe -m pip install -r requirements.txt` 更新依赖；PDF 解析服务用 MinerU 4.0.12 或 4.1.x 均可，两者协议不同，由应用自动识别。回答模型、向量服务和定时采集器各自配置、启动。
 
 **第一次验证**可以只用一份 UTF-8 文本。建一个名为「培训样例」的通用手册库，把“演示部件 DEMO-01 的资料存放在蓝色登记册。”保存成 `登记说明.txt` 并上传。文档显示「已完成」后，打开「AI 助手」问“培训样例的 DEMO-01 资料存放在哪里？”，点引用核对文件名和原句。这一步能验证上传、索引、问答和引用。随后用一份有已知页码的 PDF 验证 OCR 和页内定位。
 
@@ -82,13 +82,13 @@ Windows 可在准备好 Python 3.13 和本机配置后运行 [start_all.bat](sta
 | 文本向量（`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`EMBEDDING_API_KEY`） | OpenAI 兼容的 `POST {base}/embeddings`，传入 `model`、`input` 和配置的 `dimensions`，读取 `data[].embedding`。配置维度应与服务实际输出一致。 | 上传时把片段转成向量，提问时把查询转到同一向量空间。两个阶段需使用匹配的配置。 |
 | 图文向量（可选，复用向量配置） | 仓库含 WeMM 原生 `POST {base}/embed` 适配。模型名含 `wemm` 且 Base URL 不以 `/v1` 结尾时选用此协议。它接收 `inputs` 和 `dimension`，可编码文字、图片及二者的组合。 | 按描述找照片、手册插图及整页图纸需要图文索引。普通 `/embeddings` 配置用于文本。回答模型的视觉开关另行控制是否让模型看图复核。 |
 | 重排序（可选，`RERANK_BASE_URL`、`RERANK_MODEL`、`RERANK_API_KEY`） | `POST {base}/rerank`，传入 `query`、候选 `documents`、模型 ID 和可选 `top_n`，读取 `results` 中的 `index` 和 `relevance_score`。 | 在初次检索之后给候选原文排序。在设置页启用。关闭或请求失败时使用已有的融合排名。 |
-| PDF 解析（`MINERU_API_BASE`、`MINERU_BACKEND`、可选 `MINERU_API_KEY`） | 使用 MinerU 4.x 文件 API，Base URL 填服务根地址。小文件随 `POST /v1/file_parse` 提交，大文件经 `/v1/uploads` 登记、传输并取得文件 ID。系统按任务 ID 查询状态并读取解析结果。 | 仅 PDF 走此流程。原始 PDF 会发送到所配置的解析服务。 |
+| PDF 解析（`MINERU_API_BASE`、`MINERU_BACKEND`、可选 `MINERU_API_KEY`） | 支持 MinerU 4.0.x 与 4.1.x，Base URL 填服务根地址，协议按 `/v1/health` 报告的版本号自动选择。**4.0.x File API**：小文件随 `POST /v1/file_parse` 内联提交，大文件经 `/v1/uploads` 登记、传输并取得文件 ID，产物从 `GET /v1/tasks/{id}/result` 的 JSON 里读。**4.1.x Tasks API**：`POST /v1/tasks` 声明文件（`output_formats:["default"]`），再 `PUT` 响应里的上传链接传字节，产物从 `files[].result_url` 下载 `result.zip`，取出 `markdown.md` 与 `structured_content.json`。两路产物在 `kb/pipeline.py` 归一为同一形状，3.x 的表单接口不受支持。 | 仅 PDF 走此流程。原始 PDF 会发送到所配置的解析服务。 |
 
 **如何填地址。** 例如回答服务的完整端点是 `http://127.0.0.1:1234/v1/chat/completions`，那么 Base URL 填 `http://127.0.0.1:1234/v1`，接口路径由应用追加。MinerU 的默认地址为 `http://localhost:8888`。需要认证时按对应服务填写密钥。
 
 **本机、局域网与远程。** 回答模型使用非本机地址时，开启「允许远程回答 API」，局域网地址也适用。「允许全部远程／局域网 API」覆盖上述回答、向量、重排和 OCR 服务。使用 `FOS_LOCAL_ONLY=1` 部署时，网络限制按已许可的主机和端口放行。全局设置里仅允许回答模型远程时，向量、重排、OCR 可继续留在本机。运维工作台 AI 另有本机模型要求。[远程 API 开关说明](docs/remote-answer-api.md)
 
-**如何判断接通。** 保存后点每项的「测试」或「一键全部测试」。回答测试发送一次非流式提问并检查是否完整回复 `OK`，向量测试实际生成向量，重排测试比较相关与无关文本。MinerU 设置页探测 `/health`，4.x 解析流程使用 `/v1/health` 与文件接口。若探针结果与处理情况不同，用一份小 PDF 确认。工具调用、流式输出和片段引用可用上面的培训样例验证，PDF 页码和标框要在 PDF 引用中核对。
+**如何判断接通。** 保存后点每项的「测试」或「一键全部测试」。回答测试发送一次非流式提问并检查是否完整回复 `OK`，向量测试实际生成向量，重排测试比较相关与无关文本。MinerU 测试读 `/v1/health`（其次 `/v1/models`）的版本号，回报将要使用的协议，例如「MinerU 4.1.7 可达，PDF 将按 Tasks API（4.1） 解析」；只有根 `/health` 的 3.x 服务直接判为不支持，报不出版本号时算连通但给出提示。若探针结果与处理情况不同，用一份小 PDF 确认。工具调用、流式输出和片段引用可用上面的培训样例验证，PDF 页码和标框要在 PDF 引用中核对。
 
 ## 一次问答如何完成
 
@@ -119,6 +119,7 @@ Windows 可在准备好 Python 3.13 和本机配置后运行 [start_all.bat](sta
 | 定时拉取 | 对已经提供 `fos-rag-feed/v1` 的 HTTP 接口，填写拉取地址、认证信息、五字段 cron 和时区。如设为 `0 8 * * *`、`Asia/Shanghai`，表示上海时间每天 08:00 执行。可先手动运行，核对本次采集结果。 |
 | 外部脚本推送 | 在数据源页生成专用令牌，外部任务以 Bearer 认证向页面给出的 `POST /kb/api/feeds/<feed_id>/ingest/` 提交 JSON。每条记录使用稳定 `id`，同一批重送时复用 `batch_id`。页面提供运行状态及连接器工具包。 |
 | AI 生成连接器 | 打开 `/kb/feeds/builder/`，提供网址、要采的字段、记录标识和频率。例如“从这个页面每天采集设备编号和状态”。助手可探测 JSON 或用浏览器操作动态网页，试取真实样本、校验字段，展示数据预览。可继续对话修正，点击「确认数据并开始自动更新」才启用并首次入库。已批准的任务可再次编辑、更新凭据或下载脚本。 |
+| 命令行建任务 | `LIGHTBOARD_TOKEN=… python manage.py build_feed "每天13点拉 …/lightboard/board/ 的每车当前里程" --url … --token-env LIGHTBOARD_TOKEN --private --wait 900`，看过真实样例后再加 `--approve`（或事后 `--job <任务号> --approve`）。密钥只从环境变量读；权限、内网开关、凭据与批准规则与页面完全相同，因为两者调用同一个 `kb/collector_api`。 |
 
 写入方式与接入方式独立。**追加历史**（`append`，默认）保留每次成功采集的观察值，适合趋势对比。**更新当前记录**（`upsert`）按同一数据源的稳定 ID 更新，适合当前设备清单。单次漏采的条目会保留，已完成批次用相同 ID 重送不会再追加一遍。
 

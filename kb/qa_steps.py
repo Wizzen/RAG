@@ -21,11 +21,15 @@ logger = logging.getLogger(__name__)
 # 思考型模型（Qwen3 等）的结论可能全部落在 reasoning_content、content 为空，
 # 且思考本身消耗输出 token——max_tokens 必须给思考留余量
 _PLAN_MAX_TOKENS = 1000
-_VERIFY_MAX_TOKENS = 2500
+# 核实器要逐条读完长回答与证据再给结论；回答预算提到 16K 后，2500 容易被思考吃完，
+# 而 finish_reason=length 会直接拒绝发布草稿（verify_answer 下方）。
+_VERIFY_MAX_TOKENS = 8000
+_VERIFY_TIMEOUT = 150             # asyncio 上限；HTTP 客户端超时略短，让网络错误先回报
+_VERIFY_HTTP_TIMEOUT = 140
 _VERIFY_MAX_ITEMS = 24            # 证据条数上限
 
 
-def build_llm(llm_cfg: dict):
+def build_llm(llm_cfg: dict, timeout: float = 45):
     """按站点配置构建 ChatOpenAI（规划/核实与主回答共用同一模型配置）。"""
     from langchain_openai import ChatOpenAI
     return ChatOpenAI(
@@ -36,7 +40,7 @@ def build_llm(llm_cfg: dict):
         base_url=llm_cfg["base_url"],
         temperature=llm_cfg["temperature"],
         stream_usage=True,
-        timeout=45,
+        timeout=timeout,
         max_retries=0,
         extra_body=settings.LLM_EXTRA_BODY,
     )
@@ -162,15 +166,16 @@ async def verify_answer(llm_cfg: dict, question: str, answer: str,
     if len(evidence) > _VERIFY_MAX_ITEMS or len(answer) > 16000 or sum(len(ev.get("text") or "") for ev in evidence) > 24000:
         return None, usage
     try:
-        llm = build_llm(llm_cfg)
+        llm = build_llm(llm_cfg, timeout=_VERIFY_HTTP_TIMEOUT)
         prompt = (
             f"{_VERIFY_PROMPT}\n\n"
             f"【用户问题】\n{question}\n\n"
             f"【检索证据】\n{_format_evidence(evidence)}\n\n"
             f"【待核实回答】\n{answer}"
         )
+        # 实测本部署约 77 tokens/秒；8000 输出的核实本身可能要上百秒，45 秒会先杀掉它。
         result = await asyncio.wait_for(llm.ainvoke([{"role": "user", "content": prompt}],
-                                   max_tokens=_VERIFY_MAX_TOKENS), timeout=45)
+                                   max_tokens=_VERIFY_MAX_TOKENS), timeout=_VERIFY_TIMEOUT)
         if (getattr(result, "response_metadata", None) or {}).get("finish_reason") == "length":
             return None, _usage(result)
         usage = _usage(result)

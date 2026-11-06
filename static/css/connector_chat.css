@@ -66,6 +66,12 @@
 .cx-setup-form{padding:4px 16px 14px;display:grid;gap:10px}
 .cx-setup-form label{display:block;font-size:12px;color:#4e6556}
 .cx-setup-form input[type=text],.cx-setup-form input[type=url],.cx-setup-form input[type=password],.cx-setup-form select{width:100%;max-width:480px;padding:6px 9px;border:1px solid #dce4d6;border-radius:8px;font:inherit}
+.cx-setup-form label{display:flex;align-items:center;gap:7px}
+.cx-setup-form input[type=checkbox]{width:15px;height:15px;margin:0;accent-color:#355d3c}
+.cx-setup-form input[type=checkbox]:disabled{opacity:.5}
+.cx-setup-note{margin:0;font-size:11px;line-height:1.6;color:#a1ab97}
+.cx-composer>.cx-setup{border-bottom:1px solid #edf0e8}
+.cx-composer>.cx-setup summary{padding:8px 16px 6px}
 .cx-composer-box{display:flex;align-items:flex-end;gap:8px;padding:10px 14px 4px}
 .cx-composer-box textarea{flex:1;min-height:40px;max-height:160px;padding:9px 12px;border:1px solid #dce4d6;border-radius:14px;background:#fcfdfb;font:14px/1.6 inherit;color:#344a36;resize:none;outline:none}
 .cx-composer-box textarea:focus{border-color:#9eb88d;box-shadow:0 0 0 3px #91b67714}
@@ -105,3 +111,6 @@
 @media(max-width:620px){.cx-tool{grid-template-columns:20px minmax(0,1fr) auto}.cx-tool-note{grid-row:2;grid-column:2 / -1}.cx-tool-time{grid-column:3;grid-row:1}.cx-tool-icon{grid-column:1;grid-row:1}.cx-tool-name{grid-column:2;grid-row:1}}@media(prefers-reduced-motion:reduce){.cx-tool,.cx-tool-icon,.cx-tool path,.cx-avatar-eyes{animation:none!important;transition:none!important}}
 @media(max-width:620px){.cx-header{gap:8px}.cx-heading{min-width:140px}.cx-shell{height:calc(100dvh - 205px)}.cx-messages{padding:14px 10px}.cx-history select{max-width:160px}.cx-tool{grid-template-columns:1fr auto}.cx-tool-note{grid-row:2;grid-column:1 / -1}.cx-tool-time{grid-column:2;grid-row:1}.cx-user-text{max-width:95%}.cx-preview{padding:10px}}
 @media(max-width:620px){.cx-tool{grid-template-columns:20px minmax(0,1fr) auto}.cx-tool-note{grid-column:2 / -1}.cx-tool-time{grid-column:3}}
+/* 内网开关面板（AI 采集助手输入框上方，仅全局管理员可见） */
+.cx-composer>.cx-setup{border-color:var(--rule-soft)}.cx-composer>.cx-setup summary{color:var(--dim)}.cx-composer>.cx-setup summary:hover{color:var(--brand)}
+.cx-setup-form label{color:var(--text)}.cx-setup-note{color:var(--dim)}.cx-setup-form input[type=checkbox]{accent-color:var(--brand)}

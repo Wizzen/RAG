@@ -290,12 +290,21 @@ def run(job_id) -> ConnectorDraft:
 
     @tool
     def set_source_access(url: str,authentication: dict) -> dict:
-        """配置用户在对话中明确提供的来源认证。authentication 支持 none、bearer(token)、api_key(header_name,value)、basic/login(username,password)、headers。凭据加密保存，不返回明文。"""
+        """配置用户在对话中明确提供的来源认证。
+
+        authentication 必须带 type：{"type":"bearer","token":"…"}、
+        {"type":"api_key","header_name":"X-API-Key","value":"…"}、{"type":"basic","username":"…","password":"…"}、
+        {"type":"login","username":"…","password":"…"}（网页表单登录）、{"type":"headers","headers":[{"name":"…","value":"…"}]}、
+        或确认该来源无需凭据时 {"type":"none"}。缺少 type 会直接报错，不会静默按不认证处理。
+        凭据加密保存并与该主机绑定，不返回明文；只能使用用户原话里出现的值。
+        """
         nonlocal browser
-        from .feed_credentials import store,bindings,parse_auth
+        from .feed_credentials import bindings, discard_if_unused, normalize_auth, parse_auth, store
         from .feed_protocol import validate_url
         validate_url(url,allow_fragment=True)
         if origin(url) not in api_origins(job):raise ValueError('认证接收主机必须是用户明确提供的来源地址；请先询问实际URL。')
+        authentication = normalize_auth(authentication)
+        previous_credential = job.credential_id
         _,headers,values=parse_auth(authentication)
         supplied=job.prompt+'\n'+job.feedback
         ancestor=job.parent if job.parent_id else None
@@ -312,8 +321,16 @@ def run(job_id) -> ConnectorDraft:
         progress.secrets=secret_values(job)
         job.prompt=clean(job.prompt);job.feedback=clean(job.feedback)
         job.save(update_fields=['api_url','credential','header_env','prompt','feedback','updated_at'])
+        if previous_credential and job.credential_id != previous_credential:discard_if_unused(previous_credential)
         if browser:browser.close();browser=None
-        return {'saved':True,'authentication':summary(job),'header_env':job.header_env,'url':url}
+        if credential is None and not job.header_env:
+            # 不能只回 saved:True：历史上这里让代理以为密钥已生效，接下来永远只能看到 401。
+            return {'saved':True,'credentials_attached':False,'authentication':summary(job),'header_env':{},'url':url,
+                'note':'本次未保存任何凭据，该来源将按「无认证」访问。若上游需要密钥，请用 '
+                       '{"type":"bearer","token":"…"} 或 {"type":"api_key","header_name":"…","value":"…"} 重新调用（密钥必须出现在用户原话里）；'
+                       '不要把密钥写进 URL 或查询参数。'}
+        return {'saved':True,'credentials_attached':bool(credential or job.header_env),
+            'authentication':summary(job),'header_env':job.header_env,'url':url}
 
     @tool
     def inspect_connector_environment() -> dict:

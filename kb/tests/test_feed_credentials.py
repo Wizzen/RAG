@@ -28,8 +28,8 @@ class CredentialTests(TestCase):
         settings=self.settings(DATA_DIR=Path(self.directory.name));settings.enable();self.addCleanup(settings.disable)
         self.user=get_user_model().objects.create_user('credential-admin',is_staff=True)
         self.client.force_login(self.user)
-        start=patch('kb.connector_views.start_async');self.start=start.start();self.addCleanup(start.stop)
-        publish=patch('kb.connector_views.start_feed');self.publish=publish.start();self.addCleanup(publish.stop)
+        start=patch('kb.collector_api.start_async');self.start=start.start();self.addCleanup(start.stop)
+        publish=patch('kb.collector_api.start_feed');self.publish=publish.start();self.addCleanup(publish.stop)
 
     def post(self,name,data,job=None):
         return self.client.post(reverse('kb:'+name,args=[job.pk] if job else []),json.dumps(data),content_type='application/json',HTTP_X_REQUESTED_WITH='XMLHttpRequest')

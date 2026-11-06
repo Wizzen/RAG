@@ -28,7 +28,8 @@ def read_model_config():
         "model": row.get("llm_model") or settings.LLM_MODEL,
         "temperature": row.get("llm_temperature") if row.get("llm_temperature") is not None else settings.LLM_TEMPERATURE,
         "remote_enabled": bool(row.get("llm_remote_enabled") or row.get("all_remote_apis_enabled")),
-        "max_tokens": min(max(int(settings.LLM_MAX_OUTPUT_TOKENS), 256), 2048),
+        # 与 kb/agent.py 的回答使用同一个输出预算；上限仅防止异常环境变量把子进程无限挂住。
+        "max_tokens": min(max(int(settings.LLM_MAX_OUTPUT_TOKENS), 256), 32768),
     }
     if not cfg["base_url"] or not cfg["model"]:
         raise AnalysisError("请先在站点配置中选择可用的回答模型。", 503)
@@ -58,11 +59,12 @@ def call_model(config, messages):
             [sys.executable, "-s", "-P", str(Path(__file__).with_name("isolated_model_worker.py"))],
             input=json.dumps({"config": config, "messages": messages}, ensure_ascii=False),
             text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            timeout=55, env=environment, check=False,
+            timeout=165, env=environment, check=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise AnalysisError("本次分析超时，请缩小范围后重试。", 504) from exc
-    if result.returncode or len(result.stdout) > 64000:
+    # 16K 输出预算对应约 24000 字（中文近 1 字 1 token）；stdout 上限留出 JSON 与 UTF-8 开销。
+    if result.returncode or len(result.stdout) > 160_000:
         raise AnalysisError("回答模型暂时无法完成分析，请稍后重试。", 503)
     try:
         data = json.loads(result.stdout)
@@ -73,4 +75,4 @@ def call_model(config, messages):
     content = data.get("content")
     if not isinstance(content, str) or not content.strip():
         raise AnalysisError("模型未返回分析内容，请重试。", 502)
-    return content[:16000]
+    return content[:24000]

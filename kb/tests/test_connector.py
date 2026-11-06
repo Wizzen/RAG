@@ -220,7 +220,7 @@ class ConnectorViewsTests(TestCase):
         self.other=get_user_model().objects.create_user('builder-other',is_staff=True)
         self.reader=get_user_model().objects.create_user('builder-reader')
         self.client.force_login(self.user)
-        start=patch('kb.connector_views.start_feed');self.start_feed=start.start();self.addCleanup(start.stop)
+        start=patch('kb.collector_api.start_feed');self.start_feed=start.start();self.addCleanup(start.stop)
 
     def create(self,**data):
         return self.client.post(reverse('kb:connector_create'),json.dumps({'prompt':'从 https://api.example.test/reports 采集温度日报',**data}),content_type='application/json')
@@ -230,11 +230,51 @@ class ConnectorViewsTests(TestCase):
         return job
 
     def test_create_and_reconnect_start_once_with_no_implicit_feed(self):
-        with patch('kb.connector_views.start_async') as start:
+        with patch('kb.collector_api.start_async') as start:
             response=self.create(sample=sample());self.assertEqual(response.status_code,202,response.content)
             job=response.json()['job'];self.assertEqual(self.client.get(job['status_url']).status_code,200)
             self.assertEqual(self.create().status_code,400);self.assertEqual(start.call_count,1)
         self.assertEqual(KnowledgeFeed.objects.count(),0)
+
+    def test_private_switch_requires_global_admin_and_follows_the_conversation(self):
+        """内网地址默认关闭；开启只能由全局管理员完成，并随后续反馈与定时任务延续。"""
+        with patch('kb.collector_api.start_async'):
+            created = self.create(allow_private=True)
+            self.assertEqual(created.status_code, 202, created.content)
+            job = ConnectorDraft.objects.get(pk=created.json()['job']['id'])
+            self.assertTrue(job.allow_private)
+        ConnectorDraft.objects.filter(pk=job.pk).update(status='needs_info')
+        with patch('kb.collector_api.start_async'):
+            reply = self.client.post(reverse('kb:connector_refine', args=[job.pk]),
+                json.dumps({'feedback': '已授权，请重新读取内网接口文档'}), content_type='application/json')
+            self.assertEqual(reply.status_code, 202, reply.content)
+            child = ConnectorDraft.objects.get(pk=reply.json()['job']['id'])
+            self.assertTrue(child.allow_private)
+        ConnectorDraft.objects.filter(pk=child.pk).update(status='needs_info')
+        with patch('kb.collector_api.start_async'):
+            off = self.client.post(reverse('kb:connector_refine', args=[child.pk]),
+                json.dumps({'feedback': '改用公开接口', 'allow_private': False}), content_type='application/json')
+            self.assertEqual(off.status_code, 202, off.content)
+            self.assertFalse(off.json()['job']['allow_private'])
+        from accounts.models import UserProfile
+        dept = get_user_model().objects.create_user('dept-builder')
+        UserProfile.objects.update_or_create(user=dept, defaults={'department': '机械', 'role': UserProfile.Role.DEPT_ADMIN})
+        self.client.force_login(dept)
+        self.assertEqual(self.create(allow_private=True).status_code, 400)
+        with patch('kb.collector_api.start_async'):
+            own = self.create()
+            self.assertEqual(own.status_code, 202, own.content)
+            own_id = own.json()['job']['id']
+        ConnectorDraft.objects.filter(pk=own_id).update(status='needs_info')
+        with patch('kb.collector_api.start_async'):
+            self.assertEqual(self.client.post(reverse('kb:connector_refine', args=[own_id]),
+                json.dumps({'feedback': '开启内网后重试', 'allow_private': True}),
+                content_type='application/json').status_code, 400)
+        page = self.client.get(reverse('kb:connector_builder'))
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, 'connectorPrivate')
+        self.client.force_login(self.user)
+        self.assertContains(self.client.get(reverse('kb:connector_builder')), 'connectorPrivate')
 
     def test_thread_returns_conversation_chain_and_builder_page_renders_chat(self):
         root=ConnectorDraft.objects.create(user=self.user,prompt='原始采集需求',status='failed')

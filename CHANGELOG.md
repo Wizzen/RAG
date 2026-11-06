@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-11-06 — 部署环境：网页采集浏览器与定时调度器
+
+- 浏览器：本机此前只装了 `playwright==1.58.0` 而没装浏览器，`browser_open` 直接报 `Executable doesn't exist at ~/.cache/ms-playwright/chromium_headless_shell-1208`，网页模式采集、登录取数、动态 JSON 抓包全部不可用。已执行 `python -m playwright install chromium`，现在 `chromium-1208` 与 `chromium_headless_shell-1208`（Chromium 145.0.7632.6）就位，无需 `FOS_BROWSER_EXECUTABLE`。RHEL 8.10 上系统依赖已齐（`ldd` 无 `not found`，`install-deps` 不适用于本发行版，无需执行）。验证：`kb.tests.test_connector_browser` 26 项全通过（之前 13 项果环境报错），且用 cron 的最小环境（`env -i HOME=/root PATH=/usr/bin:/bin`）能启动、导航并抽取 DOM，所以调度进程里的网页重放也可用。占用 618 MB（在根分区，非 `/opt`）。
+- 注意：`~/.cache/ms-playwright/chromium-1248` 与 `chromium_headless_shell-1248`（约 676 MB）是隔壁 `/opt/Mechanical_Site` 的 `playwright 1.64.1` 在用，不能删。
+- 调度器：之前**没有任何调度进程**（无 `run_feed_scheduler`，root crontab 也没条目），已启用的数据源因此不会自动更新（天气源逾期两小时）。按文档采用系统 cron（`crond` 已 active+enabled），新增一行：`* * * * * cd /opt/FOS-RAG && /opt/FOS-RAG/.venv/bin/python manage.py sync_feeds --due >> /opt/FOS-RAG/logs/feeds.log 2>&1`（写入前已备份原 crontab 到 `/tmp/root.cron.bak.*`）。`sync_feeds` 也会刷新 `FeedSchedulerState` 心跳，数据源页的调度器状态仍为绿；重叠执行由数据库租约保证。实测：下一个分钟刻即补跑逾期数据源（`trigger=cron`、completed、1 条入库）并把 `next_run_at` 推回整点。
+- 未覆盖：Web 进程本身仍是手动 `nohup` 启动，重启主机后不会自拉起（调度器会）。需要的话可以给 `runserver` 与 `run_feed_scheduler` 各建一个 systemd 单元。
+
+## 2026-11-06 — 定时采集任务抽成通用服务层（页面/命令行共用）
+
+- 背景：「一句话→定时采集任务」的全部规则先前写在 HTTP 视图里（`connector_views.create/refine/enable`），没有进程内函数也没有机器可用的入口；本次先把服务层和命令行做起来（REST 与对话内工具待做）。
+- 新增 `kb/collector_api.py`：`require_manager`、`resolve_private`（内网开关单一判定：缺省沿用上一轮，关→开仅限全局管理员，随时可关）、`build_credential`/`resolve_auth`（结构化认证落库加密，或复用页面已存凭据）、`create_draft`、`refine_draft`、`approve`、`cancel`、`status`、`source_url`。只收普通参数、用 `ValueError` 报错，不接触 `request`/`JsonResponse`。
+- 页面变薄壳：`connector_views.create/refine/enable/cancel` 只保留 HTTP 解参（页面的「复用已存凭据」仍由 `_credentials` 解析）后转调服务层；`enable` 那 60 行建库/部门/cron/凭据搬运/CAS 状态机/首跑全部迁到 `approve`，行为逐字对齐。新增迁移 `0044_connectordraft_created_via`（web/chat/api/cli 审计）。测试的 `start_async`/`start_feed` 补丁点随之改到 `kb.collector_api.*`（否则补丁失效会真开线程）。
+- 命令行：新增 `manage.py build_feed`。`--url/--token-env/--header-env/--kb/--private/--wait/--approve/--no-first-run/--write-mode/--job/--json`；密钥只从环境变量读，不进命令行历史、任务标题与活动日志；默认不批准，`--approve` 才建 cron 数据源并首跑；退出码 0 就绪/已启用、1 失败、2 需补充信息。
+- 凭据静默失败修复（之前导致“API key 不对”的误判）：`kb/feed_credentials.py` 新增 `normalize_auth`——缺 `type` 时只推断形状明确的（`token`→bearer、`username+password`→basic、`headers`→headers），歧义或缺 `type` 一律报错并列出可接受形状，绝不静默当「不认证」（旧行为下 `store()` 返回 None 但工具仍回 `saved:True`，凭据从未存上，后续每次请求都 401）。`set_source_access` 现在返回 `credentials_attached` 与补救提示，并在替换凭据时清理旧密文；工具文档写明必须带 `type` 的形状。
+- 建任务时先落库凭据再脱敏需求文本，用户粘的密钥在服务层就被换成 `[REDACTED]`，模型改用 `request_headers()` 取用，不会拹进 URL。
+- 测试：新增 `kb/tests/test_collector_api.py`（18 项：认证形状推断/拒绝、结构化 bearer 入库+脱敏+入口标记、内网开关权限、部门管理员可用页面凭据、批准幂等与未校验拒绝、网页未完整验证拒绝、refine 延续凭据/开关/入口、build_feed 三条路径）；`kb/tests/test_connector_chat_regressions.py` 新增两项（缺 `type` 不假报 saved、`type=none` 必须告知未绑定凭据）。相关套件 189 项通过（仅 `test_connector_browser` 13 项因本机未装 Chromium 报错，与本次无关）。
+
+## 2026-11-06 — 回答输出预算提到 16K（问答与分析报告）
+
+- 现象：AI 助手长回答（表格、多引用）写到一半停住，界面报「模型输出被截断，回答未完成」（`kb/agent.py:1412-1416`，`finish_reason=length`）。预算来自 `fos_rag/settings.py:21` 的 `LLM_MAX_OUTPUT_TOKENS`，默认 **2048**，站点配置页没有这个字段（`SiteConfig` 只有 Base URL/Key/模型/温度/远程开关）；当前回答模型 `swift-1.5-iq3_xxs` 是思考型模型，思维链也计入输出预算，2048 里大半被思考吃掉。实测该服务接受 `max_tokens` 到 32768。
+- 配置：`.env` 写入 `LLM_MAX_OUTPUT_TOKENS=16384`，同时把 `QA_TURN_TIMEOUT` 提到 600 秒（`kb/views.py:1313` 用它包住整轮问答，16K 输出加多轮工具会先撞上原来的 240 秒）。`.env.example` 与 `docs/quality-upgrade.md` 同步说明，默认值仍为 2048，不改代码的部署行为不变。
+- 分析报告：`fos_rag/isolated_model.py` 原先把隔离分析进程的 `max_tokens` 硬夹在 256–2048，光调环境变量对它无效；上限提到 32768（保留边界，防止异常取值把子进程挂死）。子进程 `timeout` 55→165 秒、worker 内 `httpx` 读超时 45→150 秒（先于子进程结束以便返回可读错误），stdout 上限 64000→160000 字节，答案字符上限 16000→24000（两处保持一致）——否则 16K 预算只意味着「一定超时」。
+- 核实器：`kb/qa_steps.py` 的 `_VERIFY_MAX_TOKENS` 2500→**8000**。光改这一个数不会生效：`build_llm` 自己的 `ChatOpenAI(timeout=45)` 与 `verify_answer` 的 `asyncio.wait_for(..., 45)` 会先在 45 秒掉断，而 `verify_answer` 的任何异常都 `return None` → `kb/agent.py:1508` 直接**拒绝发布草稿**（比 `finish_reason=length` 更隐蔽）。现在 `build_llm(llm_cfg, timeout=…)` 可按步骤传超时：核实用 `_VERIFY_HTTP_TIMEOUT=140`（HTTP 层）+ `_VERIFY_TIMEOUT=150`（asyncio 层，略宽，让网络错误先带回可读原因），问题规划仍用默认 45 秒（它的 `wait_for` 仍是 25 秒）。实测核实器输出本身就是小 JSON（15015 字长回答只用 763 tokens，16k 输入只用 188 tokens），所以 8000 是安全余量而不是新瓶颈；`max_tokens` 是上限不是目标，不会因此变慢。长回答真正碰到的限制是 `verify_answer` 开头的 `len(answer) > 16000` 字闸门（实测 15900 字正常核实、16100 字直接不调用模型并阻止发布）。
+- 不变：图谱抽取仍用自己的 32768（`kb/graph_extraction.py:26`）、AI 采集助手 8192（`kb/connector_agent.py:443`）、检索计划 1000（`kb/qa_steps.py:23`）、站点配置「测试」64；需重启 `runserver` 才生效（`--noreload`，settings 只在导入时读一次）。
+
+## 2026-11-06 — AI 采集助手可用内网接口（仅全局管理员）
+
+- 症状：让 AI 采集助手读取内网接口（例如 `http://10.134.30.57:8000/api/v1/docs/`）时，`read_api_documentation` 与 `probe_api` 连着报「API 指向受限网络地址；内网服务需由全局管理员明确启用」，任务停在 `needs_info`，还把这句话当成问题丢回对话。原因不是缺白名单：`kb/feed_http.py` 的 SSRF 防护按**单个任务**的 `allow_private` 放行内网地址，而 AI 对话页只提交 `{prompt}`／`{feedback}`，从不带这个开关，于是即便账号是超级管理员，草稿里也永远是 `allow_private=False`；唯一的勾选框只在数据源表单上，那条路径只写 `KnowledgeFeed`，碰不到 AI 草稿。
+- 页面：`templates/kb/connector.html` 在输入框上方加「内网配置（仅全局管理员）」折叠面板与「允许访问内网或本机 API」勾选框（`index` 已下发 `is_global_admin`，非管理员不渲染）。`static/js/connector.js` 发送时透传 `allow_private`，并在打开对话／新建任务时与任务状态同步；若消息里出现 10.x、192.168.x、172.16-31.x、127.0.0.1 之类的地址而开关未开，直接给出可操作的提示并展开面板，不再空跑五轮工具。资源版本号升到 `connector.js?v=12`／`connector_chat.css?v=7`。
+- 服务器：`kb/connector_views.py` 的 `refine` 接受 `allow_private`，默认沿用上一轮（编辑内网数据源的对话照常继续），把开关从关改开仍需全局管理员，随时可以关掉。凭据、批准后写入 `KnowledgeFeed` 与后续 cron 的传递链沿用原逻辑，`kb/feed_http.py` 的防护一行未改：链路本地／元数据、组播与未指定地址仍一律拒绝，DNS 仍逐次校验并固定，TLS 主机名校验保留。
+- 测试：`kb/tests/test_connector.py` 新增用例覆盖开关仅全局管理员可开、随对话延续、可随时关闭，以及页面对部门管理员不渲染该开关。
+
+## 2026-11-06 — PDF 解析支持 MinerU 4.1.x（Tasks API）
+
+- 协议适配：`kb/pipeline.py` 按 `/v1/health`（其次 `/v1/models` 的 `mineru-<version>` 虚拟模型）报告的版本号自动选择解析协议，结果缓存在本机 5 分钟。4.0.x 仍走原 File API（`/v1/file_parse` + `/v1/uploads` 三步 + `/v1/tasks/{id}/result`）；4.1.x 改走 Tasks API：`POST /v1/tasks` 声明文件（`output_formats:["default"]`）→ `PUT` 响应给出的上传链接传字节 → `GET /v1/tasks/{id}` 轮询 → 下载 `files[].result_url` 指向的 `result.zip`，取其中的 `markdown.md` 与 `structured_content.json`。4.1 删掉了 inline 通道与 `/v1/uploads*`，`output_formats` 也不再接受 `markdown`/`structured_content`，因此必须在传输层分叉。
+- 产物归一：两种协议的结果统一交给 `_mineru_finalize`。插图既支持 4.0 的内联 data URL，也支持 4.1 结果包里的 `images/*` 成员，一律改写为 `images/<内容哈希>.<扩展名>` 并登记；`structured_content` 的 pages→blocks 仍换算为 0-1000 bbox，chunk 溯源与 PDF 红圈定位不受影响，下游无需改动。
+- 档位与租约：4.1 的请求档位对照 `/v1/tiers` 发布的能力，配置里写死的档位不可用时按 standard→basic→flash→advanced 退让；建任务、上传与查询均带 `X-MinerU-Task-Lease-Seconds: 3600`，避免大文件解析或慢下载期间结果被服务端回收。
+- 设置页：修好 MinerU「测试」。旧探测请求的是根 `/health`，而 `mineru-api` 从 4.0 起只有 `/v1/health`，真机上一律报「健康端点异常」；现在读 `/v1/health`（其次 `/v1/models`）的版本号并回报将要使用的协议（例如「MinerU 4.1.7 可达，PDF 将按 Tasks API（4.1） 解析」），鉴权失败会提示补 API Key；只响应根 `/health` 的 3.x 服务直接判为不支持并给出升级提示，读不到版本号则算连通但给出提醒。编辑框补上档位取值与「语言已废弃」说明，配置卡片改显示「自动识别 4.0 / 4.1」。`start_all.bat` 里残留的 `/health` 提示地址一并修正（它等待的一直是正确的 `/v1/health`）。
+- 依赖：`requirements.txt` 升到 `mineru[torch]==4.1.7`；`pyproject.toml` 里遗留的 `mineru==3.4.5`（3.x 的表单接口在 4.0 就被移除）同步修正。解析服务仍可用 `mineru-api` 单独部署在其他机器，本应用不依赖它的 Python 包。
+- 测试：新增 `kb/tests/test_mineru_protocol.py`（`httpx.MockTransport` 全离线）覆盖版本探测与缓存、未来版本按 Tasks API 处理、4.1 完整流程（声明→上传→轮询→下载 zip、任务失败、坏包、缺 `result_url`、档位退让、旧 backend 映射）、4.0 的 inline 与大文件 uploads 三步、3.x 拒绝与探针报告。`kb/tests/test_local_ai_config.py` 的 OCR 测试改为断言协议探测结果。
+
 ## 2026-11-04 — 运维工作台：Downtime 统计图表与联动
 
 - 图表库：本地放置 Apache ECharts 5.6.0（npm `echarts@5.6.0` 官方 `dist/echarts.esm.min.mjs`，完整性校验通过，SHA-256 记在 `vendor/ATTRIBUTION.txt`），只在 Downtime 结果含统计时按需载入；不使用 CDN。

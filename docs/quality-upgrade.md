@@ -13,9 +13,9 @@ No automatic corpus reparse or destructive index rebuild is performed. Existing 
 | Variable | Default | Purpose |
 |---|---|---|
 | `EMBEDDING_BATCH_SIZE` | `16` | Between 1 and 32 texts per embedding call |
-| `LLM_MAX_OUTPUT_TOKENS` | `2048` | Output budget; truncated results are explicitly incomplete |
+| `LLM_MAX_OUTPUT_TOKENS` | `2048` (this deployment: `16384`) | Output budget shared by the QA agent and the report-analysis worker; truncated results are explicitly incomplete. Reasoning models spend part of it on the chain of thought, so 2048 cuts long answers. The isolated worker accepts 256-32768 and answers are capped at 24,000 characters |
 | `LLM_EXTRA_BODY` | `{}` | Optional engine-specific JSON request fields |
-| `QA_TURN_TIMEOUT` | `240` | Whole-turn timeout in seconds |
+| `QA_TURN_TIMEOUT` | `240` (this deployment: `600`) | Whole-turn timeout in seconds; raise it together with the output budget |
 | `FOS_LOCAL_ONLY` | `0` | Opt-in Python outbound restriction and browser CSP |
 | `PYODIDE_INDEX_URL` | Local path in local-only mode, otherwise CDN | Asset base URL |
 

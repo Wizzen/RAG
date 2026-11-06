@@ -44,10 +44,32 @@ def _cipher(*, create: bool = False) -> Fernet:
     raise ValueError('凭据加密密钥不可用，请恢复部署备份中的密钥文件。')
 
 
+# 调用方（尤其是本地模型）经常省略 type：只有一种含义明确时才推断，否则报错，
+# 绝不静默按「不认证」处理——那会导凭据从未保存而后续每次请求都 401。
+INFER = {'token': 'bearer', 'value': 'api_key', 'header_name': 'api_key',
+         'username': 'basic', 'password': 'basic', 'headers': 'headers'}
+AUTH_HELP = ('请明确给出 type：none / bearer(token) / api_key(header_name,value) / '
+             'basic(username,password) / login(username,password) / headers([{name,value}])。')
+
+
+def normalize_auth(auth: dict) -> dict:
+    """补全缺失的 `type`；歧义结构直接报错，不猜。空字典＝显式不认证（页面默认）。"""
+    kind = auth.get('type', None)
+    if kind is not None and kind != '':
+        return auth
+    if not auth:
+        return {'type': 'none'}
+    guesses = {INFER[key] for key in auth if key in INFER}
+    if len(guesses) != 1:
+        raise ValueError('认证配置缺少 type，且无法安全推断，不会按「不认证」处理。' + AUTH_HELP)
+    return {**auth, 'type': guesses.pop()}
+
+
 def parse_auth(auth: dict) -> tuple[str,dict,list[str]]:
     """将易读表单转换为请求头，并拒绝控制字符、重复头与连接头覆盖。"""
     from .feed_http import validate_headers
     if not isinstance(auth,dict): raise ValueError('认证配置格式无效。')
+    auth = normalize_auth(auth)
     kind = auth.get('type','none')
     def value(key: str, label: str) -> str:
         result = auth.get(key,'')

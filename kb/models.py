@@ -837,6 +837,8 @@ class ConnectorDraft(models.Model):
     metrics = models.JSONField(default=dict, blank=True)
     browser_state = models.JSONField('浏览器取数状态', default=dict, blank=True)
     retain_context = models.BooleanField('随定时任务保留对话', default=False)
+    created_via = models.CharField('创建入口', max_length=10, default='web', choices=[
+        ('web', '采集助手页面'), ('chat', 'AI 助手对话'), ('api', '外部接口'), ('cli', '命令行')])
     context_snapshot = models.TextField('加密代理上下文', blank=True)
     error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

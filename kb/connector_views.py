@@ -19,16 +19,14 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST,require_GET
 
-from . import access
-from .connector_agent import MAX_CALLS, MAX_TOOLS, MAX_SECONDS, authorize, recover_stale, start_async
+from . import access, collector_api
+from .connector_agent import MAX_CALLS, MAX_TOOLS, MAX_SECONDS, authorize, recover_stale
 from .connector_tools import check_spec, redact
-from .feed_cron import CronSchedule
-from .feed_http import validate_headers
 from .feed_credentials import api_origin, bindings, discard_if_unused, parse_auth, request_headers, secret_values, store, summary
+from .feed_http import validate_headers
 from .feed_protocol import validate_url
 from .feed_views import _managed
-from .feeds import claim as claim_feed, start_async as start_feed
-from .models import ConnectorDraft, DEPARTMENT_GENERAL, KnowledgeBase, KnowledgeFeed
+from .models import ConnectorDraft, KnowledgeBase, KnowledgeFeed
 
 
 def _job(request, job_id):
@@ -186,29 +184,17 @@ def forget(request):
 @login_required
 @require_POST
 def create(request):
+    """HTTP 外壳：解析页面入参（含页面的「复用已存凭据」）后交给服务层。"""
     libraries = _managed(request.user)
     try:
-        recover_stale()
-        if ConnectorDraft.objects.filter(user=request.user,status='running').exists(): raise ValueError('已有生成任务正在运行，请等待完成。')
         data = json.loads(request.body)
-        prompt = data.get('prompt','').strip()
-        if not 10<=len(prompt)<=10000: raise ValueError('请用10至10000字符说明数据来源、采集内容与更新频率。')
-        url = data.get('api_url','').strip()
+        url = (data.get('api_url') or '').strip()
         if url: validate_url(url,allow_fragment=True)
-        private = data.get('allow_private',False)
-        if not isinstance(private,bool): raise ValueError('内网开关格式无效。')
-        if private and not access.is_global_admin(request.user): raise ValueError('内网服务须由全局管理员启用。')
-        sample = data.get('sample')
-        if sample is not None and len(json.dumps(sample,ensure_ascii=False,allow_nan=False))>40000: raise ValueError('请提供不超过40000字符的脱敏 JSON 样例。')
         kb = get_object_or_404(libraries,slug=data['kb']) if data.get('kb') else None
-        with transaction.atomic():
-            credential,headers=_credentials(request,data,url)
-            if headers and not url: raise ValueError('请在「实际 API 地址」填写接收凭据的接口地址。')
-            holder=type('Auth',(),{'credential':credential,'header_env':headers})()
-            secrets=secret_values(holder)
-            job = ConnectorDraft.objects.create(user=request.user,kb=kb,prompt=redact(prompt,secrets),api_url=url,
-                credential=credential,header_env=headers,allow_private=private,sample=redact(sample,secrets))
-        start_async(job.pk)
+        credential,headers=_credentials(request,data,url)
+        job = collector_api.create_draft(user=request.user,requirement=data.get('prompt',''),api_url=url,
+            credential=credential,header_env=headers,allow_private=data.get('allow_private',False),
+            sample=data.get('sample'),kb=kb,created_via='web')
         return JsonResponse({'ok':True,'job':_json(job)},status=202)
     except RequestDataTooBig: return JsonResponse({'ok':False,'error':'请求内容过大。'},status=413)
     except (ValueError,TypeError,AttributeError) as exc: return JsonResponse({'ok':False,'error':str(exc)},status=400)
@@ -274,52 +260,13 @@ def browser_preview(request,job_id):
 @login_required
 @require_POST
 def enable(request,job_id):
+    """确认入库：建/更新定时数据源并立即首跑；规则在 `collector_api.approve`。"""
     try:
-        with transaction.atomic():
-            # 写入状态先获取数据库写锁，使重复点击返回同一数据源。
-            job = _job(request,job_id)
-            if job.status=='enabled' and job.feed_id: return JsonResponse({'ok':True,'feed_id':str(job.feed_id),'url':reverse('kb:feeds')})
-            if job.status!='ready': raise ValueError('请先完成连接器生成和样例校验。')
-            changed = ConnectorDraft.objects.filter(pk=job.pk,status='ready',feed__isnull=True).update(status='enabling')
-            if not changed: raise ValueError('连接器正在启用，请稍后查看。')
-            spec = check_spec(job,job.spec)
-            if spec.get('source_type')=='browser' and (not job.browser_state.get('tested') or job.browser_state.get('validation_scope')!='full_batch'):raise ValueError('网页脚本尚未通过完整批次验证，请继续对话重新验证后确认。')
-            data = json.loads(request.body or b'{}')
-            write_mode=data.get('write_mode',spec.get('write_mode','append'))
-            if write_mode not in ('append','upsert'):raise ValueError('请选择追加保留历史或覆盖更新。')
-            spec={**spec,'write_mode':write_mode}
-            kb = job.kb
-            if kb is None:
-                department = data.get('department',DEPARTMENT_GENERAL) if access.is_global_admin(request.user) else access.user_department(request.user)
-                if department not in access.all_departments(): raise ValueError('请选择已有部门。')
-                kb = KnowledgeBase.objects.create(name=spec['name'],slug='auto-'+uuid.uuid4().hex[:20],is_folder=True,category='business',
-                    description='由采集脚本自动更新的业务数据',department=department,created_by=request.user)
-            cron = spec.get('cron','0 * * * *');zone = spec.get('timezone','Asia/Shanghai')
-            ancestor=job.parent if job.parent_id else None;existing=None;seen=set()
-            while ancestor and ancestor.pk not in seen and len(seen)<100:
-                seen.add(ancestor.pk)
-                if ancestor.user_id!=request.user.pk:raise ValueError('原任务不属于当前用户。')
-                if ancestor.feed_id:existing=ancestor.feed;break
-                ancestor=ancestor.parent
-            if existing:
-                if existing.kb_id!=kb.pk or not access.can_manage_kb(request.user,kb):raise ValueError('原数据源所属知识库已变化，请重新建立任务。')
-                if existing.lease_token and existing.lease_until and existing.lease_until>timezone.now():raise ValueError('原数据源正在更新，请完成后再批准新脚本。')
-                feed=existing;feed.name=spec['name'];feed.url=spec['url'];feed.mode='pull';feed.adapter_spec=spec;feed.write_mode=write_mode
-                feed.credential=job.credential;feed.header_env=job.header_env;feed.allow_private=job.allow_private
-                feed.cron=cron;feed.timezone=zone;feed.enabled=True;feed.cursor='';feed.etag=''
-                feed.next_run_at=CronSchedule(cron,zone).next_after(timezone.now())
-                feed.save(update_fields=['name','url','mode','write_mode','adapter_spec','credential','header_env','allow_private','cron','timezone','enabled','cursor','etag','next_run_at','updated_at'])
-            else:
-                feed = KnowledgeFeed.objects.create(kb=kb,name=spec['name'],url=spec['url'],mode='pull',write_mode=write_mode,adapter_spec=spec,
-                    credential=job.credential,header_env=job.header_env,allow_private=job.allow_private,cron=cron,timezone=zone,created_by=request.user,
-                    next_run_at=CronSchedule(cron,zone).next_after(timezone.now()))
-            job.kb=kb;job.feed=feed;job.status='enabled';job.spec=spec
-            job.save(update_fields=['kb','feed','status','spec','updated_at'])
-            from .connector_storage import retain_chain
-            retain_chain(job)
-            run,_=claim_feed(feed.pk,trigger='manual',force=True)
-        start_feed(run.pk)
-        return JsonResponse({'ok':True,'feed_id':str(feed.pk),'url':reverse('kb:feeds')+'?kb='+kb.slug})
+        job=_job(request,job_id)
+        data=json.loads(request.body or b'{}')
+        feed=collector_api.approve(user=request.user,job=job,write_mode=data.get('write_mode'),
+            department=data.get('department'))
+        return JsonResponse({'ok':True,'feed_id':str(feed.pk),'url':reverse('kb:feeds')+'?kb='+feed.kb.slug})
     except (ValueError,TypeError,AttributeError) as exc: return JsonResponse({'ok':False,'error':str(exc)},status=400)
 
 
@@ -375,46 +322,26 @@ def test_auth(request):
 @login_required
 @require_POST
 def cancel(request,job_id):
-    job=_job(request,job_id)
-    ConnectorDraft.objects.filter(pk=job.pk,status='running').update(status='cancelled',error='用户已停止生成。',updated_at=timezone.now())
-    job.refresh_from_db()
+    job=collector_api.cancel(user=request.user,job=_job(request,job_id))
     return JsonResponse({'ok':True,'job':_json(job)})
 
 
 @login_required
 @require_POST
 def refine(request,job_id):
-    """按自然语言反馈生成新候选；沿用已保存的凭据，持续等待用户明确批准。"""
+    """HTTP 外壳：页面可以先解析已存凭据（「saved」），其余规则在 `collector_api.refine_draft`。"""
     try:
         previous=_job(request,job_id)
-        if previous.status not in ('ready','needs_info','failed','cancelled','enabled'):
-            raise ValueError('请等待当前预览完成后再调整；已启用的数据源请在数据源页面管理。')
-        if ConnectorDraft.objects.filter(user=request.user,status='running').exists():raise ValueError('已有预览正在生成，请等待或停止后重试。')
-        data=json.loads(request.body);feedback=data.get('feedback','').strip() or '请使用最新的网页与 API 采集工具，按原始需求重新读取真实数据并生成预览。'
-        if not 1<=len(feedback)<=4000:raise ValueError('请用1至4000字符回答问题或说明修改要求。')
-        with transaction.atomic():
-            known=previous;known_url='';seen=set()
-            while known and known.pk not in seen and len(seen)<100:
-                seen.add(known.pk);known_url=known.api_url or known.spec.get('url','')
-                if known_url:break
-                known=known.parent
-            url=data.get('api_url',known_url or previous.api_url)
-            if url:validate_url(url,allow_fragment=True)
+        data=json.loads(request.body)
+        extra={}
+        if 'api_url' in data or 'authentication' in data:
+            url=data.get('api_url') or collector_api.source_url(previous) or previous.api_url
+            if url: validate_url(url,allow_fragment=True)
+            extra['api_url']=url
             if 'authentication' in data:
-                credential,headers=_credentials(request,{**data,'credential_job':str(previous.pk)},url)
-            else:
-                credential,headers=previous.credential,previous.header_env
-                if credential and api_origin(url)!=credential.api_origin:raise ValueError('API 主机已改变，请在认证表单重新填写凭据。')
-            holder=type('Auth',(),{'credential':credential,'header_env':headers})()
-            feedback=redact(feedback,(*secret_values(previous),*secret_values(holder)))
-            if previous.status=='enabled':
-                if not previous.feed_id:raise ValueError('原数据源已被删除，请创建新任务。')
-                if not ConnectorDraft.objects.filter(pk=previous.pk,status='enabled').update(updated_at=timezone.now()):raise ValueError('该对话上下文已清空，请重新打开数据源继续修改。')
-            elif not ConnectorDraft.objects.filter(pk=previous.pk,status__in=['ready','needs_info','failed','cancelled'],feed__isnull=True).update(status='revised',updated_at=timezone.now()):raise ValueError('该预览已被更新或启用，请查看最新任务。')
-            job=ConnectorDraft.objects.create(user=request.user,kb=previous.kb,parent=previous,feedback=feedback,
-                prompt=previous.prompt,api_url=url,header_env=headers,credential=credential,
-                allow_private=previous.allow_private,sample=previous.sample,retain_context=previous.retain_context or bool(previous.feed_id))
-        start_async(job.pk)
+                extra['credential'],extra['header_env']=_credentials(request,{**data,'credential_job':str(previous.pk)},url)
+        job=collector_api.refine_draft(user=request.user,job=previous,requirement=data.get('feedback',''),
+            allow_private=data.get('allow_private'),**extra)
         return JsonResponse({'ok':True,'job':_json(job)},status=202)
     except (ValueError,TypeError,AttributeError) as exc:return JsonResponse({'ok':False,'error':str(exc)},status=400)
 
