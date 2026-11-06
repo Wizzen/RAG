@@ -50,3 +50,6 @@ blobs/
 tools/
 watch_doc.py
 watch_ocr.py
+
+# ── 演示截图与幻灯片导出（不入库，本地保留）──
+presentation/
