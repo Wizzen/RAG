@@ -110,7 +110,7 @@
     <div class="cfg-row">
       <div class="cfg-left">
         <div class="cfg-cat">MinerU OCR</div>
-        <div class="cfg-model">{{ eff.mineru.backend|default:"pipeline" }} · {{ eff.mineru.lang|default:"ch" }}
+        <div class="cfg-model">{{ eff.mineru.backend|default:"pipeline" }} · 自动识别 4.0 / 4.1
           <span class="cfg-sub">{{ eff.mineru.api_base|default:"（无地址）" }}</span></div>
       </div>
       <div class="cfg-right">
@@ -246,10 +246,14 @@ const CAT_FIELDS = {
   mineru: {
     title: '编辑 MinerU OCR 配置',
     fields: [
-      {name:'mineru_api_base', label:'API Base', type:'text', key:['mineru','api_base']},
-      {name:'mineru_api_key', label:'API Key', type:'password', key:['mineru','api_key']},
-      {name:'mineru_backend', label:'Backend', type:'text', key:['mineru','backend']},
-      {name:'mineru_lang', label:'语言', type:'text', key:['mineru','lang']},
+      {name:'mineru_api_base', label:'API Base', type:'text', key:['mineru','api_base'],
+        hint:'服务根地址，如 http://127.0.0.1:8888。支持 MinerU 4.0.x（File API）与 4.1.x（Tasks API），按版本号自动识别'},
+      {name:'mineru_api_key', label:'API Key', type:'password', key:['mineru','api_key'],
+        hint:'服务未开鉴权时留空'},
+      {name:'mineru_backend', label:'Backend', type:'text', key:['mineru','backend'],
+        hint:'解析档位 flash / basic / standard / advanced，留空为 standard；旧值 pipeline→standard、vlm→flash'},
+      {name:'mineru_lang', label:'语言', type:'text', key:['mineru','lang'],
+        hint:'已废弃：4.x 不再接收语言参数，留空即可'},
     ],
   },
 };

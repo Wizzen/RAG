@@ -1,0 +1,23 @@
+Django==6.0.6
+daphne==4.2.2
+python-dotenv==1.2.1
+httpx==0.28.1
+cryptography==50.0.0  # 页面凭据加密；复用现有运行环境
+playwright==1.58.0  # 动态网页采集和浏览器步骤重放
+langchain==1.3.9
+langchain-openai==1.3.2
+langchain-chroma==0.2.6
+langchain-text-splitters==1.1.1
+langgraph==1.2.5
+langgraph-checkpoint-sqlite==3.1.1
+chromadb==1.5.9
+aiosqlite==0.22.1
+openai==2.42.0
+openpyxl==3.1.5
+Pillow==12.3.0  # 照片直传处理 + 视觉模式附图缩边
+pymupdf==1.28.2  # 证据面板：渲染原 PDF 页（chunk 级定位红圈）
+nh3==0.3.7  # md2html 原始 HTML 块白名单消毒（XSS）
+
+# 运维数据工作台的中英文工单与作业计划 PDF
+-r operations_workbench/requirements.txt
+reportlab>=4.2.5,<6

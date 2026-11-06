@@ -116,11 +116,22 @@ class LocalAIConfigurationTests(TransactionTestCase):
         self.assertIsNone(result["ok"])
         self.assertIn("actual-loaded-model",result["detail"])
 
-    @patch("httpx.get")
-    def test_ocr_health_is_success(self, get):
-        get.return_value.status_code=200
+    @patch("kb.pipeline.mineru_probe", return_value={
+        "ok": True, "status": 200, "version": "4.1.7", "protocol": "tasks",
+        "detail": "MinerU 4.1.7 可达，PDF 将按 Tasks API（4.1） 解析。"})
+    def test_ocr_probe_reports_protocol(self, probe):
         result=self.client.post(reverse("kb:settings_test"), {"target":"mineru"}).json()["results"]["mineru"]
         self.assertTrue(result["ok"])
+        self.assertEqual(result["version"], "4.1.7")
+        self.assertIn("4.1.7", result["detail"])
+        probe.assert_called_once()
+
+    @patch("kb.pipeline.mineru_probe", return_value={
+        "ok": False, "status": 200, "detail": "MinerU 3.1.5 不受支持：需要 4.0.x 或 4.1.x。"})
+    def test_ocr_probe_rejects_unsupported_version(self, probe):
+        result=self.client.post(reverse("kb:settings_test"), {"target":"mineru"}).json()["results"]["mineru"]
+        self.assertFalse(result["ok"])
+        self.assertIn("不受支持", result["detail"])
 
     def test_all_button_and_invalid_target(self):
         self.assertContains(self.client.get(reverse("kb:settings")), 'data-test="all"')

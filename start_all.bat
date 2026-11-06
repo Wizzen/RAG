@@ -17,7 +17,7 @@ set "PIP_CACHE_DIR=%USERPROFILE%\.cache\pip"
 echo ============================================================
 echo   FOS-RAG Local Deployment
 echo   RAG:     http://127.0.0.1:8000/
-echo   MinerU:  http://127.0.0.1:8888/health
+echo   MinerU:  http://127.0.0.1:8888/v1/health
 echo ============================================================
 echo.
 
@@ -116,7 +116,7 @@ echo.
 echo ============================================================
 echo   Deployment succeeded
 echo   FOS-RAG:  http://127.0.0.1:8000/
-echo   MinerU:   http://127.0.0.1:8888/health
+echo   MinerU:   http://127.0.0.1:8888/v1/health
 echo.
 echo   Service windows are minimized. Keep them open while using FOS-RAG.
 echo ============================================================

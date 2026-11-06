@@ -2075,12 +2075,10 @@ def settings_test(request):
             return {"ok": False, "status": status, "detail": "调用失败：" + str(e)[:160]}
 
     def _ping_mineru(base_url, api_key):
-        try:
-            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-            r = httpx.get(base_url.rstrip("/") + "/health", headers=headers, timeout=8)
-            return {"ok": r.status_code == 200, "status": r.status_code, "detail": "健康端点可达（按健康检查判定 OK）。" if r.status_code == 200 else "健康端点异常"}
-        except Exception as e:
-            return {"ok": False, "status": None, "detail": "连接失败：" + str(e)[:100]}
+        # 只探根 /health 不够：3.x 也有 /health，却撑不起 4.x 的解析协议。
+        # 读服务端版本号，顺带把将要使用的协议（4.0 File API / 4.1 Tasks API）报出来。
+        from .pipeline import mineru_probe
+        return mineru_probe(base_url, api_key)
 
     llm = cfg_mod.llm_settings()
     emb = cfg_mod.embedding_settings()
