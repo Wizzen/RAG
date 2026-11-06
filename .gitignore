@@ -12,12 +12,16 @@ media/
 logs/
 staticfiles/
 static/vendor/pyodide/
+static/pyodide/
 *.sqlite3
 output/
 .workbuddy/
 
 # ── 真实文档（客户机密，不上传）──
 pdf files/
+
+# ── 演示文稿（体积大，不入库；本地保留）──
+*.pptx
 
 # ── IDE 内部文件 ──
 .zcode/

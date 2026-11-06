@@ -33,6 +33,35 @@ python manage.py runserver 127.0.0.1:8000 --noreload
 
 Windows 可在准备好 Python 3.13 和本机配置后运行 [start_all.bat](start_all.bat)。脚本准备虚拟环境、迁移数据库、收集静态文件并启动 MinerU 与网站。首次建管理员账号可在项目目录运行 `.venv\Scripts\python.exe manage.py createsuperuser`。从旧版升级时，先执行 `.venv\Scripts\python.exe -m pip install -r requirements.txt` 更新依赖；PDF 解析服务用 MinerU 4.0.12 或 4.1.x 均可，两者协议不同，由应用自动识别。回答模型、向量服务和定时采集器各自配置、启动。
 
+**仓库不包含的文件。** 为控制仓库体积，以下内容不在 Git 内，拉取后按需自取：
+
+- **Pyodide 浏览器端 Python 运行时（`static/pyodide/`）。** 不下载也不影响启动：页面默认从 jsDelivr CDN 加载（`PYODIDE_INDEX_URL` 默认值）。内网或离线部署才需要本地副本——在项目根目录执行以下命令下载到 `static/pyodide/`，并在 `.env` 设置 `PYODIDE_INDEX_URL=/static/pyodide/`：
+
+  ```sh
+  mkdir -p static/pyodide && cd static/pyodide
+  base=https://cdn.jsdelivr.net/pyodide/v0.26.4/full
+  for f in pyodide.js pyodide.asm.js pyodide.asm.wasm python_stdlib.zip pyodide-lock.json \
+           numpy-1.26.4-cp312-cp312-pyodide_2024_0_wasm32.whl \
+           pandas-2.2.0-cp312-cp312-pyodide_2024_0_wasm32.whl \
+           matplotlib-3.5.2-cp312-cp312-pyodide_2024_0_wasm32.whl \
+           matplotlib_pyodide-0.2.2-py3-none-any.whl \
+           pillow-10.2.0-cp312-cp312-pyodide_2024_0_wasm32.whl \
+           openpyxl-3.1.5-py2.py3-none-any.whl \
+           et_xmlfile-2.0.0-py3-none-any.whl \
+           fonttools-4.51.0-py3-none-any.whl \
+           kiwisolver-1.4.5-cp312-cp312-pyodide_2024_0_wasm32.whl \
+           cycler-0.12.1-py3-none-any.whl \
+           pyparsing-3.1.2-py3-none-any.whl \
+           packaging-23.2-py3-none-any.whl \
+           python_dateutil-2.9.0.post0-py2.py3-none-any.whl \
+           six-1.16.0-py2.py3-none-any.whl \
+           pytz-2024.1-py2.py3-none-any.whl; do
+    curl -fLO "$base/$f"
+  done
+  ```
+
+- **演示幻灯片（`*.pptx`）。** 项目介绍 PPT 体积较大，不入库；需要演示时将文件放到项目根目录即可，`.gitignore` 已忽略。
+
 **第一次验证**可以只用一份 UTF-8 文本。建一个名为「培训样例」的通用手册库，把“演示部件 DEMO-01 的资料存放在蓝色登记册。”保存成 `登记说明.txt` 并上传。文档显示「已完成」后，打开「AI 助手」问“培训样例的 DEMO-01 资料存放在哪里？”，点引用核对文件名和原句。这一步能验证上传、索引、问答和引用。随后用一份有已知页码的 PDF 验证 OCR 和页内定位。
 
 ## 账号与权限
