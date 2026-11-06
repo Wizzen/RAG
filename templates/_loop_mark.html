@@ -1,0 +1,325 @@
+{% comment %}
+循环剧场 · 米奇头文字环 —— 项目 logo（首页 / 登录 / 注册 / 登出共用同一引擎）。
+用法：{% include "_loop_mark.html" %}（默认），或 with mark_class="xxx" 附加尺寸类；
+外层 .loop-mark 只负责居中，尺寸由各页 CSS 指定（如 .home-mark svg / .auth-mark svg）。
+
+时间线（单一 rAF 时钟，环/双子/星尘全程不停）：
+  聚合 → 常驻 → 溃散 → 尘云漂移 → 聚合 …
+一道“风前沿”沿 WIND 方向扫过整个标志：溃散时前沿经过处，所有元素（字符、底环、墨晕、
+双子、星尘）经遮罩淡出并化为各自的尘粒卷曲飘离；聚合时尘粒沿原路回流、元素随之显形。
+每个阶段的末态即下一阶段的初态，因此相位切换无停顿、无跳变。
+{% endcomment %}
+<style>
+  .loop-mark{display:flex;justify-content:center}
+  .loop-mark svg{width:100%;height:auto}
+  .tring{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;font-weight:600;
+    letter-spacing:.42em;fill:var(--brand);fill-opacity:.85}
+  .tring-base{fill:none;stroke:var(--brand);stroke-opacity:.12;stroke-width:1}
+  .ink-halo{fill:none;stroke:var(--brand);stroke-width:13;stroke-opacity:.13;filter:url(#soft16)}
+  .runner{fill:var(--brand);filter:url(#runGlow)}
+  .dust{fill:var(--brand);transform-box:fill-box;transform-origin:center;
+    animation:twinkle 2.6s ease-in-out infinite}
+  @keyframes twinkle{0%,100%{opacity:.12;transform:scale(.55) rotate(0deg)}
+    50%{opacity:.95;transform:scale(1.15) rotate(18deg)}}
+  .ring16 .trch{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;font-weight:700;
+    fill:var(--brand);text-anchor:middle}
+  .ring16[data-rp="rp16a"] .trch,.ring16[data-rp="rp16b"] .trch{font-size:11px}
+  .lm-dust circle{fill:var(--brand)}
+</style>
+<div class="loop-mark {{ mark_class|default:'' }}" aria-hidden="true">
+  <svg viewBox="70 42 320 280">
+    <defs>
+      <path id="rp16a" d="M120,146 a46,46 0 1,1 92,0 a46,46 0 1,1 -92,0"/>
+      <path id="rp16b" d="M248,146 a46,46 0 1,1 92,0 a46,46 0 1,1 -92,0"/>
+      <path id="rp16c" d="M156,214 a74,74 0 1,1 148,0 a74,74 0 1,1 -148,0"/>
+      <filter id="soft16" x="-40%" y="-40%" width="180%" height="180%">
+        <feGaussianBlur stdDeviation="6"/></filter>
+      <filter id="runGlow" x="-150%" y="-150%" width="400%" height="400%">
+        <feGaussianBlur stdDeviation="2.4" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      <linearGradient id="lmSweepGrad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff"/></linearGradient>
+      <mask id="lmSweep" maskUnits="userSpaceOnUse" x="0" y="0" width="460" height="360">
+        <rect x="0" y="0" width="460" height="360" fill="url(#lmSweepGrad)"/></mask>
+    </defs>
+    <!-- 实体层：受风前沿遮罩控制显隐 -->
+    <g class="lm-solid">
+      <g>
+        <circle class="ink-halo" cx="166" cy="146" r="46"/>
+        <circle class="ink-halo" cx="294" cy="146" r="46"/>
+        <circle class="ink-halo" cx="230" cy="214" r="74"/>
+        <circle class="tring-base" cx="166" cy="146" r="46"/>
+        <circle class="tring-base" cx="294" cy="146" r="46"/>
+        <circle class="tring-base" cx="230" cy="214" r="74"/>
+      </g>
+      <!-- 三个旋转文字环：字符由 JS 注入 -->
+      <g class="ring16" data-rp="rp16a" data-cx="166" data-cy="146" data-r="46" data-dur="26" data-dir="1"></g>
+      <g class="ring16" data-rp="rp16b" data-cx="294" data-cy="146" data-r="46" data-dur="22" data-dir="-1"></g>
+      <g class="ring16" data-rp="rp16c" data-cx="230" data-cy="214" data-r="74" data-dur="32" data-dir="1"></g>
+      <g class="lm-runners"></g>
+      <g class="lm-sparks"></g>
+    </g>
+    <!-- 尘粒层 -->
+    <g class="lm-dust"></g>
+  </svg>
+</div>
+<script>
+(function(){
+  const root = document.currentScript.previousElementSibling;
+  const svg = root && root.querySelector('svg');
+  if (!svg) return;
+  const NS = 'http://www.w3.org/2000/svg';
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const solid = svg.querySelector('.lm-solid');
+  const dustG = svg.querySelector('.lm-dust');
+  const grad = svg.querySelector('#lmSweepGrad');
+  const [stopA, stopB] = grad.querySelectorAll('stop');
+
+  // 时间线（秒）
+  const T_IN = 3.8, T_HOLD = 20, T_OUT = 3.8, T_CLOUD = 1.6;
+  const T = T_IN + T_HOLD + T_OUT + T_CLOUD;
+  // 风向（指向右上）；W = 单个尘粒的过渡带宽，WM = 实体淡入淡出带宽
+  const WIND = (() => { const x = 1, y = -0.35, l = Math.hypot(x, y); return [x / l, y / l]; })();
+  const W = 200, WM = 60, J_MIN = -15, J_MAX = 25;
+
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+  const smooth = (a, b, v) => { const x = clamp01((v - a) / (b - a)); return x * x * (3 - 2 * x); };
+  const ease = k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+  const proj = (x, y) => x * WIND[0] + y * WIND[1];
+
+  const rings = [...svg.querySelectorAll('.ring16')].map(el => ({
+    el, cx: +el.dataset.cx, cy: +el.dataset.cy, r: +el.dataset.r,
+    dur: +el.dataset.dur, dir: +el.dataset.dir || 1,
+  }));
+  // 双子：沿三环绕行（dir 1 = 顺时针），phase 为起始提前量（秒）
+  const RUNNERS = [
+    {ring: 0, dur: 6,  phase: 0, dir: 1,  r: 3.5}, {ring: 0, dur: 9,  phase: 3, dir: -1, r: 2.5},
+    {ring: 1, dur: 7,  phase: 1, dir: 1,  r: 3.5}, {ring: 1, dur: 10, phase: 5, dir: -1, r: 2.5},
+    {ring: 2, dur: 11, phase: 2, dir: 1,  r: 4},   {ring: 2, dur: 15, phase: 8, dir: -1, r: 2.5},
+  ];
+  // 星尘：中心、尖端半径、闪烁相位（秒）
+  const SPARKS = [
+    [118, 111.8, 7.8, 0], [330, 103, 7, .5], [150, 242.4, 6.4, 1.1], [318, 239, 7, 1.6],
+    [230, 125.6, 5.6, 2], [84, 185.6, 5.6, .8], [372, 183.6, 5.6, 1.35], [208, 306.4, 6.4, .25],
+    [262, 305, 5, 1.85], [196, 65, 5, 2.3],
+  ];
+
+  const ringAngle = (ring, t) => ring.dir * 2 * Math.PI * t / ring.dur;
+  const runnerPos = (rn, t) => {
+    const ring = rings[rn.ring];
+    const th = Math.PI + rn.dir * 2 * Math.PI * (t + rn.phase) / rn.dur;
+    return [ring.cx + ring.r * Math.cos(th), ring.cy + ring.r * Math.sin(th)];
+  };
+
+  function buildRingText(ring, idx){
+    const BASE = ['DOC · SEARCH · ANSWER', 'DOC · SEARCH · ANSWER', 'SHDR RAG · DOC · SEARCH'];
+    const {el, cx, cy, r: radius} = ring;
+    el.innerHTML = '';
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('class', 'tring');
+    const tp = document.createElementNS(NS, 'textPath');
+    tp.setAttribute('href', '#' + el.dataset.rp);
+    t.appendChild(tp); el.appendChild(t);
+    const unit = BASE[idx] + ' · ';
+    let str = unit;
+    tp.textContent = str;
+    const one = t.getComputedTextLength();
+    const need = 2 * Math.PI * radius * 1.18;
+    while (one * (str.length / unit.length) < need) str += unit;
+    tp.textContent = str;
+    const chars = [];
+    try {
+      const n = t.getNumberOfChars();
+      let lx = -1e9, ly = -1e9;
+      for (let i = 0; i < n; i++){
+        const p = t.getStartPositionOfChar(i);
+        if (Math.abs(p.x - lx) < 1.2 && Math.abs(p.y - ly) < 1.2) break;
+        // 溢出字符在部分渲染器返回 (0,0) 而非堆叠：必须落在圆周上
+        if (Math.abs(Math.hypot(p.x - cx, p.y - cy) - radius) > 2) break;
+        lx = p.x; ly = p.y;
+        chars.push([p.x, p.y, t.getRotationOfChar(i), str[i]]);
+      }
+    } catch (e) {}
+    t.remove();
+    // 闭合环接缝：裁到最后一个 '·'，避免首尾拼成 "DOCDOC"
+    while (chars.length && chars[chars.length - 1][3] !== '·') chars.pop();
+    const DY = 4.4;
+    chars.forEach(([x, y, rot, ch]) => {
+      const g = document.createElementNS(NS, 'text');
+      g.setAttribute('class', 'trch');
+      g.setAttribute('x', x.toFixed(1)); g.setAttribute('y', y.toFixed(1));
+      g.setAttribute('transform', 'rotate(' + rot.toFixed(1) + ' ' + x.toFixed(1) + ' ' + y.toFixed(1) + ') translate(0 ' + DY + ')');
+      g.textContent = ch;
+      el.appendChild(g);
+    });
+    return chars;
+  }
+
+  // ── 构建实体 ──
+  const runnerEls = RUNNERS.map(rn => {
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('class', 'runner');
+    c.setAttribute('r', rn.r);
+    svg.querySelector('.lm-runners').appendChild(c);
+    return c;
+  });
+  const sparkG = svg.querySelector('.lm-sparks');
+  SPARKS.forEach(([x, y, s, delay]) => {
+    const q = s * .283, p = document.createElementNS(NS, 'path');
+    p.setAttribute('class', 'dust');
+    p.setAttribute('d', `M${x},${y - s} L${x + q},${y - q} ${x + s},${y} ${x + q},${y + q} ${x},${y + s} ${x - q},${y + q} ${x - s},${y} ${x - q},${y - q}Z`);
+    p.style.animationDelay = delay + 's';
+    sparkG.appendChild(p);
+  });
+  const ringChars = rings.map(buildRingText);
+
+  function place(t){
+    rings.forEach(ring => ring.el.setAttribute('transform',
+      `rotate(${(ringAngle(ring, t) * 180 / Math.PI % 360).toFixed(3)} ${ring.cx} ${ring.cy})`));
+    RUNNERS.forEach((rn, i) => {
+      const [x, y] = runnerPos(rn, t);
+      runnerEls[i].setAttribute('cx', x.toFixed(2)); runnerEls[i].setAttribute('cy', y.toFixed(2));
+    });
+  }
+
+  if (reduce){ place(0); return; }
+
+  // ── 构建尘粒：每个元素拆成若干粒，记录锚点（环内局部坐标 / 双子偏移 / 静态坐标） ──
+  const parts = [];
+  function addPart(o){
+    const x0 = o.x, y0 = o.y;
+    // 溃散向量：顺风偏上的随机方向 + 少量离心分量
+    const a = rnd(-1.15, .8), m = 26 + Math.pow(Math.random(), .7) * 84;
+    const dx = WIND[0] * Math.cos(a) - WIND[1] * Math.sin(a);
+    const dy = WIND[0] * Math.sin(a) + WIND[1] * Math.cos(a);
+    const ox = x0 - 230, oy = y0 - 182, ol = Math.hypot(ox, oy) || 1;
+    const el = document.createElementNS(NS, 'circle');
+    el.setAttribute('r', '0');
+    dustG.appendChild(el);
+    parts.push(Object.assign({
+      el, ring: -1, runner: -1, lx: x0, ly: y0,
+      sx: (dx + .35 * ox / ol) * m, sy: (dy + .35 * oy / ol) * m,
+      curl: rnd(-1, 1), j: rnd(J_MIN, J_MAX),
+      wa: rnd(2, 6), wf1: rnd(.6, 1.6), wf2: rnd(.6, 1.6), wp1: rnd(0, 6.3), wp2: rnd(0, 6.3),
+      tw: rnd(1.5, 4), tp: rnd(0, 6.3), ba: 1, a: -1,
+    }, o));
+  }
+  rings.forEach((ring, idx) => {
+    ringChars[idx].forEach(([x, y]) => {
+      const n = Math.random() < .55 ? 2 : 1;
+      for (let i = 0; i < n; i++) addPart({ring: idx, x: x + rnd(-2.5, 2.5), y: y + rnd(-2.5, 2.5), r0: rnd(1.1, 2)});
+    });
+    // 底环 + 墨晕带：沿圆周采样，墨晕部分更散、更淡
+    const N = Math.round(2 * Math.PI * ring.r / 7.5);
+    for (let i = 0; i < N; i++){
+      const th = (i + Math.random() * .6) / N * 2 * Math.PI;
+      const halo = Math.random() < .45, rr = ring.r + (halo ? rnd(-8, 8) : rnd(-1, 1));
+      addPart({ring: idx, x: ring.cx + rr * Math.cos(th), y: ring.cy + rr * Math.sin(th),
+        r0: halo ? rnd(1.2, 2.4) : rnd(.7, 1.4), ba: halo ? .45 : .9});
+    }
+  });
+  RUNNERS.forEach((rn, i) => {
+    const [x, y] = runnerPos(rn, 0);
+    for (let k = 0; k < 4; k++) addPart({runner: i, x, y, ox: rnd(-1.6, 1.6), oy: rnd(-1.6, 1.6), r0: rnd(1, rn.r * .6)});
+  });
+  SPARKS.forEach(([x, y, s]) => {
+    for (let k = 0; k < 4; k++) addPart({x: x + rnd(-s, s) * .5, y: y + rnd(-s, s) * .5, r0: rnd(.9, 1.7)});
+  });
+
+  // 前沿行程：覆盖所有元素（含墨晕模糊外扩）在风向上的投影范围
+  let pMin = Infinity, pMax = -Infinity;
+  rings.forEach(r => { const c = proj(r.cx, r.cy); pMin = Math.min(pMin, c - r.r - 24); pMax = Math.max(pMax, c + r.r + 24); });
+  SPARKS.forEach(([x, y, s]) => { const c = proj(x, y); pMin = Math.min(pMin, c - s); pMax = Math.max(pMax, c + s); });
+  const F0 = pMin - J_MAX - 10, F1 = pMax + W - J_MIN + 10;
+
+  function target(p, t){
+    if (p.ring >= 0){
+      const ring = rings[p.ring], a = ringAngle(ring, t), c = Math.cos(a), s = Math.sin(a);
+      const x = p.lx - ring.cx, y = p.ly - ring.cy;
+      return [ring.cx + x * c - y * s, ring.cy + x * s + y * c];
+    }
+    if (p.runner >= 0){
+      const [x, y] = runnerPos(RUNNERS[p.runner], t);
+      return [x + p.ox, y + p.oy];
+    }
+    return [p.lx, p.ly];
+  }
+
+  let maskMode = '';
+  function setMask(mode, f){
+    if (mode !== maskMode){
+      maskMode = mode;
+      if (mode === 'hold'){ solid.removeAttribute('mask'); solid.style.visibility = ''; }
+      else if (mode === 'cloud'){ solid.style.visibility = 'hidden'; }
+      else {
+        solid.setAttribute('mask', 'url(#lmSweep)'); solid.style.visibility = '';
+        stopA.setAttribute('stop-color', mode === 'in' ? '#fff' : '#000');
+        stopB.setAttribute('stop-color', mode === 'in' ? '#000' : '#fff');
+      }
+    }
+    if (mode === 'in' || mode === 'out'){
+      const a = mode === 'in' ? f - W : f - WM, b = mode === 'in' ? f - W + WM : f;
+      grad.setAttribute('x1', (WIND[0] * a).toFixed(2)); grad.setAttribute('y1', (WIND[1] * a).toFixed(2));
+      grad.setAttribute('x2', (WIND[0] * b).toFixed(2)); grad.setAttribute('y2', (WIND[1] * b).toFixed(2));
+    }
+  }
+
+  let dustShown = true;
+  function frame(t){
+    const lt = t % T;
+    let mode, f = 0;
+    if (lt < T_IN){ mode = 'in'; f = F0 + (F1 - F0) * lt / T_IN; }
+    else if (lt < T_IN + T_HOLD){ mode = 'hold'; }
+    else if (lt < T_IN + T_HOLD + T_OUT){ mode = 'out'; f = F0 + (F1 - F0) * (lt - T_IN - T_HOLD) / T_OUT; }
+    else { mode = 'cloud'; }
+    place(t);
+    setMask(mode, f);
+    if (mode === 'hold'){
+      if (dustShown){ dustG.style.display = 'none'; dustShown = false; }
+      return;
+    }
+    if (!dustShown){ dustG.style.display = ''; dustShown = true; }
+    const intro = smooth(0, .9, t);
+    for (const p of parts){
+      const [tx, ty] = target(p, t);
+      let k = 1;
+      if (mode !== 'cloud'){
+        const v = clamp01((f - proj(tx, ty) + p.j) / W);
+        k = mode === 'in' ? 1 - v : v;
+      }
+      const alpha = smooth(0, .16, k) * (1 - .68 * smooth(.4, 1, k)) * p.ba
+        * (.78 + .22 * Math.sin(t * p.tw + p.tp)) * intro;
+      if (alpha < .004){
+        if (p.a !== 0){ p.el.setAttribute('opacity', '0'); p.a = 0; }
+        continue;
+      }
+      const e = ease(k), c = p.curl * e, cs = Math.cos(c), sn = Math.sin(c);
+      const x = tx + (p.sx * cs - p.sy * sn) * e + p.wa * e * Math.sin(t * p.wf1 + p.wp1);
+      const y = ty + (p.sx * sn + p.sy * cs) * e + p.wa * e * Math.cos(t * p.wf2 + p.wp2);
+      p.el.setAttribute('cx', x.toFixed(2));
+      p.el.setAttribute('cy', y.toFixed(2));
+      p.el.setAttribute('r', (p.r0 * (1 - .3 * e)).toFixed(2));
+      p.el.setAttribute('opacity', alpha.toFixed(3));
+      p.a = alpha;
+    }
+  }
+
+  // 自有时钟：标签页隐藏 / 滚出视口时停表，回来后从原处继续，不跳相位
+  let clock = 0, last = 0, raf = 0, inView = true;
+  function tick(now){
+    clock += Math.min(now - last, 50) / 1000;
+    last = now;
+    frame(clock);
+    raf = requestAnimationFrame(tick);
+  }
+  function start(){ if (!raf && inView && !document.hidden){ last = performance.now(); raf = requestAnimationFrame(tick); } }
+  function stop(){ if (raf){ cancelAnimationFrame(raf); raf = 0; } }
+  document.addEventListener('visibilitychange', () => { document.hidden ? stop() : start(); });
+  if ('IntersectionObserver' in window){
+    new IntersectionObserver(es => { inView = es[0].isIntersecting; inView ? start() : stop(); }).observe(root);
+  }
+  frame(0);
+  start();
+})();
+</script>

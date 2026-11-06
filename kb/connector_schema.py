@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+"""向模型提供必填配置结构，避免把浏览器动作误当完整连接器。"""
+
+def calculation_schema():
+    from .connector_calculations import ARITY
+    return {'type':'object','required':['op'],'description':'可嵌套业务计算。args是字段引用{"field":"路径"}、常量或嵌套表达式。计算值不要从网页CSS提取。',
+        'properties':{'op':{'type':'string','enum':list(ARITY)},'args':{'type':'array','maxItems':20,'items':{},'description':'例如count: [{"field":"show_times"}]；multiply: [{"field":"qty"},{"field":"price"}]；if: [条件,真值,假值]。'},
+            'start':{'type':'string'},'end':{'type':'string'},'format':{'type':'string','enum':['hhmm','iso8601','unix_seconds','unix_millis']},'unit':{'type':'string','enum':['seconds','minutes','hours','days']},
+            'pattern':{'type':'string'},'group':{'type':'integer','minimum':0,'maximum':8},'separator':{'type':'string'},'distinct':{'type':'boolean'},'digits':{'type':'integer','minimum':0,'maximum':8},
+            'path':{'type':'string','description':'仅group_by：每条子记录的分组路径。'},'aggregate':{'type':'object','description':'在每组数组上执行的嵌套表达式；{"field":""}指当前组数组。'},'part':{'type':'string','enum':['date','year','month','day','weekday','hour']}}}
+
+
+def normalize_spec(spec):
+    """兼容工具常见的确定性参数错位，不猜测任何网页选择器或业务字段。"""
+    from copy import deepcopy
+    value=deepcopy(spec)
+    if not isinstance(value,dict):return value
+    browser=value.get('browser')
+    if isinstance(browser,dict):
+        value.setdefault('source_type','browser');value.setdefault('records_path','records')
+        output=browser.get('output')
+        if isinstance(output,dict) and 'max_records' in output:
+            if 'max_records' in browser and browser['max_records']!=output['max_records']:raise ValueError('browser.max_records与browser.output.max_records冲突。')
+            browser['max_records']=output.pop('max_records')
+    return value
+
+def model_tools(tools):
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+    result=[]
+    for tool in tools:
+        schema=convert_to_openai_tool(tool)
+        props=schema['function']['parameters'].get('properties',{})
+        if 'spec' in props:
+            props['spec']={'type':'object','required':['name','url','id_paths','body_fields'],
+                'description':'完整配置，保留已有正确字段。网页 source_type=browser，必须包含 browser.output；不能只提交动作。',
+                'properties':{'name':{'type':'string'},'url':{'type':'string'},'source_type':{'enum':['api','browser'],'type':'string'},
+                    'records_path':{'type':'string'},'title_path':{'type':'string'},
+                    'id_paths':{'type':'array','minItems':1,'maxItems':4,'items':{'type':'string'},'description':'真实稳定ID或详情链接的字段路径'},
+                    'body_fields':{'type':'array','minItems':1,'items':{'type':'object','required':['label'],'properties':{'label':{'type':'string'},'path':{'type':'string'},'computed':{'type':'object','required':['op','start','end'],'properties':{'op':{'enum':['duration']},'start':{'type':'string'},'end':{'type':'string'},'format':{'enum':['hhmm','iso8601','unix_seconds','unix_millis']},'unit':{'enum':['hours','minutes','seconds']}}}}}},
+                    'browser':{'type':'object','required':['output'],'properties':{'actions':{'type':'array','items':{'type':'object'}},'output':{'type':'object','description':'dom 必须有 rows 和 fields；network 必须有 url_contains 和 path','properties':{'kind':{'enum':['dom','network']},'rows':{'type':'string'},'fields':{'type':'object'},'detail':{'type':'object'},'url_contains':{'type':'string'},'path':{'type':'string'}}}}}}}
+            field_props=props['spec']['properties']['body_fields']['items']['properties']
+            field_props['computed']=calculation_schema()
+            field_props['unit']={'type':'string','description':'结果的显示单位，例如元、场、分钟；属于body_fields字段，不是计算规则参数。'}
+            field_props['required_unless']={'type':'object','required':['path','regex'],'properties':{'path':{'type':'string'},'regex':{'type':'string'}},'description':'只在真实来源状态明确符合此条件时允许字段不适用；不能掩盖正常营业项目的缺失值。'}
+            field_props['required']={'type':'boolean'}
+            field_props['source']={'type':'string','enum':['today','now'],'description':'由系统生成采集日期或采集时间，所有模式都支持；不从网站取值，不再询问日期来源。'}
+            props['spec']['properties']['on_error']={'type':'string','enum':['raw','fail'],'default':'raw','description':'raw保留真实原文与解析提示；fail才对格式问题失败。'}
+            props['spec']['properties']['write_mode']={'type':'string','enum':['append','upsert'],'default':'append','description':'默认append：每次采集追加新行，保留历史，适合运营时间、价格、指标、同比环比。仅用户明确只要最新状态/覆盖时用upsert，按稳定ID更新；切换不删除历史。'}
+            props['spec']['properties']['url']['description']='浏览器真实起始URL，必须保留单页应用的完整 #/... 路由。'
+            props['spec']['properties']['browser']['properties']['output']['description']='network读取实际JSON数组，支持fields注入today/now及detail.url_field逐条取详情；dom通过rows和fields取数。'
+            detail=props['spec']['properties']['browser']['properties']['output']['properties']['detail']
+            detail['properties']={'url_field':{'type':'string'},'click_selector':{'type':'string'},'fields':{'type':'object'},'render':{'type':'string','enum':['browser','html'],'description':'已确认HTML有完整数据时选html；动态数据用browser。'}}
+            detail['properties']['render']={'type':'string','enum':['auto','html','browser'],'default':'auto','description':'auto先读原始HTML，缺数据才加载脚本；html强制只读HTML；browser用于已确认依赖JS的页面。'}
+            detail['properties']['actions']={'type':'array','items':{'type':'object'}}
+            browser=props['spec']['properties']['browser']['properties']
+            browser['max_records']={'type':'integer','minimum':1,'maximum':100,'description':'放在browser内，与output平级，不能放进output。'}
+            output=browser['output']['properties']
+            output['max_pages']={'type':'integer','minimum':1,'maximum':10};output['next_selector']={'type':'string'}
+            mapping={'type':'object','additionalProperties':{'type':'object','properties':{'selector':{'type':'string'},'attribute':{'type':'string'},'regex':{'type':'string'},'group':{'type':'integer'},'all':{'type':'boolean'},'required':{'type':'boolean'},'source':{'type':'string','enum':['url','today','now']},'prefix':{'type':'string'},'default':{'type':'string'},'path':{'type':'string'}}}}
+            output['fields']=mapping;detail['properties']['fields']=mapping
+        if 'computed' in props:props['computed']=calculation_schema()
+        result.append(schema)
+    return result
+
+
+def configuration_error(spec,error):
+    missing=[]
+    if isinstance(spec,dict):
+        missing=[key for key in ('name','url','id_paths','body_fields') if not spec.get(key)]
+        if spec.get('source_type')=='browser' and (not isinstance(spec.get('browser'),dict) or not isinstance(spec['browser'].get('output'),dict)):missing.append('browser.output')
+    else:missing=['spec（完整对象）']
+    resource='采集上限' in str(error)
+    return {'error':str(error)[:1000],'missing_fields':missing,'error_type':'resource_budget' if resource else 'configuration_or_capture',
+        'correction':('详情使用render:auto或html，避免每条加载整套脚本；不改小记录数来掩盖未完成采集。保留已正确的字段与选择器。' if resource else '按报错路径修正，max_records在browser内与output平级。browser.output需kind及dom(rows,fields)或network(url_contains,path)。计算字段放body_fields.computed，不放网页fields。不要重复原参数。')}

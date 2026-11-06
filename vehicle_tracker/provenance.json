@@ -1,0 +1,97 @@
+{
+  "source_directory": "/Users/sgao3/AI/SHDR Engineering Toolbox",
+  "source_head": "5ae926d04d3824824230fef7daf03296226c3fbf",
+  "copied_from_current_worktree": true,
+  "files": {
+    "web/static/css/vehicle_tracker.css": {
+      "source_sha256": "a181b55402be5f92558ab6595bd38bb5c1fc1441d6db08d08fc7ab246bccfe4b",
+      "destination": "static/vehicle_tracker/css/vehicle_tracker.css"
+    },
+    "web/static/icons/brand-mickey-light.svg": {
+      "source_sha256": "41bf543dc699f7d14e7cbab5d249c540f4e0fd53a060e86de07a3d631fbc330d",
+      "destination": "static/vehicle_tracker/icons/brand-mickey-light.svg"
+    },
+    "web/static/icons/vehicle-tracker.svg": {
+      "source_sha256": "194ed66e51a77562baba381123140460fab1a1ca24b3829dab51f78ec73e4329",
+      "destination": "static/vehicle_tracker/icons/vehicle-tracker.svg"
+    },
+    "web/static/js/theme.js": {
+      "source_sha256": "8309d9abb8587f2ee7c9590669daa34192935290334a800e8162c247539852e9",
+      "destination": "static/vehicle_tracker/js/theme.js"
+    },
+    "web/static/js/vehicle-tracker-core.mjs": {
+      "source_sha256": "9a01e553a6ab1cd0f49228fed3580b29b2f6889b995a9c652c4ea84369a7e1e1",
+      "destination": "static/vehicle_tracker/js/vehicle-tracker-core.mjs"
+    },
+    "web/static/js/vehicle-tracker-model.mjs": {
+      "source_sha256": "b75b4dd9772bbc59caba3429dc4dba6079de71a8c0c47efb1f3c377f373b8b8d",
+      "destination": "static/vehicle_tracker/js/vehicle-tracker-model.mjs"
+    },
+    "web/static/js/vehicle-tracker-pdf.mjs": {
+      "source_sha256": "7d9a76854271c7fe061be3545de92b5b009d0e8b5c2df50e4f04e323b85aadf4",
+      "destination": "static/vehicle_tracker/js/vehicle-tracker-pdf.mjs"
+    },
+    "web/static/js/vehicle-tracker-pointer.mjs": {
+      "source_sha256": "343c5ee2a98d85744d767c2c455fd0c2f2b08fa94b1cdd53220175a0ffac6e45",
+      "destination": "static/vehicle_tracker/js/vehicle-tracker-pointer.mjs"
+    },
+    "web/static/js/vehicle-tracker-report.mjs": {
+      "source_sha256": "e37e60e0fba91ba064a4be28edd8738848c7f35b9dd2049f5945d3b79f956a95",
+      "destination": "static/vehicle_tracker/js/vehicle-tracker-report.mjs"
+    },
+    "web/static/js/vehicle-tracker.mjs": {
+      "source_sha256": "cc346b1c07fe4693a6183eb3c2db4fa2465c96c6d9009e1ba6d88e04b75f7ed1",
+      "destination": "static/vehicle_tracker/js/vehicle-tracker.mjs"
+    },
+    "web/static/vendor/pdfjs/LICENSE": {
+      "source_sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+      "destination": "static/vehicle_tracker/vendor/pdfjs/LICENSE"
+    },
+    "web/static/vendor/pdfjs/pdf.min.mjs": {
+      "source_sha256": "27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c",
+      "destination": "static/vehicle_tracker/vendor/pdfjs/pdf.min.mjs"
+    },
+    "web/static/vendor/pdfjs/pdf.worker.min.mjs": {
+      "source_sha256": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36",
+      "destination": "static/vehicle_tracker/vendor/pdfjs/pdf.worker.min.mjs"
+    },
+    "web/static/vendor/three/LICENSE": {
+      "source_sha256": "4c40a1ef62450b857c3b2aaf294936304cd552d965fbcd9d32d4c5bcf4ba4454",
+      "destination": "static/vehicle_tracker/vendor/three/LICENSE"
+    },
+    "web/static/vendor/three/OrbitControls.js": {
+      "source_sha256": "80efaadea4f8a636a65fb0bd08bfef62f3d93a0bb94e2e7500f23176c5c07f4e",
+      "destination": "static/vehicle_tracker/vendor/three/OrbitControls.js"
+    },
+    "web/static/vendor/three/three.module.min.js": {
+      "source_sha256": "08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7",
+      "destination": "static/vehicle_tracker/vendor/three/three.module.min.js"
+    },
+    "web/static/vendor/xlsx-0.20.3.LICENSE": {
+      "source_sha256": "4d2a38ac35cda06a555c84074a819d413339cd3691b822cae50f8f322fe01f64",
+      "destination": "static/vehicle_tracker/vendor/xlsx-0.20.3.LICENSE"
+    },
+    "web/static/vendor/xlsx-0.20.3.full.min.js": {
+      "source_sha256": "cc015130aa8521e7f088f88898eba949ccdcbfb38df0bd129b44b7273c3a6f41",
+      "destination": "static/vehicle_tracker/vendor/xlsx-0.20.3.full.min.js"
+    },
+    "tests/test_vehicle_tracker.mjs": {
+      "source_sha256": "883797c6b0efcd1c1cff8bf683136d6de610fa0ddeb7dd89da664037c81157a5",
+      "destination": "vehicle_tracker/tests/test_core.mjs"
+    }
+  },
+  "unchanged_contract": {
+    "part_ids": 712,
+    "report_records": 285,
+    "indexeddb": "shdr-vehicle-tracker",
+    "indexeddb_version": 2,
+    "backup_format": "shdr-vehicle-tracker",
+    "backup_version": 2
+  },
+  "adaptations": [
+    "Isolated static paths under /static/vehicle_tracker/.",
+    "Django page template and login boundary.",
+    "Module-specific QAQC and external-link adapters.",
+    "Shared fos-theme preference; original project IDs and storage format retained."
+  ]
+}

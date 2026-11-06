@@ -1,0 +1,21 @@
+<section class="graph-panel graph-live" id="graphLive" aria-label="图谱实时生成过程">
+  <div class="graph-live-header"><h2>生成进度</h2><span id="graphLiveState" role="status" aria-live="polite">等待选择任务</span></div>
+  <select id="graphLiveRun" hidden aria-label="当前生成任务"><option value="">请选择任务</option>{% for job in live_jobs %}<option value="{{ job.id }}" data-status="{{ job.status }}">{{ job.label }}</option>{% endfor %}</select>
+  <div class="graph-coverage"><p id="graphLiveCoverage" role="status" aria-live="polite">等待召回相关正文。</p><progress id="graphLiveCoverageMeter" max="1" value="0" aria-label="本次已用模型调用次数"></progress></div>
+  <p id="graphLiveWaiting" class="graph-meta" role="status"></p>
+  <div id="graphLiveFailure" hidden><p id="graphLiveError" class="graph-stale" role="alert"></p><button type="button" class="btn sm outline" id="graphLiveRetry">重试抽取</button><p class="graph-meta">重试会创建新任务，保留原有候选；重新连接日志仅恢复进度显示。</p></div>
+  <details id="graphLiveProcess"><summary>查看生成过程和原始输出</summary>
+  <div class="graph-controls">
+    <button type="button" class="btn sm outline" id="graphLiveReconnect">重新连接日志</button>
+    <label class="graph-live-follow"><input type="checkbox" id="graphLiveFollow" checked> 跟随最新输出</label>
+  </div>
+  <p id="graphLiveFocus" class="graph-meta">生成候选后仍需您逐条核对确认。</p>
+  <details><summary>读取范围与用量</summary><ol id="graphLiveCoverageBatches"></ol></details>
+  <ol class="graph-live-steps" aria-label="抽取阶段"><li>召回正文</li><li>模型生成 / 读取邻文</li><li>结构与原文校验</li><li>待您确认</li></ol>
+  <div class="graph-live-columns">
+    <div><h3>读取与校验活动</h3><ol id="graphLiveActivity" class="graph-live-activity"></ol></div>
+    <div><h3>模型实时输出 <span class="graph-meta">未审核</span></h3><pre id="graphLiveOutput" tabindex="0" aria-label="模型公开文本输出"></pre><p id="graphLiveOutputNote" class="graph-meta">开始生成后，模型返回的文本会逐步显示在这里。</p></div>
+  </div>
+  <details id="graphLivePreview"><summary>本次通过结构与引文检查的候选 <span id="graphLiveCandidateCount">0</span> 条 · 仍待人工确认</summary><div id="graphLiveCandidates"></div></details>
+  </details>
+</section>

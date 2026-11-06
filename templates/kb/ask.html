@@ -1,0 +1,1156 @@
+{% extends "kb/_base.html" %}
+{% load static %}
+{% block title %}智能问答 · SHDR RAG{% endblock %}
+{% block content %}
+<style>
+@keyframes answerPulse { 0%,100% {opacity:1} 50% {opacity:.38} }
+.conv-item.is-generating .conv-title, .answer.thinking, .turn-progress {animation:answerPulse 1.6s ease-in-out infinite}
+.conv-state {display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--brand);min-height:14px}
+.conv-unread-dot {display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--brand)}
+@media (prefers-reduced-motion:reduce) {.conv-item.is-generating .conv-title,.answer.thinking,.turn-progress {animation:none}}
+</style>
+{{ pyodide_index_url|json_script:"pyodideIndexURL" }}
+{% if chat_embedded %}
+<link rel="stylesheet" href="{% static 'css/assistant_embedded.css' %}?v=1">
+<template id="ragChatWelcomeTemplate"><div class="rag-chat-welcome">
+  <div class="rag-chat-welcome-icon">{% include 'kb/_assistant_avatar.html' %}</div><h2>有什么可以帮你？</h2>
+  <p>查找知识与原文依据，梳理要求，分析追踪表数据。</p>
+  <div class="rag-chat-prompts"><button type="button" data-rag-prompt="帮我查找资料中的判断条件，并给出原文依据">查找要求与原文依据</button><button type="button" data-rag-prompt="帮我对比资料中不同等级的要求和参数">对比等级、条件与参数</button><button type="button" data-rag-prompt="帮我查看知识库中的追踪表，并分析其中的数据">分析追踪表数据</button></div>
+</div></template>
+{% endif %}
+<div class="qa-layout">
+  <!-- 左侧：会话历史（手机上收进抽屉） -->
+  <div class="conv-scrim" id="convScrim"></div>
+  <aside class="conv-sidebar" id="convDrawer">
+    <button class="btn primary sm conv-new" id="newChatBtn">＋ 新建对话</button>
+    <div class="conv-list" id="convList">
+      {% for c in conversations %}
+      <a class="conv-item{% if c.thread_id == active_thread %} active{% endif %}" href="?conv={{ c.thread_id }}"
+         data-thread="{{ c.thread_id }}" data-title="{{ c.title }}">
+        <span class="conv-title">{{ c.title }}</span>
+        <span class="conv-meta">{{ c.kb.name }} · {{ c.updated_at|date:"m-d H:i" }}</span>
+        <button class="conv-del" type="button" title="删除此会话"
+                data-thread="{{ c.thread_id }}" data-title="{{ c.title }}" aria-label="删除会话">×</button>
+      </a>
+      {% empty %}
+      <div class="conv-empty">还没有会话</div>
+      {% endfor %}
+    </div>
+  </aside>
+
+  <!-- 右侧：对话区 -->
+  <div class="qa-main">
+    <div class="chat-col">
+      <div class="qa-head">
+        <button class="qa-hist" id="histBtn" type="button" aria-label="历史会话">
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <span class="qa-title">智能问答 · 自动选库</span>
+        <span id="convTitle" class="qa-conv"></span>
+        <span id="sandboxStatus" class="sandbox-chip" title="代码分析沙箱状态">⬚ 沙箱准备中…</span>
+      </div>
+
+      <div id="messages">
+        <div class="msg ai"><div class="msg-who"><span class="who-ava"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="7.5" width="12" height="8.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="8" cy="11.6" r="1.1" fill="currentColor"/><circle cx="12" cy="11.6" r="1.1" fill="currentColor"/><path d="M10 7.5V5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="10" cy="3.9" r="1.2" fill="currentColor"/></svg></span><span class="who-name">助手</span></div><div class="bubble"><div class="answer">输入问题。</div></div></div>
+      </div>
+
+      <div class="composer">
+        <textarea id="input" rows="1"></textarea>
+        <button class="btn primary" id="sendBtn">发送</button>
+        <button class="btn outline" id="stopBtn" type="button" style="display:none" hidden>停止回答</button>
+      </div>
+      <div class="composer-hint">Enter 发送 · Shift+Enter 换行</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/vendor/marked.min.js' %}"></script>
+<script src="{% static 'js/vendor/purify.min.js' %}"></script>
+<script src="{% static 'js/evidence_panel.js' %}"></script>
+<script src="{% static 'js/chat_input.js' %}"></script>
+<script src="{% static 'js/chat_stream.js' %}?v=20260921"></script>
+<script src="{% static 'js/chat_recovery.js' %}?v=20260921"></script>
+<script src="{% static 'js/conversation_badges.js' %}?v=1"></script>
+<script src="{% static 'js/vendor/jspdf.umd.min.js' %}" defer></script>
+<script src="{% static 'js/vendor/jspdf.plugin.autotable.min.js' %}" defer></script>
+<script>
+/* 纯 Python xlsx 写入器（Pyodide 无 openpyxl/xlsxwriter）。
+   用 stdlib zipfile + 手写 XML 生成 .xlsx，支持【多工作表】。
+   同时挂到 DataFrame.to_excel 与 pandas.ExcelWriter，
+   让 df.to_excel(path) 与 with pd.ExcelWriter(path) as w: 多表写入都能直接可用。 */
+const INLINE_XLSX_WRITER = `
+import zipfile, io
+import xml.sax.saxutils as su
+import pandas as pd
+
+def _xlsx_escape(s):
+    # 除 XML 实体转义外，还要剔除 XML1.0 禁止的控制字符（OCR 文本常含
+    # 0x0B/0x0C 等）——否则 Excel 报「名称字符非法」并删除整表记录。
+    out = []
+    for ch in str(s):
+        o = ord(ch)
+        if (o >= 32 or o in (9, 10, 13)) and o not in (0xFFFE, 0xFFFF):
+            out.append(ch)
+    return su.escape(''.join(out))
+
+def _col_letter(i):  # 0-based -> A,B,...,Z,AA
+    s = ""
+    i += 1
+    while i > 0:
+        i, r = divmod(i - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+def _df_cols(df, index=False):
+    """收集 (列名, [值字符串]) 列表。"""
+    cols = []
+    if index:
+        cols.append((str(df.index.name) if df.index.name else "", list(df.index.astype(str))))
+    for c in df.columns:
+        cols.append((str(c), [str(v) for v in df[c].tolist()]))
+    return cols
+
+def _write_xlsx(path, sheets):
+    """把多个 DataFrame 写入一个多工作表 .xlsx。
+
+    sheets: [(sheet_name, df, index), ...]
+    跨表共享一个字符串表；单元格全按字符串存（避免数值/日期类型判定）。
+    """
+    # 跨表共享字符串表
+    shared = []
+    sst_idx = {}
+    def s(x):
+        if x not in sst_idx:
+            sst_idx[x] = len(shared)
+            shared.append(x)
+        return sst_idx[x]
+
+    n = len(sheets)
+    sheet_xmls = []
+    sheet_entries = []      # <sheet .../> 条目
+    wb_rels = []            # workbook 关系
+    overrides = []          # Content_Types Override
+    for k, (sname, df, index) in enumerate(sheets):
+        sid = k + 1
+        cols = _df_cols(df, index=index)
+        rows = len(cols[0][1]) if cols else 0
+        ncol = len(cols)
+        header_ids = [s(_xlsx_escape(h)) for h, _ in cols]
+
+        cells = []
+        # 表头
+        rowxml = ['<row r="1">']
+        for j in range(ncol):
+            ref = _col_letter(j) + "1"
+            rowxml.append('<c r="%s" t="s"><v>%d</v></c>' % (ref, header_ids[j]))
+        rowxml.append('</row>')
+        cells.append("".join(rowxml))
+        # 数据行
+        for r in range(rows):
+            rn = r + 2
+            rowxml = ['<row r="%d">' % rn]
+            for j in range(ncol):
+                ref = _col_letter(j) + str(rn)
+                sid_v = s(_xlsx_escape(cols[j][1][r]))
+                rowxml.append('<c r="%s" t="s"><v>%d</v></c>' % (ref, sid_v))
+            rowxml.append('</row>')
+            cells.append("".join(rowxml))
+        sheet_xmls.append(
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<sheetData>' + "".join(cells) + '</sheetData></worksheet>'
+        )
+        rid = "rId%d" % sid
+        sheet_entries.append('<sheet name="%s" sheetId="%d" r:id="%s"/>' % (_xlsx_escape(sname), sid, rid))
+        wb_rels.append('<Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet%d.xml"/>' % (rid, sid))
+        overrides.append('<Override PartName="/xl/worksheets/sheet%d.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' % sid)
+
+    sst_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="%d" uniqueCount="%d">'
+        % (len(shared), len(shared))
+    )
+    for x in shared:
+        sst_xml += '<si><t>%s</t></si>' % x
+    sst_xml += '</sst>'
+
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets>' + "".join(sheet_entries) + '</sheets></workbook>'
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        + "".join(overrides) +
+        '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+        '</Types>'
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '</Relationships>'
+    )
+    # workbook.xml.rels：每个 sheet 一个关系 + 共享字符串一个关系
+    shared_rid = "rId%d" % (n + 1)
+    wb_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + "".join(wb_rels) +
+        '<Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>'
+        '</Relationships>' % shared_rid
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("xl/workbook.xml", workbook_xml)
+        z.writestr("xl/_rels/workbook.xml.rels", wb_rels_xml)
+        for k in range(n):
+            z.writestr("xl/worksheets/sheet%d.xml" % (k + 1), sheet_xmls[k])
+        z.writestr("xl/sharedStrings.xml", sst_xml)
+    data = buf.getvalue()
+    # 写入 Pyodide 文件系统（path 可能是 str 或有 .path 的对象）
+    p = str(getattr(path, "path", path))
+    with open(p, "wb") as f:
+        f.write(data)
+    return None
+
+
+# ---------- 挂到 pandas：to_excel（单表，直接写文件） ----------
+def _patched_to_excel(self, excel_writer, sheet_name="Sheet1", index=False, **kwargs):
+    # 兼容三种调用：
+    #  1) df.to_excel("a.xlsx")           -> excel_writer 是路径
+    #  2) df.to_excel(writer, sheet_name) -> excel_writer 是我们的 _PyXlsxWriter
+    #  3) pandas 内部传其它对象             -> 取其 .path 或 str()
+    if isinstance(excel_writer, _PyXlsxWriter):
+        excel_writer._add(sheet_name, self, index)
+        return None
+    _write_xlsx(excel_writer, [(sheet_name, self, index)])
+    return None
+
+
+# ---------- 挂到 pandas：ExcelWriter（多表，with 语句） ----------
+class _PyXlsxWriter:
+    """纯 Python 的 ExcelWriter 替身，支持 with + 多次 to_excel。"""
+    def __init__(self, path, engine=None, **kwargs):
+        self.path = str(path)
+        self._sheets = []   # [(name, df, index)]
+    def _add(self, name, df, index):
+        self._sheets.append((name or "Sheet1", df, index))
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        if not exc[0]:
+            _write_xlsx(self.path, self._sheets or [("Sheet1", pd.DataFrame(), False)])
+        return False
+
+# 替换 pandas.ExcelWriter，避免它去 import openpyxl
+pd.ExcelWriter = _PyXlsxWriter
+pd.DataFrame.to_excel = _patched_to_excel
+
+# openpyxl 兜底：页面加载时 micropip 已装自托管 wheel；若旧缓存页面未装成，
+# 让 import openpyxl 不至于第 2 行就崩——误用其 API 时给出可执行的改写建议。
+try:
+    import openpyxl  # noqa: F401
+except ImportError:
+    import sys as _sys, types as _types
+    _ox = _types.ModuleType("openpyxl")
+    def _ox_hint(*a, **k):
+        raise RuntimeError("openpyxl 在本沙箱不可用：请改用 df.to_excel(filename, index=False) 或 with pd.ExcelWriter(filename) as w:（已内置 xlsx 写入器）")
+    class _OXWorkbook:
+        def __init__(self, *a, **k):
+            _ox_hint()
+    _ox.Workbook = _OXWorkbook
+    _ox.load_workbook = _ox_hint
+    _sys.modules["openpyxl"] = _ox
+`;
+
+(function(){
+  // AI 消息统一头部：助手头像 + 名称（Toonflow 式 agent 标识）
+  const AI_WHO = '<div class="msg-who"><span class="who-ava">'
+    + '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="7.5" width="12" height="8.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="8" cy="11.6" r="1.1" fill="currentColor"/><circle cx="12" cy="11.6" r="1.1" fill="currentColor"/><path d="M10 7.5V5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="10" cy="3.9" r="1.2" fill="currentColor"/></svg>'
+    + '</span><span class="who-name">助手</span></div>';
+
+  const input = document.getElementById('input');
+  const sendBtn = document.getElementById('sendBtn');
+  const messages = document.getElementById('messages');
+
+  /* ---------- 页面加载即后台预热沙箱（不等用户发 code_run） ---------- */
+  const sbStatus = document.getElementById('sandboxStatus');
+  function setSbStatus(cls, text){
+    if (!sbStatus) return;
+    sbStatus.className = 'sandbox-chip ' + cls;
+    sbStatus.textContent = text;
+  }
+  // 空闲时启动预热，避免抢占首屏渲染
+  const startPreload = () => {
+    setSbStatus('loading', '⬚ 沙箱准备中…');
+    loadPyodideOnce((m) => setSbStatus('loading', '⬚ ' + m))
+      .then(() => setSbStatus('ready', '✓ 沙箱就绪'))
+      .catch((e) => setSbStatus('err', '✗ 沙箱失败'));
+  };
+  {% if chat_embedded %}
+  setSbStatus('ready','数据分析按需加载');
+  {% else %}
+  if ('requestIdleCallback' in window) {
+    requestIdleCallback(startPreload, { timeout: 3000 });
+  } else {
+    setTimeout(startPreload, 1500);
+  }
+  {% endif %}
+  let busy = false;
+
+  // Enter 发送：桌面快捷键。两个例外——中文输入法选词的 Enter（isComposing）
+  // 不能触发发送；触屏设备 Enter 一律换行（虚拟键盘上误触率高，发送走按钮）。
+  const coarsePtr = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+  FosChatInput.bind(input, submit, () => performance.now(), () => !coarsePtr);
+  sendBtn.addEventListener('click', submit);
+  // 输入框随内容自动增高（2 行起步，最高约 5 行）
+  const autogrow = () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+  };
+  input.addEventListener('input', autogrow);
+
+  /* ---------- 会话抽屉（手机）：开合与关闭时机 ---------- */
+  const drawer = document.getElementById('convDrawer');
+  const scrim = document.getElementById('convScrim');
+  const histBtn = document.getElementById('histBtn');
+  const closeDrawer = () => { drawer.classList.remove('open'); scrim.classList.remove('show'); };
+  histBtn.addEventListener('click', () => {
+    drawer.classList.toggle('open');
+    scrim.classList.toggle('show', drawer.classList.contains('open'));
+  });
+  scrim.addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+  document.getElementById('convList').addEventListener('click', e => {
+    if (!e.target.closest('.conv-del')) closeDrawer();
+  });
+  document.getElementById('newChatBtn').addEventListener('click', closeDrawer);
+
+  /* ---------- 把分析结果（文本/表格/图表）导出为 PDF ---------- */
+  // 依赖 jsPDF + autotable（顶部 CDN 引入）。纯前端，数据不离开浏览器。
+  function exportResultToPDF(bodyEl, plotImgs, filename){
+    try {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const margin = 40;
+      let y = margin;
+
+      const ensureSpace = (need) => {
+        if (y + need > pageH - margin) { doc.addPage(); y = margin; }
+      };
+
+      // 标题
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
+      doc.text('Analysis Report', margin, y); y += 24;
+
+      // 文本输出（<pre> 里的 stdout）
+      const pres = bodyEl.querySelectorAll('pre');
+      pres.forEach(pre => {
+        const lines = (pre.textContent || '').split('\n');
+        doc.setFont('courier', 'normal'); doc.setFontSize(8);
+        lines.forEach(line => {
+          ensureSpace(12);
+          // 按 A4 宽度截断长行
+          const maxChars = 110;
+          const chunks = line.match(new RegExp('.{1,' + maxChars + '}', 'g')) || [''];
+          chunks.forEach(ch => {
+            doc.text(ch, margin, y);
+            y += 11;
+          });
+        });
+        y += 6;
+      });
+
+      // HTML 表格 → autotable
+      const tables = bodyEl.querySelectorAll('table');
+      tables.forEach(tbl => {
+        const head = [];
+        tbl.querySelectorAll('thead tr').forEach(tr => {
+          head.push(Array.from(tr.querySelectorAll('th,td')).map(c => c.textContent.trim()));
+        });
+        const rows = [];
+        tbl.querySelectorAll('tbody tr').forEach(tr => {
+          rows.push(Array.from(tr.querySelectorAll('td,th')).map(c => c.textContent.trim()));
+        });
+        // 若无 thead，用第一行当表头
+        let h = head, r = rows;
+        if (!h.length && r.length) { h = [r[0]]; r = r.slice(1); }
+        if (h.length || r.length) {
+          doc.autoTable({
+            head: h, body: r,
+            startY: y, margin: { left: margin, right: margin },
+            styles: { fontSize: 7, cellPadding: 2, overflow: 'linebreak' },
+            headStyles: { fillColor: [194, 54, 44] },
+            theme: 'grid',
+          });
+          y = doc.lastAutoTable.finalY + 12;
+        }
+      });
+
+      // 图表 PNG
+      plotImgs.forEach(p => {
+        const img = new Image();
+        img.src = p.url;
+        // 计算适配宽度
+        const imgW = Math.min(pageW - margin * 2, 420);
+        const imgH = imgW * 0.6;  // 粗略比例
+        ensureSpace(imgH + 10);
+        try {
+          doc.addImage(p.url, 'PNG', margin, y, imgW, imgH);
+          y += imgH + 12;
+        } catch(e) { /* 图片格式问题，跳过 */ }
+      });
+
+      doc.save(filename || 'analysis.pdf');
+    } catch(e) {
+      alert('PDF 导出失败：' + (e.message || e));
+    }
+  }
+
+  /* ---------- Pyodide 沙箱（懒加载 + 分步进度） ---------- */
+  let pyodidePromise = null;
+  function loadPyodideOnce(onProgress){
+    if (pyodidePromise) return pyodidePromise;
+    pyodidePromise = (async () => {
+      onProgress && onProgress('下载 WASM 运行时…（首次约 10MB）');
+      if (!window.loadPyodide){
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = JSON.parse(document.getElementById("pyodideIndexURL").textContent) + "pyodide.js";
+          s.onload = resolve; s.onerror = () => reject(new Error('Pyodide 运行时下载失败（检查网络）'));
+          document.head.appendChild(s);
+        });
+      }
+      onProgress && onProgress('初始化 Pyodide…');
+      const py = await window.loadPyodide({indexURL: JSON.parse(document.getElementById("pyodideIndexURL").textContent)});
+      // 预装全部数据分析依赖：pandas/numpy/matplotlib（页面加载时后台预热，用户首次分析/画图即用）
+      onProgress && onProgress('加载 pandas/numpy/matplotlib…（约 40MB）');
+      await py.loadPackage(["pandas", "numpy", "matplotlib"]);
+      // 自托管纯 Python wheel：openpyxl（+et_xmlfile）→ pd.read_excel / ExcelWriter
+      // 原生可用，不再报 Missing optional dependency 'openpyxl'。失败不阻断沙箱。
+      try {
+        await py.loadPackage("micropip");
+        const _base = JSON.parse(document.getElementById("pyodideIndexURL").textContent);
+        const micropip = py.pyimport("micropip");
+        await micropip.install([
+          _base + "openpyxl-3.1.5-py2.py3-none-any.whl",
+          _base + "et_xmlfile-2.0.0-py3-none-any.whl",
+        ]);
+      } catch (e) {
+        console.warn('openpyxl 安装失败（沙箱仍可用，xlsx 读写受限）:', e);
+      }
+      // pandas 3.0 会因缺 pyarrow 抛 DeprecationWarning（Pyodide v0.26.4 无 pyarrow 包），
+      // 该警告对本沙箱无影响（我们只用 DataFrame/绘图/导出），按精确消息屏蔽。
+      py.runPython(
+        "import warnings as _w; _w.filterwarnings('ignore', message='.*Pyarrow will become a required dependency.*')"
+      );
+      // matplotlib 用 Agg 后端（浏览器无显示）
+      py.runPython("import matplotlib; matplotlib.use('Agg')");
+      // 注入 xlsx 写入器（不依赖任何外部包）
+      py.runPython(INLINE_XLSX_WRITER);
+      return py;
+    })();
+    return pyodidePromise;
+  }
+
+  // 所有依赖（pandas/numpy/matplotlib）已在初始化时预装，这里无需再加载。
+  async function ensurePackages(py, code, onProgress){
+    return;
+  }
+
+  // 在浏览器 Pyodide 沙箱里执行 agent 生成的代码
+  async function runCodeInSandbox(code, filename, container, aid){
+    const cr = document.createElement('div'); cr.className = 'code-result';
+    cr.innerHTML = '<div class="cr-head">⬚ 代码分析 · Pyodide 沙箱<span class="tag-ok">运行中…</span></div>'+
+                   '<div class="cr-body"><span class="spinner"></span> <span class="cr-msg">准备中…</span></div>';
+    container.appendChild(cr);
+    const tag = cr.querySelector('.tag-ok');
+    const body = cr.querySelector('.cr-body');
+    const setMsg = (m) => { const el = body.querySelector('.cr-msg'); if (el) el.textContent = m; };
+    // 执行结果回传（write_analysis 自修复回路）：成功/失败都 POST 给
+    // /kb/analysis/report/，让正在 check_analysis 等待的 agent 拿到真实结果
+    const reportBack = { aid: aid || '', ok: true, error: '', stdout: '' };
+
+    try {
+      const py = await loadPyodideOnce(setMsg);
+      await ensurePackages(py, code, setMsg);
+      setMsg('执行代码…');
+      // 捕获 stdout
+      py.runPython("import sys, io; sys.stdout = io.StringIO()");
+      py.runPython(code);
+      let out = '';
+      try { out = py.runPython("sys.stdout.getvalue()"); } catch(e) {}
+      reportBack.stdout = String(out || '');
+      // 读取生成的文件（若有）
+      let fileBytes = null;
+      try {
+        const data = py.FS.readFile(filename);
+        if (data && data.length) fileBytes = data;
+      } catch(e) {}
+      tag.textContent = '完成'; tag.className = 'tag-ok';
+      let html = '';
+      if (out && out.trim()) html += '<pre>' + out.replace(/</g,'&lt;') + '</pre>';
+      // 渲染 matplotlib 生成的 PNG 图片（plt.savefig 写入的 .png 文件）
+      const plotImgs = [];
+      try {
+        for (const fn of py.FS.readdir('.')) {
+          if (typeof fn === 'string' && fn.toLowerCase().endsWith('.png')) {
+            const b = py.FS.readFile(fn);
+            if (b && b.length) {
+              const blobUrl = URL.createObjectURL(new Blob([new Uint8Array(b)], {type:'image/png'}));
+              plotImgs.push({fn, url: blobUrl});
+            }
+          }
+        }
+      } catch(e) {}
+      if (plotImgs.length){
+        html += plotImgs.map(p =>
+          '<figure style="margin:8px 0;text-align:center">' +
+          '<img src="' + p.url + '" alt="' + p.fn + '" style="max-width:100%;border:1px solid var(--rule-soft);border-radius:4px">' +
+          '</figure>'
+        ).join('');
+      }
+      if (!html) html = '<div style="color:var(--mute);font-size:12px">（脚本无 print 输出）</div>';
+      body.innerHTML = html;
+      // 下载按钮：主文件 + 各 PNG
+      const actions = document.createElement('div'); actions.className = 'cr-actions';
+      let hasAction = false;
+      if (fileBytes){
+        const blob = new Blob([new Uint8Array(fileBytes)], {type:'application/octet-stream'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.className = 'btn primary sm'; a.href = url; a.download = filename;
+        a.textContent = '下载 ' + filename;
+        actions.appendChild(a); hasAction = true;
+      }
+      plotImgs.forEach(p => {
+        const a = document.createElement('a');
+        a.className = 'btn outline sm'; a.href = p.url; a.download = p.fn;
+        a.textContent = '下载 ' + p.fn;
+        actions.appendChild(a); hasAction = true;
+      });
+      // 导出 PDF：把文本/表格/图表拼成一个 PDF（需 jsPDF，纯前端）
+      if (window.jspdf){
+        const pdfName = (filename || 'analysis').replace(/\.[^.]+$/, '') + '.pdf';
+        const pdfBtn = document.createElement('button');
+        pdfBtn.className = 'btn outline sm'; pdfBtn.type = 'button';
+        pdfBtn.textContent = '导出 PDF';
+        pdfBtn.addEventListener('click', () => exportResultToPDF(body, plotImgs, pdfName));
+        actions.appendChild(pdfBtn); hasAction = true;
+      }
+      if (hasAction) cr.appendChild(actions);
+    } catch(e){
+      tag.textContent = '失败'; tag.className = 'tag-err';
+      body.innerHTML = '<div class="cr-err">' + String(e && e.message || e).replace(/</g,'&lt;') + '</div>';
+      reportBack.ok = false;
+      reportBack.error = String(e && (e.stack || e.message) || e);
+    } finally {
+      if (reportBack.aid){
+        fetch('/kb/analysis/report/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json',
+                     'X-CSRFToken': getCSRFToken(),
+                     'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify(reportBack),
+        }).catch(() => {});  // 回传失败不提示用户（agent 侧会超时兜底）
+      }
+    }
+  }
+
+  /* ---------- 会话状态：稳定的 thread_id（同一会话内复用） ---------- */
+  let currentThreadId = '';   // 当前会话的 thread_id；空表示新对话（首次发送时生成）
+  let activeTurn = null;
+  let historyRevision = 0;
+  const badges = FosConversationBadges.create({csrf:getCSRFToken, onState(row) {
+    const item = Array.from(document.querySelectorAll('.conv-item')).find(el => el.dataset.thread === row.thread_id);
+    if (!item) return;
+    item.classList.toggle('is-generating', row.running);
+    let indicator = item.querySelector('.conv-state');
+    if (!indicator) { indicator = document.createElement('span'); indicator.className = 'conv-state'; item.querySelector('.conv-title').after(indicator); }
+    indicator.replaceChildren();
+    if (row.running) indicator.textContent = '正在思考 / 生成…';
+    else if (row.unread) {
+      const dot = document.createElement('span'); dot.className = 'conv-unread-dot';
+      dot.setAttribute('role','img'); dot.setAttribute('aria-label','新回答未读');
+      indicator.title = '回答已完成，点击会话标为已读'; indicator.appendChild(dot);
+    }
+  }});
+  badges.start();
+  window.addEventListener('pagehide', () => badges.pause());
+  window.addEventListener('pageshow', () => badges.start());
+  let recovery = null;
+  const recoveryKey = "rag-ask-{{ user.pk }}";
+  const stopBtn = document.getElementById('stopBtn');
+  function cancelCurrentTurn() {
+    if (recovery) recovery.stop();
+    recovery = null;
+    historyRevision++;
+    if (activeTurn) activeTurn.abort("已切换页面，回答仍在后台生成。");
+    activeTurn = null;
+    busy = false;
+    sendBtn.disabled = false;
+    stopBtn.hidden = true; stopBtn.style.display = 'none';
+  }
+  stopBtn.addEventListener('click', async () => {
+    const thread = currentThreadId;
+    stopBtn.disabled = true;
+    try {
+      await FosAnswerRecovery.stop(thread, getCSRFToken());
+      if (currentThreadId !== thread) return;
+      if (activeTurn) activeTurn.abort('已请求停止回答。');
+      restoreConversation(thread);
+    } catch(error) { alert(error.message); }
+    finally { stopBtn.disabled = false; }
+  });
+  window.addEventListener('pagehide', cancelCurrentTurn);
+  window.addEventListener('pageshow', event => {
+    if (event.persisted && currentThreadId) restoreConversation(currentThreadId);
+  });
+  const convTitleEl = document.getElementById('convTitle');
+  // 当前会话累计 token 用量（输入/输出），跨多轮累加；切会话/新建时重置
+  let sessionTokens = { in: 0, out: 0 };
+  // 当前会话内【单次 LLM 调用】的最大输入/输出 token（取各轮最大值的最大）；
+  // 用于估测本地部署模型需要开多大的上下文窗口
+  let sessionMax = { in: 0, out: 0 };
+
+  function renderTokenUsage(){
+    if (!convTitleEl) return;
+    const t = sessionTokens.in + sessionTokens.out;
+    if (t === 0) { convTitleEl.innerHTML = ''; return; }
+    // 精致小表格：累计(入/出) + 单次最大(入/出)
+    convTitleEl.innerHTML =
+      '<table class="tok-tbl" title="token 用量统计">' +
+        '<thead><tr><th></th>' +
+          '<th>累计</th>' +
+          '<th title="本会话内单次 LLM 调用的最大值。本地部署模型时，上下文窗口建议 ≥ 单次最大入 × 1.5~2">单次最大</th>' +
+        '</tr></thead>' +
+        '<tbody>' +
+          '<tr><td class="tok-axis">入</td>' +
+            '<td>' + sessionTokens.in.toLocaleString() + '</td>' +
+            '<td class="tok-hi">' + sessionMax.in.toLocaleString() + '</td>' +
+          '</tr>' +
+          '<tr><td class="tok-axis">出</td>' +
+            '<td>' + sessionTokens.out.toLocaleString() + '</td>' +
+            '<td class="tok-hi">' + sessionMax.out.toLocaleString() + '</td>' +
+          '</tr>' +
+        '</tbody>' +
+      '</table>';
+  }
+
+  function genThreadId(){ return 't_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+  function newConversation(){
+    cancelCurrentTurn();
+    historyRevision++;
+    FosAnswerRecovery.remember(recoveryKey, '');
+    currentThreadId = genThreadId();   // 预生成；服务端 get_or_create 时落地
+    sessionTokens = { in: 0, out: 0 };
+    sessionMax = { in: 0, out: 0 };
+    if (convTitleEl) convTitleEl.textContent = '新对话';
+    messages.innerHTML = AI_WHO + '<div class="msg ai"><div class="bubble"><div class="answer">输入问题。</div></div></div>';
+    const welcome=document.getElementById('ragChatWelcomeTemplate');
+    if(welcome)messages.replaceChildren(welcome.content.cloneNode(true));
+    input.value='';input.dispatchEvent(new Event('input'));
+    // 取消侧边栏高亮
+    document.querySelectorAll('.conv-item').forEach(el => el.classList.remove('active'));
+  }
+  document.getElementById('newChatBtn').addEventListener('click', newConversation);
+  window.FosAsk={newConversation,openConversation(thread){restoreConversation(thread);},focusInput(){input.focus();}};
+
+  /* ---------- 删除会话历史 ---------- */
+  // 从 cookie 取 CSRF token（Django 默认 csrftoken cookie 对 JS 可见）
+  function getCSRFToken(){
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  async function deleteConversation(btn){
+    if (btn.dataset.deleting) return;  // 防重复点击
+    const thread = btn.dataset.thread;
+    const title = (btn.dataset.title || '该会话');
+    if (!(await fosConfirm({
+      title: '删除会话', confirmText: '删除',
+      message: '确定删除「' + title + '」？此操作不可撤销。',
+    }))) return;
+    btn.dataset.deleting = '1';
+    btn.disabled = true;
+    try {
+      const resp = await fetch('/kb/conv/' + encodeURIComponent(thread) + '/delete/', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': getCSRFToken(), 'X-Requested-With': 'XMLHttpRequest' },
+      });
+      // 即使后端返回 404/500，也尝试读取 JSON message 做友好提示
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.message || ('HTTP ' + resp.status));
+      if (data.ok === false) throw new Error(data.message || '删除失败');
+      // 从侧边栏移除该项（幂等：会话已删时后端也返回 ok，前端照常移除）
+      const item = btn.closest('.conv-item');
+      if (item) item.remove();
+      // 若删的是当前会话 → 进入新对话
+      if (thread === currentThreadId) newConversation();
+      // 列表空了 → 显示空态
+      const list = document.getElementById('convList');
+      if (list && !list.querySelector('.conv-item')) {
+        const empty = document.createElement('div');
+        empty.className = 'conv-empty'; empty.textContent = '还没有会话';
+        list.appendChild(empty);
+      }
+    } catch(err) {
+      btn.dataset.deleting = '';
+      btn.disabled = false;
+      alert('删除失败：' + (err.message || err));
+    }
+  }
+
+  // 绑定已渲染的删除按钮
+  function bindConvDeleteButtons(){
+    document.querySelectorAll('.conv-del').forEach(btn => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); deleteConversation(btn); });
+    });
+  }
+  bindConvDeleteButtons();
+
+  function restoreConversation(thread) {
+    cancelCurrentTurn();
+    const revision = ++historyRevision;
+    currentThreadId = thread;
+    busy = true; sendBtn.disabled = true;
+    FosAnswerRecovery.remember(recoveryKey, thread);
+    document.querySelectorAll('.conv-item').forEach(el => el.classList.toggle('active', el.dataset.thread === thread));
+    recovery = FosAnswerRecovery.watch(thread, {onUpdate(data) {
+      if (revision !== historyRevision || thread !== currentThreadId) return;
+      if (!document.querySelector('.conv-item[data-thread="'+thread+'"]')) addConvItem(thread, data.title || '会话', '');
+      busy = !!data.active_answer;
+      sendBtn.disabled = busy;
+      stopBtn.hidden = !busy; stopBtn.style.display = busy ? '' : 'none';
+        if (data.kb_slug) { /* no dropdown anymore; agent picks KB automatically */ }
+        if (convTitleEl) convTitleEl.textContent = data.title || '';
+        messages.innerHTML = '';
+        (data.messages || []).forEach(m => {
+          const div = document.createElement('div');
+          div.className = 'msg ' + (m.role === 'user' ? 'user' : 'ai');
+          const inner = m.role === 'user'
+            ? '<div class="bubble">' + (m.content||'').replace(/</g,'&lt;') + '</div>'
+            : AI_WHO + '<div class="bubble"><div class="answer">' + (window.marked ? DOMPurify.sanitize(window.marked.parse(m.content||'')) : (m.content||'').replace(/</g,'&lt;')) + '</div></div>';
+          div.innerHTML = inner;
+          messages.appendChild(div);
+          if (m.role === 'ai' && ['queued','running'].includes(m.completion_status)) {
+            const status = document.createElement('div');
+            status.className = 'turn-progress';
+            status.textContent = (data.active_answer?.stage || '后台生成中') + '…';
+            div.querySelector('.bubble').appendChild(status);
+          }
+          if (m.role === 'ai' && m.completion_status === 'incomplete') {
+            const note = document.createElement('div');
+            note.className = 'answer-incomplete';
+            note.textContent = '⚠ ' + (m.failure_reason || '此前的回答未完成，旧记录没有保存中断原因。') + (m.content ? ' 已保留部分正文，不能作为完整结论。' : ' 尚未生成答案正文。') + ' 请重试原问题。';
+            note.style.cssText = 'color:var(--warn);font-size:13px;margin-top:8px';
+            div.querySelector('.bubble').appendChild(note);
+          }
+          // AI 消息：若有来源出处则渲染可点击链接
+          if (m.role === 'ai' && m.citations && m.citations.length) {
+            renderCitations(div, m.citations);
+          }
+        });
+        if (!messages.children.length) {
+          messages.innerHTML = AI_WHO + '<div class="msg ai"><div class="bubble"><div class="answer">（无历史消息）</div></div></div>';
+        }
+        messages.scrollTop = messages.scrollHeight;
+    }, onError(error) {
+      if (revision !== historyRevision) return;
+      if ([401,403,404].includes(error.status)) {
+        newConversation();
+        if (convTitleEl) convTitleEl.textContent = error.message;
+        return;
+      }
+      if (convTitleEl) convTitleEl.textContent = error.message + '，正在重试…';
+    }});
+  }
+  document.querySelectorAll('.conv-item').forEach(el => {
+    el.addEventListener('click', event => {
+      if (event.target.closest('.conv-del')) return;
+      event.preventDefault(); badges.read(el.dataset.thread); restoreConversation(el.dataset.thread);
+    });
+  });
+
+  // 若 URL 指定了 conv，进入时自动加载该会话
+  {% if active_thread %}
+  (async () => {
+    const thread='{{ active_thread|escapejs }}';
+    const el = document.querySelector('.conv-item[data-thread="'+thread+'"]');
+    if (el) el.click();else restoreConversation(thread);
+  })();
+  {% else %}
+  const rememberedThread = FosAnswerRecovery.recalled(recoveryKey);
+  if (rememberedThread) restoreConversation(rememberedThread);
+  else newConversation();
+  {% endif %}
+
+  /* ---------- 来源出处链接（每文档一个 chip；有 chunk 溯源 → 证据面板，无 → 切片页） ---------- */
+  function shortPageLabel(label){
+    return String(label || '').replace(/[第\s页]/g, '');
+  }
+  function renderCitations(aiMsg, citations){
+    if (!citations || !citations.length) return;
+    const bubble = aiMsg.querySelector('.bubble');
+    if (!bubble || bubble.querySelector('.cite-row')) return;  // 已渲染避免重复
+    const row = document.createElement('div');
+    row.className = 'cite-row';
+    row.innerHTML = '<span class="cite-label">📎 来源出处</span>';
+    const imgRow = document.createElement('div');
+    imgRow.className = 'cite-imgs';
+    let shown = 0;
+    citations.forEach((c) => {
+      if (c.kind === 'graph' && c.relation_id && c.fact_digest) {
+        const link = document.createElement('a');
+        link.className = 'cite-chip'; link.target = '_blank'; link.rel = 'noopener';
+        link.href = '/kb/graph/fact/' + encodeURIComponent(c.relation_id) + '/?v=' + encodeURIComponent(c.fact_digest);
+        link.textContent = '◇ ' + (c.source || '图谱原始依据').slice(0, 45);
+        link.title = c.label || '查看已核对的关系与原始来源';
+        row.appendChild(link); shown++; return;
+      }
+      if (!c.doc_id) return;  // 无 doc_id 无法链接
+      // 文档名：取文件名去扩展名，太长截断
+      let name = (c.source || '文档').replace(/\.[^.]+$/, '');
+      name = name.replace(/</g,'&lt;').slice(0, 22);
+      const cnt = (c.highlights || []).length;
+      const badge = cnt > 1 ? ' <span class="cite-cnt">' + cnt + '</span>' : '';
+      // chunk 级引用（有溯源）：页码徽标 + 点击打开证据面板（原 PDF 页红圈定位）
+      const chunks = (c.chunks || []).filter(ch => ch && ch.chunk_id);
+      if (chunks.length) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'cite-chip has-ev';
+        // 页码徽标去重（同页多 chunk 只显示一个 P 标）
+        const seenPages = new Set();
+        const pageTags = chunks.slice(0, 6).filter(ch => {
+          const p = shortPageLabel(ch.page);
+          if (!p || seenPages.has(p)) return false;
+          seenPages.add(p); return true;
+        }).slice(0, 4).map(ch =>
+          '<span class="cite-page" title="证据定位">P' + shortPageLabel(ch.page) + '</span>').join('');
+        b.innerHTML = '📄 ' + name + badge + ' ' + pageTags;
+        b.title = '查看证据定位：' + chunks.slice(0, 4).map(ch => ch.page).join('、');
+        b.addEventListener('click', () => {
+          if (window.fosEvidencePanel) window.fosEvidencePanel(chunks[0].chunk_id, {chunks});
+        });
+        row.appendChild(b);
+        shown++;
+      } else {
+        const a = document.createElement('a');
+        a.className = 'cite-chip';
+        a.target = '_blank'; a.rel = 'noopener';
+        const base = '/kb/doc/' + encodeURIComponent(c.doc_id) + '/slices/';
+        const hls = (c.highlights || []).filter(h => h && h.length >= 3).slice(0, 12);
+        const qs = hls.map(h => 'h=' + encodeURIComponent(h)).join('&');
+        a.href = qs ? base + '?' + qs : base;
+        a.innerHTML = '📄 ' + name + badge;
+        a.title = '查看本次检索命中的切片（' + (hls.length || 0) + ' 个锚点）';
+        row.appendChild(a);
+        shown++;
+      }
+      // 图片命中：内联缩略图直接展示（点击新标签看原图）
+      (c.images || []).forEach((u, idx) => {
+        const ia = document.createElement('a');
+        ia.className = 'cite-img-link';
+        ia.href = u;
+        ia.target = '_blank'; ia.rel = 'noopener';
+        ia.title = '命中图片 ' + (idx + 1) + '（来自 ' + name + '）· 点击看原图';
+        const im = document.createElement('img');
+        im.src = u; im.loading = 'lazy'; im.alt = '命中图片';
+        ia.appendChild(im);
+        imgRow.appendChild(ia);
+        shown++;
+      });
+    });
+    if (shown > 0) {
+      bubble.appendChild(row);
+      if (imgRow.children.length) bubble.appendChild(imgRow);
+    }
+  }
+  window.renderCitations = renderCitations;  // 调试/测试出口
+
+  /* ---------- 提交问答 ---------- */
+  async function submit() {
+    const text = input.value.trim();
+    if (!text || busy) return;
+    if (!currentThreadId) currentThreadId = genThreadId();
+    if (recovery) recovery.stop();
+    FosAnswerRecovery.remember(recoveryKey, currentThreadId);
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    busy = true; sendBtn.disabled = true; stopBtn.hidden = false; stopBtn.style.display = '';
+    historyRevision++;
+    const submittedThread = currentThreadId;
+    messages.querySelector('.rag-chat-welcome')?.remove();
+
+    // user msg
+    const um = document.createElement('div'); um.className = 'msg user';
+    um.innerHTML = '<div class="bubble">' + text.replace(/</g,'&lt;') + '</div>';
+    messages.appendChild(um);
+
+    // ai container: 助手标签 + 工具状态区 + 回答区（思考阶段显示闪烁光标）
+    const am = document.createElement('div'); am.className = 'msg ai';
+    am.innerHTML = AI_WHO + '<div class="bubble"><div class="tool-area"></div><div class="answer thinking"></div></div>';
+    messages.appendChild(am);
+    const answerEl = am.querySelector('.answer');
+    const toolArea = am.querySelector('.tool-area');
+    const progressEl = document.createElement('div');
+    progressEl.className = 'tool-status turn-progress';
+    progressEl.setAttribute('role', 'status');
+    progressEl.textContent = '正在准备问答…';
+    toolArea.appendChild(progressEl);
+    const toolRows = {};  // run_id -> 状态行元素
+    let firstToken = true;
+    let turnCitations = [];  // 本轮检索的来源出处（citations 事件累积）
+    messages.scrollTop = messages.scrollHeight;
+
+    const url = '/kb/stream/';
+    const body = new URLSearchParams({
+      message: text,
+      thread_id: submittedThread,
+    });
+
+    let mdBuffer = '';
+    // LLM 输出可能引用文档原文（含恶意 HTML）→ marked 渲染后必须 DOMPurify 消毒；
+    // marked 缺失时兜底整体转义（此前直插原文是 XSS 面）
+    const renderMd = () => {
+      if (window.marked && window.DOMPurify) {
+        answerEl.innerHTML = DOMPurify.sanitize(window.marked.parse(mdBuffer));
+      } else {
+        answerEl.textContent = mdBuffer;
+      }
+      messages.scrollTop = messages.scrollHeight;
+    };
+
+    // 状态图标：进行中=转圈圆圈（CSS 动画），完成=SVG 打勾。不再用 emoji。
+    const CHECK_SVG = '<svg class="ts-check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.6l3 3 6-6.5"/></svg>';
+    const markDone = (row) => {
+      if (!row || row.classList.contains('done')) return;
+      row.classList.add('done');
+      row.insertAdjacentHTML('beforeend', CHECK_SVG);
+    };
+    let pendingThink = [];  // 思考行：下一个动作开始时即视为结束
+
+    /* ---------- 管线阶段条（站点开启 qa_enhance 时由 step 事件驱动） ---------- */
+    const PIPE_STAGES = ['query_plan', 'hybrid_search', 'answer_generation', 'answer_verification'];
+    const PIPE_LABELS = { query_plan: '问题理解', hybrid_search: '检索证据',
+                          answer_generation: '生成回答', answer_verification: '核对结论' };
+    let pipeEl = null;
+    const pipeChips = {};
+    function ensurePipe() {
+      if (pipeEl) return;
+      pipeEl = document.createElement('div');
+      pipeEl.className = 'pipe-line';
+      PIPE_STAGES.forEach(st => {
+        const s = document.createElement('span');
+        s.className = 'pipe-chip';
+        s.textContent = PIPE_LABELS[st];
+        pipeEl.appendChild(s);
+        pipeChips[st] = s;
+      });
+      toolArea.prepend(pipeEl);
+    }
+    function setPipe(stage, cls, title) {
+      const c = pipeChips[stage];
+      if (!c) return;
+      c.className = 'pipe-chip ' + cls;
+      if (title) c.title = title;
+    }
+    let planDetailEl = null;
+    function handleStep(p) {
+      if (!p || !p.stage) return;
+      ensurePipe();
+      if (p.stage === 'query_plan' && p.status === 'done' && p.detail) {
+        if (!planDetailEl) {
+          planDetailEl = document.createElement('div');
+          planDetailEl.className = 'pipe-plan';
+          pipeEl.after(planDetailEl);
+        }
+        planDetailEl.textContent = p.detail.length > 110 ? p.detail.slice(0, 110) + '…' : p.detail;
+      }
+      if (p.status === 'start') setPipe(p.stage, 'run');
+      else if (p.status === 'done') setPipe(p.stage, p.ok === false ? 'fail' : 'done', p.detail || '');
+      else if (p.status === 'skip') setPipe(p.stage, 'skip', p.detail || '跳过');
+    }
+
+    const stream = FosChatStream.create({onAbort(error) {
+      if (activeTurn !== stream) return;
+      answerEl.classList.remove('thinking');
+      toolArea.querySelectorAll('.ts-spin').forEach(el => el.remove());
+      toolArea.querySelectorAll('.pipe-chip.run').forEach(el => el.classList.remove('run'));
+      progressEl.textContent = error.message;
+      busy = false; sendBtn.disabled = false;
+      stopBtn.hidden = true; stopBtn.style.display = 'none';
+    }, onEvent(etype, payload) {
+      if (activeTurn !== stream || currentThreadId !== submittedThread) return;
+      if (etype === 'heartbeat') {
+        if (!document.querySelector('.conv-item[data-thread="'+submittedThread+'"]')) addConvItem(submittedThread, text.slice(0,30), '');
+        const seconds = Number(payload.elapsed);
+        const elapsed = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+        progressEl.textContent = String(payload.stage || '正在处理问答') + '… 已等待 ' + elapsed + ' 秒';
+      } else if (etype === 'token') {
+        // 首个 token 到达 → 收起工具状态行（淡出但保留，让用户看到做过什么）
+        if (firstToken) {
+          firstToken = false;
+          answerEl.classList.remove('thinking');
+          Object.values(toolRows).forEach(markDone);
+        }
+        mdBuffer += payload.text || ''; renderMd();
+      } else if (etype === 'reasoning') {
+        // 可选：把简短的思考作为工具区提示（同样：进行中转圈 → 后续动作开始/首个回答 token 打勾）
+        const rtxt = (payload.text || '').trim().split('\n')[0];
+        if (rtxt) {
+          const r = document.createElement('div');
+          r.className = 'tool-status';
+          r.innerHTML = '<span class="ts-spin"></span><span class="ts-label">' + rtxt.replace(/</g,'&lt;').slice(0,80) + '</span>';
+          toolArea.appendChild(r);
+          const rid = 'think-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+          toolRows[rid] = r;
+          pendingThink.push(r);
+          messages.scrollTop = messages.scrollHeight;
+        }
+      } else if (etype === 'tool_start') {
+        // 思考结束、动作开始：给前面的思考行打勾
+        pendingThink.forEach(markDone);
+        pendingThink.length = 0;
+        // 新增一行：转圈 + 可读标签
+        const row = document.createElement('div');
+        row.className = 'tool-status';
+        row.dataset.run = payload.run_id || '';
+        const label = payload.label || '调用工具…';
+        row.innerHTML = '<span class="ts-spin"></span>' +
+                        '<span class="ts-label">' + label.replace(/</g,'&lt;') + '</span>';
+        toolArea.appendChild(row);
+        if (payload.run_id) toolRows[payload.run_id] = row;
+        messages.scrollTop = messages.scrollHeight;
+      } else if (etype === 'tool_end') {
+        // 标记该行完成（打勾、去转圈）
+        markDone(toolRows[payload.run_id]);
+      } else if (etype === 'code_run') {
+        // 在浏览器 Pyodide 沙箱执行 agent 生成的代码
+        renderMd();
+        runCodeInSandbox(payload.code || '', payload.filename || 'analysis.xlsx', am, payload.aid || '');
+      } else if (etype === 'citations') {
+        // 累积本轮来源出处（流结束后渲染可点击链接）
+        turnCitations = Array.from(new Map(turnCitations.concat(payload.citations || []).map(c => [
+          c.kind === 'graph' ? 'graph:' + c.relation_id + ':' + c.fact_digest : 'document:' + c.doc_id, c
+        ])).values());
+      } else if (etype === 'step') {
+        // 管线阶段（问题理解/检索/生成/核对）
+        handleStep(payload);
+      } else if (etype === 'verify') {
+        // 核实结论三态：fail → 拒答展示；warn → 黄条提示（附带信息未核实）；pass → 绿徽标
+        if (payload.ok === false) {
+          answerEl.classList.remove('thinking');
+          const bubble = am.querySelector('.bubble');
+          const card = document.createElement('div');
+          card.className = 'verify-refused';
+          const issues = (payload.issues || []).map(t =>
+            '<li>' + String(t).replace(/</g, '&lt;') + '</li>').join('');
+          card.innerHTML = '<div class="vr-title">⚠ 本次未能形成已核实的结论</div>' +
+            (issues ? '<ul class="vr-issues">' + issues + '</ul>' : '');
+          bubble.insertBefore(card, answerEl);
+          answerEl.textContent = '';
+          answerEl.style.display = '';
+          messages.scrollTop = messages.scrollHeight;
+        } else {
+          const vb = document.createElement('div');
+          const warns = payload.warn || [];
+          if (warns.length) {
+            vb.className = 'verify-warn-badge';
+            vb.textContent = '✓ 核心结论已核实 · 附带信息未核实：' +
+              warns.slice(0, 2).join('；');
+          } else {
+            vb.className = 'verify-ok-badge';
+            vb.textContent = '✓ 结论已对照检索证据核实';
+          }
+          am.querySelector('.bubble').appendChild(vb);
+        }
+      } else if (etype === 'usage') {
+        // 累加本轮 token 用量到会话总数，并更新顶部显示
+        sessionTokens.in += parseInt(payload.input_tokens) || 0;
+        sessionTokens.out += parseInt(payload.output_tokens) || 0;
+        // 单次 LLM 调用最大值（取本轮最大与会话记录的较大者）
+        const mi = parseInt(payload.max_input_tokens) || 0;
+        const mo = parseInt(payload.max_output_tokens) || 0;
+        if (mi > sessionMax.in) sessionMax.in = mi;
+        if (mo > sessionMax.out) sessionMax.out = mo;
+        renderTokenUsage();
+      }
+    }});
+    activeTurn = stream;
+    let needsRecovery = false;
+    try {
+      await stream.run(url, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': getCSRFToken() },
+        body,
+      });
+      if (activeTurn === stream) renderMd();
+    } catch(e) {
+      if (activeTurn !== stream || currentThreadId !== submittedThread) return;
+      needsRecovery = true;
+      renderMd();
+      const err = document.createElement('div');
+      err.setAttribute('role', 'alert');
+      err.style.cssText = 'color:var(--red);font-size:13px;margin-top:8px';
+      err.textContent = '正在恢复回答状态：' + (e.message || e);
+      am.querySelector('.bubble').appendChild(err);
+    } finally {
+      if (!stream.signal.aborted) progressEl.remove();
+      if (activeTurn === stream) {
+        activeTurn = null;
+        busy = false; sendBtn.disabled = false; stopBtn.hidden = true; stopBtn.style.display = 'none';
+        answerEl.classList.remove('thinking');
+        toolArea.querySelectorAll('.ts-spin').forEach(el => el.remove());
+        toolArea.querySelectorAll('.pipe-chip.run').forEach(el => el.classList.remove('run'));
+        if (turnCitations.length) renderCitations(am, turnCitations);
+        if (!document.querySelector('.conv-item[data-thread="'+submittedThread+'"]')) {
+          addConvItem(submittedThread, text.slice(0,30), '');
+        }
+        if (needsRecovery) restoreConversation(submittedThread);
+      }
+    }
+  }
+
+  // 向侧边栏插入一条会话项（新对话落地后）
+  function addConvItem(thread, title, kbName){
+    const list = document.getElementById('convList');
+    const empty = list.querySelector('.conv-empty');
+    if (empty) empty.remove();
+    const a = document.createElement('a');
+    a.className = 'conv-item active';
+    a.href = '?conv=' + thread;
+    a.dataset.thread = thread; a.dataset.title = title;
+    a.innerHTML = '<span class="conv-title">' + title.replace(/</g,'&lt;') + '</span>' +
+                  '<span class="conv-meta">' + kbName + ' · 刚刚</span>' +
+                  '<button class="conv-del" type="button" title="删除此会话" ' +
+                  'data-thread="' + thread + '" data-title="' + title.replace(/"/g,'&quot;') + '" ' +
+                  'aria-label="删除会话">×</button>';
+    document.querySelectorAll('.conv-item').forEach(x => x.classList.remove('active'));
+    a.addEventListener('click', (e) => {
+      if (e.target.closest('.conv-del')) return;
+      e.preventDefault(); badges.read(thread); restoreConversation(thread);
+    });
+    list.insertBefore(a, list.firstChild);
+    bindConvDeleteButtons();
+  }
+})();
+</script>
+{% if chat_embedded %}<script src="{% static 'js/assistant_embedded.js' %}?v=1" data-user="{{ user.pk }}" defer></script>{% endif %}
+{% endblock %}

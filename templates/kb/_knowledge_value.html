@@ -1,0 +1,2 @@
+{% if item.name %}<strong class="knowledge-value-name">{{ item.name }}</strong>{% endif %}
+{% if item.children %}<ul class="knowledge-value-list">{% for child in item.children %}<li>{% include "kb/_knowledge_value.html" with item=child %}</li>{% endfor %}</ul>{% else %}<span class="knowledge-value-text">{{ item.text }}</span>{% endif %}

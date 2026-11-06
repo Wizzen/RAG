@@ -1,0 +1,371 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+/* 主题预置：在样式表加载前应用，避免暗色用户看到闪白（FOUC）。
+   localStorage 优先；未设置时跟随系统偏好。 */
+(function(){
+  var t = null;
+  try { t = localStorage.getItem('fos-theme'); } catch(e) {}
+  if (t !== 'dark' && t !== 'light') {
+    t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  document.documentElement.dataset.theme = t;
+  if (!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+    document.documentElement.classList.add('fx-enter');
+  }
+})();
+</script>
+<link rel="icon" href="{% static 'vehicle_tracker/icons/brand-mickey-light.svg' %}" type="image/svg+xml">
+<title>{% block title %}SHDR RAG{% endblock %}</title>
+<link rel="stylesheet" href="{% static 'css/fos.css' %}?v=20261101-harmony2">
+<link rel="stylesheet" href="{% static 'css/fos_shell.css' %}?v=20261102-logo">
+<link rel="stylesheet" href="{% static 'css/fos_fx.css' %}?v=1">
+<script src="{% static 'js/fos_vibe.js' %}?v=1" defer></script>
+<style>
+  /* Back-compat aliases so existing child templates keep working.
+     Child pages use the old variable names; we map them to the new tokens. */
+  :root{
+    --bg:var(--paper);--panel:var(--paper);--card:var(--surface);--elev:var(--surface);
+    --border:var(--rule-soft);--border-hi:var(--rule);
+    --accent:var(--brand);--accent2:var(--warn);--soft:var(--brand-soft);
+    --green:var(--ok);--red:var(--danger);--amber:var(--warn);
+  }
+</style>
+{% block extra_head %}{% endblock %}
+</head>
+<body{% if chat_embedded %} class="rag-chat-embedded"{% endif %}>
+<div class="fx-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+<aside class="fos-sidebar" id="sidebar" aria-label="侧边栏">
+  <span class="side-stars" aria-hidden="true"><i></i></span>
+  <a class="side-brand" href="/">
+    <span class="side-logo"><img class="brand-mark" src="{% static 'vehicle_tracker/icons/brand-mickey-light.svg' %}" width="40" height="40" alt="" aria-hidden="true"></span>
+    <span class="side-name"><span>SHDR<span class="dot">·</span>RAG</span><small>知识库工作台</small></span>
+  </a>
+  <nav id="nav" aria-label="主导航">
+    <div class="nav-group" data-group="工作台">
+      <div class="nav-label">工作台</div>
+      {% if user_is_staff or user_is_manager %}<a class="nav-item" href="/kb/manage/" data-tone="blue" data-nav-also="/kb/feeds/ /kb/inspection/ /kb/doc/"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"/><path d="M12 15.5v-5M9.8 12.6 12 10.4l2.2 2.2"/></svg><span>资料上传</span></a>{% endif %}
+      <a class="nav-item" href="/kb/search/" data-tone="cyan" data-nav-also="/kb/assets/"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg><span>综合搜索</span></a>
+      <a class="nav-item" href="/kb/graph/" data-tone="violet"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.4 7.6 15.6 6.4M7.2 9.2l3.6 6.6M16.9 8.3l-3.7 7.5"/></svg><span>知识图谱</span></a>
+      {% include "vehicle_tracker/_nav.html" %}
+      {% include "operations_workbench/_nav.html" %}
+      <button type="button" class="nav-item rag-chat-nav" data-tone="pink" data-rag-chat-open><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 13.9 8l4.6 1.9-4.6 1.9L12 16.3l-1.9-4.5L5.5 9.9 10.1 8z"/><path d="M18.5 15.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/></svg><span>AI 助手</span></button>
+    </div>
+    <div class="nav-group" data-group="运营">
+      <div class="nav-label">运营</div>
+      <a class="nav-item" href="/dashboard/" data-tone="green"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M7 16v-5M12 16V6M17 16v-8"/></svg><span>运行日志</span></a>
+      {% if user_is_staff or user_is_manager %}<a class="nav-item" href="/accounts/users/" data-tone="amber"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 5a3.5 3.5 0 0 1 0 7M21 20c0-2.5-1.5-4.6-3.7-5.5"/></svg><span>用户管理</span></a>{% endif %}
+    </div>
+    {% if user_is_staff %}
+    <div class="nav-group" data-group="系统">
+      <div class="nav-label">系统</div>
+      <a class="nav-item" href="/kb/settings/" data-tone="indigo"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg><span>站点配置</span></a>
+      <a class="nav-item" href="/kb/eval/" data-tone="teal"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/></svg><span>检索评估</span></a>
+      <a class="nav-item" href="/admin/" data-tone="rose"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 19 6v5.6c0 4.2-2.9 7.6-7 8.9-4.1-1.3-7-4.7-7-8.9V6z"/></svg><span>后台管理</span></a>
+    </div>
+    {% endif %}
+  </nav>
+  <div class="side-foot">
+    {% if user.is_authenticated %}
+    <button type="button" class="side-user pw-open" title="修改密码">
+      <span class="side-ava" aria-hidden="true">{{ user.username|first|upper }}</span>
+      <span class="side-who"><b>{{ user.username }}</b><small>{% if user_department %}{{ user_department }}{% else %}已登录{% endif %}</small></span>
+    </button>
+    {% else %}
+    <a class="side-user" href="/accounts/login/"><span class="side-ava" aria-hidden="true">?</span><span class="side-who"><b>登录</b><small>访问知识库</small></span></a>
+    {% endif %}
+    <div class="side-tools">
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换亮暗主题" title="切换亮暗主题">
+        <svg class="ico-sun" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M15.7 4.3l-1.4 1.4M5.7 14.3l-1.4 1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="10" r="3.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+        <svg class="ico-moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.4A7 7 0 0 1 7.6 3.5a7 7 0 1 0 8.9 8.9z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      </button>
+      {% if user.is_authenticated %}<form class="logout-form" method="post" action="{% url 'accounts:logout' %}">{% csrf_token %}<button type="submit" class="side-icon-btn" aria-label="退出登录" title="退出登录"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h3.5A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5H14M10 16l-4-4 4-4M6 12h10"/></svg></button></form>{% endif %}
+    </div>
+  </div>
+</aside>
+<div class="fos-scrim" id="navScrim" hidden></div>
+<header class="fos-topbar">
+  <button class="fos-nav-toggle" id="navToggle" aria-label="菜单" aria-expanded="false" aria-controls="sidebar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+  <a class="brand" href="/"><img class="brand-mark" src="{% static 'vehicle_tracker/icons/brand-mickey-light.svg' %}" width="30" height="30" alt="" aria-hidden="true">SHDR<span class="dot">·</span>RAG</a>
+</header>
+<div class="fos-container">
+  {% block content %}{% endblock %}
+</div>
+{% block scripts %}{% endblock %}
+<div id="toastHost" aria-live="polite"></div>
+{# Django messages → toast（escapejs 保证 </script> 等无法逃逸 JSON 字符串） #}
+<script id="dj-msgs" type="application/json">[{% for m in messages %}{"text":"{{ m|escapejs }}","tag":"{{ m.tags|escapejs }}"}{% if not forloop.last %},{% endif %}{% endfor %}]</script>
+<script>
+/* 全局 Toast：fosToast(text, type, opts)
+   type: ok | err | warn | info；opts.sticky=true 时不自动消失（点击关闭） */
+window.fosToast = function(text, type, opts){
+  type = type || 'ok'; opts = opts || {};
+  var host = document.getElementById('toastHost');
+  if (!host) return;
+  var t = document.createElement('div');
+  t.className = 'toast toast-' + type + (opts.sticky ? ' sticky' : '');
+  t.textContent = text;
+  host.appendChild(t);
+  requestAnimationFrame(function(){ t.classList.add('show'); });
+  var kill = function(){ t.classList.remove('show'); setTimeout(function(){ t.remove(); }, 300); };
+  t.addEventListener('click', kill);
+  if (!opts.sticky) setTimeout(kill, type === 'warn' ? 8000 : 4000);
+};
+(function(){
+  var raw = document.getElementById('dj-msgs');
+  if (!raw) return;
+  var map = {success:'ok', error:'err', warning:'warn', info:'info', debug:'info'};
+  try {
+    JSON.parse(raw.textContent).forEach(function(m){
+      var tag = (m.tag || '').split(' ')[0].toLowerCase();
+      window.fosToast(m.text, map[tag] || 'info',
+        {sticky: tag === 'warning' || tag === 'error'});
+    });
+  } catch(e) {}
+})();
+</script>
+<script>
+/* 统一弹窗（与「用户管理 · 添加账号」同款 fos-dialog 样式）：
+   fosConfirm({title, message, confirmText, danger}) → Promise<boolean>
+   fosPrompt({title, label, value, hint, multiline, confirmText}) → Promise<string|null>（取消/关闭为 null）
+   表单声明 data-confirm="文案"（可选 data-confirm-title / data-confirm-ok）即自动弹窗确认后提交 */
+(function(){
+  function esc(s){ return String(s == null ? '' : s); }
+  function baseDialog(title){
+    var d = document.createElement('dialog');
+    d.className = 'fos-dialog';
+    d.innerHTML = '<form method="dialog"><div class="dialog-title"></div></form>';
+    d.querySelector('.dialog-title').textContent = esc(title);
+    document.body.appendChild(d);
+    return d;
+  }
+  function actionRow(d, confirmText, danger){
+    var form = d.querySelector('form');
+    var row = document.createElement('div');
+    row.className = 'dialog-actions';
+    var cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'btn outline'; cancel.textContent = '取消';
+    var ok = document.createElement('button');
+    ok.type = 'submit'; ok.className = 'btn ' + (danger ? 'danger' : 'primary');
+    ok.textContent = esc(confirmText || '确定');
+    ok.value = 'ok';  // method=dialog：按钮 value 即 dialog.returnValue，缺了会恒为“取消”
+    ok.style.marginLeft = '8px';
+    row.appendChild(cancel); row.appendChild(ok);
+    form.appendChild(row);
+    cancel.addEventListener('click', function(){ d.close('cancel'); });
+    d.addEventListener('click', function(e){ if (e.target === d) d.close('cancel'); });  // 点遮罩=取消
+    return d;
+  }
+
+  window.fosConfirm = function(opts){
+    opts = opts || {};
+    return new Promise(function(resolve){
+      var d = baseDialog(opts.title || '请确认');
+      var msg = document.createElement('div');
+      msg.className = 'dialog-msg';
+      msg.textContent = esc(opts.message || '');
+      d.querySelector('form').insertBefore(msg, d.querySelector('.dialog-actions') || null);
+      actionRow(d, opts.confirmText, opts.danger !== false);  // 默认危险样式（红）
+      d.addEventListener('close', function(){
+        resolve(d.returnValue === 'ok');  // method=dialog：点提交按钮 value=ok
+        d.remove();
+      });
+      d.showModal();
+    });
+  };
+
+  window.fosPrompt = function(opts){
+    opts = opts || {};
+    return new Promise(function(resolve){
+      var settled = false;
+      var d = baseDialog(opts.title || '请输入');
+      var form = d.querySelector('form');
+      form.method = 'post';  // 拦截提交，不真跳转
+      var field = document.createElement('div');
+      field.className = 'field';
+      var label = document.createElement('label');
+      label.textContent = esc(opts.label || '');
+      var input;
+      if (opts.multiline) {
+        input = document.createElement('textarea');
+        input.rows = 3;
+      } else {
+        input = document.createElement('input');
+        input.type = 'text';
+      }
+      input.value = esc(opts.value || '');
+      if (opts.placeholder) input.placeholder = opts.placeholder;
+      field.appendChild(label); field.appendChild(input);
+      form.appendChild(field);
+      if (opts.hint) {
+        var hint = document.createElement('div');
+        hint.className = 'dialog-hint';
+        hint.textContent = esc(opts.hint);
+        form.appendChild(hint);
+      }
+      actionRow(d, opts.confirmText || '保存', false);
+      form.addEventListener('submit', function(e){
+        e.preventDefault();
+        settled = true;
+        d.close('ok');
+        resolve(input.value);
+      });
+      d.addEventListener('close', function(){
+        d.remove();
+        if (!settled) resolve(null);  // 取消 / Esc / 遮罩
+      });
+      d.showModal();
+      input.focus();
+      if (input.select) input.select();
+    });
+  };
+
+  /* 声明式确认：<form data-confirm="…">（多用于服务端渲染的 POST 表单）。
+     异步弹窗确认后用原生 submit() 绕过本拦截器完成提交。 */
+  document.addEventListener('submit', function(e){
+    var f = e.target;
+    if (!(f instanceof HTMLFormElement)) return;
+    var msg = f.getAttribute('data-confirm');
+    if (!msg || f.dataset.fosConfirmed) return;
+    e.preventDefault();
+    window.fosConfirm({
+      title: f.getAttribute('data-confirm-title') || '删除确认',
+      message: msg,
+      confirmText: f.getAttribute('data-confirm-ok') || '删除',
+    }).then(function(ok){
+      if (!ok) return;
+      f.dataset.fosConfirmed = '1';
+      f.submit();  // 原生提交：不再触发 submit 事件，无重入
+    });
+  });
+})();
+</script>
+<script>
+// 窄屏侧栏抽屉
+(function(){
+  var t=document.getElementById('navToggle'),s=document.getElementById('navScrim');if(!t)return;
+  function set(o){document.body.classList.toggle('nav-open',o);t.setAttribute('aria-expanded',o?'true':'false');if(s)s.hidden=!o;}
+  t.addEventListener('click',function(){set(!document.body.classList.contains('nav-open'));});
+  if(s)s.addEventListener('click',function(){set(false);});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')set(false);});
+  document.querySelectorAll('#nav .nav-item').forEach(function(a){a.addEventListener('click',function(){set(false);});});
+})();
+// 当前页导航高亮：按最长路径前缀匹配 href 与 data-nav-also
+(function(){
+  var path=location.pathname,best=null,bestLen=0;
+  document.querySelectorAll('#nav a[href]').forEach(function(a){
+    var prefixes=[a.getAttribute('href')].concat((a.dataset.navAlso||'').split(' ').filter(Boolean));
+    prefixes.forEach(function(p){if(p!=='/'&&path.indexOf(p)===0&&p.length>bestLen){best=a;bestLen=p.length;}});
+  });
+  if(best){best.classList.add('active');best.setAttribute('aria-current','page');}
+  var main=document.querySelector('.fos-container .page-head .page-head-main');
+  if(best&&main&&!main.querySelector('.page-back')){
+    var g=best.closest('.nav-group'),eb=document.createElement('div');
+    eb.className='page-eyebrow';
+    eb.textContent=(g?g.dataset.group+' / ':'')+best.textContent.trim();
+    main.insertBefore(eb,main.firstChild);
+  }
+  // 页头徽章：复用当前导航项的图标与色相（无匹配时用品牌标记）
+  var head=main&&main.parentElement;
+  if(head&&!head.querySelector(':scope>.page-emblem')){
+    var src=best&&best.querySelector('.ni')||document.querySelector('.side-logo .brand-mark');
+    if(src){
+      var em=document.createElement('span'),orbit=document.createElement('i'),tile=document.createElement('span'),ico=src.cloneNode(true);
+      em.className='page-emblem';em.setAttribute('aria-hidden','true');
+      orbit.className='pe-orbit';tile.className='pe-tile';
+      if(ico.classList.contains('ni'))ico.removeAttribute('class');
+      tile.appendChild(ico);em.appendChild(orbit);em.appendChild(tile);
+      head.insertBefore(em,head.firstChild);
+      head.dataset.tone=(best&&best.dataset.tone)||'blue';
+    }
+  }
+})();
+// theme toggle（亮暗互切，localStorage 持久化）
+(function(){
+  var b=document.getElementById('themeBtn');if(!b)return;
+  b.addEventListener('click',function(){
+    var root=document.documentElement,cur=root.dataset.theme==='dark'?'light':'dark';
+    function apply(){root.dataset.theme=cur;try{localStorage.setItem('fos-theme',cur);}catch(e){}}
+    if(!document.startViewTransition||matchMedia('(prefers-reduced-motion: reduce)').matches){apply();return;}
+    // 从按钮位置圆形展开新主题
+    var r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2,
+        R=Math.hypot(Math.max(x,innerWidth-x),Math.max(y,innerHeight-y));
+    root.classList.add('fx-theme-vt');
+    var vt=document.startViewTransition(apply);
+    vt.ready.then(function(){
+      root.animate({clipPath:['circle(0px at '+x+'px '+y+'px)','circle('+R+'px at '+x+'px '+y+'px)']},
+        {duration:620,easing:'cubic-bezier(.4,0,.2,1)',pseudoElement:'::view-transition-new(root)'});
+    }).catch(function(){});
+    vt.finished.finally(function(){root.classList.remove('fx-theme-vt');});
+  });
+})();
+</script>
+{% if user.is_authenticated %}
+{# 自助改密弹窗：顶栏用户名（.pw-open）与用户管理页「改密」按钮共用 #}
+<dialog id="pwdDialog" class="fos-dialog">
+  <form id="pwdForm">
+    {% csrf_token %}
+    <div class="dialog-title">修改密码</div>
+    <div class="field"><label>当前密码</label>
+      <input type="password" name="old_password" autocomplete="current-password" required></div>
+    <div class="field"><label>新密码（至少 6 位）</label>
+      <input type="password" name="new_password1" autocomplete="new-password" minlength="6" required></div>
+    <div class="field"><label>确认新密码</label>
+      <input type="password" name="new_password2" autocomplete="new-password" minlength="6" required></div>
+    <div class="dialog-err" id="pwdErr" hidden></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn outline" id="pwdCancel">取消</button>
+      <button type="submit" class="btn primary" id="pwdSubmit">保存修改</button>
+    </div>
+  </form>
+</dialog>
+<script>
+window.fosPasswordDialog = function(){
+  var d = document.getElementById('pwdDialog');
+  if (!d) return;
+  var err = document.getElementById('pwdErr');
+  if (err) err.hidden = true;
+  d.querySelectorAll('input[type=password]').forEach(function(i){ i.value = ''; });
+  d.showModal();
+  var f = d.querySelector('input[name=old_password]');
+  if (f) f.focus();
+};
+document.addEventListener('click', function(e){
+  if (e.target.closest('.pw-open')) window.fosPasswordDialog();
+});
+(function(){
+  var d = document.getElementById('pwdDialog');
+  if (!d) return;
+  document.getElementById('pwdCancel').addEventListener('click', function(){ d.close(); });
+  document.getElementById('pwdForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    var err = document.getElementById('pwdErr');
+    var btn = document.getElementById('pwdSubmit');
+    btn.disabled = true; btn.textContent = '保存中…'; err.hidden = true;
+    try {
+      var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+      var resp = await fetch('/accounts/password/change/', {
+        method: 'POST', body: new FormData(this),
+        headers: {'X-Requested-With': 'XMLHttpRequest',
+                  'X-CSRFToken': m ? decodeURIComponent(m[1]) : ''},
+      });
+      var data = await resp.json();
+      if (!data.ok) { err.textContent = data.message || '修改失败'; err.hidden = false; return; }
+      d.close();
+      if (window.fosToast) fosToast(data.message, 'ok');
+    } catch(ex) {
+      err.textContent = '请求失败：' + ex; err.hidden = false;
+    } finally {
+      btn.disabled = false; btn.textContent = '保存修改';
+    }
+  });
+})();
+</script>
+{% endif %}
+{% if user.is_authenticated and not chat_embedded and not vehicle_workspace and not operations_workspace %}{% include 'kb/_assistant_widget.html' %}{% endif %}
+</body>
+</html>

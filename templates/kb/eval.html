@@ -1,0 +1,90 @@
+{% extends "kb/_base.html" %}
+{% block title %}检索评估 · SHDR RAG{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div class="page-head-main">
+    <h1>检索评估</h1>
+    <p class="page-desc">用一组真实业务问法检验检索命中率（hit@1 / hit@3），调整配置后可重新运行对比。</p>
+  </div>
+  <div class="page-actions">
+    <a class="btn primary" href="?run=1">▶ 运行评估</a>
+  </div>
+</header>
+
+<div class="fos-tag">
+  <div class="th">问题集<span class="stamp">{{ questions|length }} 题</span></div>
+  <div class="tb">
+    <form method="post" class="eval-add">
+      {% csrf_token %}<input type="hidden" name="action" value="add">
+      <input type="text" name="question" style="flex:2;min-width:220px" required placeholder="评估问题（真实业务问法）" aria-label="评估问题">
+      <input type="text" name="expected_source" style="flex:1;min-width:140px" placeholder="期望来源文档（可选）" aria-label="期望来源文档">
+      <input type="text" name="expected_keyword" style="flex:1;min-width:120px" placeholder="期望关键词（可选）" aria-label="期望关键词">
+      <button class="btn primary" type="submit">＋ 添加</button>
+    </form>
+    {% for q in questions %}
+    <div class="eval-q">
+      <span class="eval-q-text">{{ q.question }}</span>
+      {% if q.expected_source or q.expected_keyword %}
+      <span class="fos-sub">期望：{{ q.expected_source|default:"—" }} / {{ q.expected_keyword|default:"—" }}</span>
+      {% endif %}
+      <form method="post" style="margin:0" data-confirm-title="删除评估问题"
+            data-confirm="删除该评估问题？">
+        {% csrf_token %}<input type="hidden" name="action" value="delete">
+        <input type="hidden" name="qid" value="{{ q.id }}">
+        <button class="btn sm danger" type="submit">删</button>
+      </form>
+    </div>
+    {% empty %}
+    <div class="empty">还没有评估问题。添加几个真实业务问法（含编号类和语义类）。</div>
+    {% endfor %}
+  </div>
+</div>
+
+{% if report %}
+<div class="fos-tag">
+  <div class="th ok">评估结果<span class="stamp">hit@1 {{ report.summary.hit1 }}/{{ report.summary.scored }} · hit@3 {{ report.summary.hit3 }}/{{ report.summary.scored }}</span></div>
+  <div class="tb">
+    {% for q in report.questions %}
+    <div class="eval-result">
+      <div class="eval-q-head">
+        {% if q.rank_hit %}<span class="dept-badge" style="border-color:var(--ok);color:var(--ok)">✓ 命中@{{ q.rank_hit }}</span>
+        {% elif q.expected != "（无期望，仅观察）" %}<span class="dept-badge" style="border-color:var(--danger);color:var(--danger)">✗ 未命中</span>
+        {% else %}<span class="dept-badge">观察</span>{% endif %}
+        <strong>{{ q.question }}</strong>
+        <span class="fos-sub">{{ q.expected }}</span>
+      </div>
+      {% for r in q.rows|slice:":5" %}
+      <div class="eval-row {% if r.hit %}is-hit{% endif %}">
+        <span class="eval-via {{ r.via }}">{{ r.via }}</span>
+        <span class="eval-kb">{{ r.kb|truncatechars:16 }}</span>
+        <span class="eval-score">{% if r.rr is not None %}{{ r.rr }}{% else %}{{ r.score }}{% endif %}</span>
+        <span class="eval-text">{{ r.text|truncatechars:72 }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+.eval-add{display:flex;gap:8px;flex-wrap:wrap;padding-bottom:16px;margin-bottom:4px;border-bottom:1px solid var(--rule-soft)}
+.eval-q{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--rule-soft)}
+.eval-q:last-child{border-bottom:0}
+.eval-q .fos-sub{margin:0}
+.eval-q-text{font:500 13.5px var(--fb);flex:1}
+.eval-result{padding:12px 0;border-bottom:1px solid var(--rule-soft)}
+.eval-result:last-child{border-bottom:0}
+.eval-q-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.eval-row{display:flex;gap:10px;align-items:baseline;padding:4px 0;font:400 12.5px var(--fb);color:var(--dim)}
+.eval-row.is-hit{color:var(--ok)}
+.eval-via{display:inline-block;min-width:52px;font-size:11px;font-weight:500;padding:0 8px;border-radius:999px;background:var(--paper);border:1px solid var(--rule-soft);text-align:center}
+.eval-via.kw{background:var(--warn-soft);border-color:transparent;color:var(--warn-text)}
+.eval-via.vec{background:var(--brand-soft);border-color:transparent;color:var(--brand)}
+.eval-kb{min-width:110px;color:var(--mute)}
+.eval-score{min-width:48px;color:var(--mute)}
+.eval-text{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% if rule.any_of %}
+<div class="knowledge-rule"><p><strong>满足任一条件组（{{ rule.any_of|length }} 组）</strong></p>
+  {% for group in rule.any_of %}<details class="knowledge-rule-combination" {% if forloop.first %}open{% endif %}>
+    <summary>组合 {{ forloop.counter }}{% for term in group.all_of %}{% if term.value %} · {{ term.value }}{% endif %}{% endfor %}</summary>
+    {% include "kb/_knowledge_rule.html" with rule=group %}
+  </details>{% endfor %}
+</div>
+{% elif rule.all_of %}
+<p class="graph-meta">同时满足</p><div class="knowledge-rule-terms">{% for term in rule.all_of %}{% include "kb/_knowledge_rule.html" with rule=term %}{% endfor %}</div>
+{% else %}
+<section class="knowledge-rule-term"><strong>{{ rule.parameter }}</strong><p class="knowledge-rule-requirement">{{ rule.value }}</p>
+  {% if rule.definitions %}<p class="graph-meta">关联判定依据</p><div>{% for term in rule.definitions %}{% include "kb/_knowledge_rule.html" with rule=term %}{% endfor %}</div>{% endif %}
+  {% if rule.source_notes %}<details class="knowledge-rule-notes"><summary>适用条件与原文说明</summary><ul>{% for note in rule.source_notes %}<li>{{ note }}</li>{% endfor %}</ul></details>{% endif %}
+</section>
+{% endif %}

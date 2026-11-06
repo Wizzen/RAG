@@ -1,0 +1,11 @@
+{% extends 'kb/_base.html' %}
+{% block title %}知识库助手 · SHDR RAG{% endblock %}
+{% block content %}
+<section class="assistant-entry">
+  <div class="assistant-entry-icon">{% include 'kb/_assistant_avatar.html' %}</div>
+  <h1>带着问题，随时打开助手</h1>
+  <p>检索知识库、查看原文依据，或分析数据生成报表。右下角的助手会陪你浏览各个页面。</p>
+  <button type="button" class="btn primary" data-rag-chat-open>继续对话</button>
+  <a class="btn outline" href="{% url 'kb:search' %}">浏览与搜索资料</a>
+</section>
+{% endblock %}

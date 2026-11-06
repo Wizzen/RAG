@@ -1,0 +1,12 @@
+Third-party browser libraries served locally by the operations workbench (no CDN).
+
+- Mozilla PDF.js 4.10.38, Apache-2.0. npm `pdfjs-dist@4.10.38`,
+  integrity sha512-/Y3fcFrXEAsMjJXeL9J8+ZG9U01LbuWaYypvDW2ycW1jL269L3js3DVBjDJ0Up9Np1uqDXsDrRihHANhZOlwdQ==
+  Files: `pdfjs-4.10.38/pdf.min.mjs`, `pdf.worker.min.mjs`, `cmaps/` (Adobe CMaps, BSD-3-Clause,
+  see `cmaps/LICENSE`), `standard_fonts/` (Foxit, Liberation; see `LICENSE_FOXIT`, `LICENSE_LIBERATION`).
+  `pdf.min.mjs` SHA-256 27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c
+
+- Apache ECharts 5.6.0, Apache-2.0 (see `echarts-5.6.0/LICENSE`, `NOTICE`). npm `echarts@5.6.0`,
+  integrity sha512-oTbVTsXfKuEhxftHqL5xprgLoc0k7uScAwtryCgWF6hPYFLRwOUHiFmHGCBKP5NPFNkDVopOieyUqYGH8Fa3kA==
+  File: `echarts-5.6.0/echarts.esm.min.mjs` (unmodified `dist/echarts.esm.min.mjs`),
+  SHA-256 7e5b92db87ad168da4c6128876813adfe4442337851fa2a6701886d32dcaa3e2

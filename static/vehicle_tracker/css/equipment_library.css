@@ -1,0 +1,47 @@
+.eq-library { max-width: 1120px; margin: 0 auto; color: var(--text); }
+.eq-intro { padding: 10px 0 25px; border-bottom: 1px solid var(--rule-soft); }
+.eq-kicker, .eq-card > span { color: var(--brand); font-size: 12px; font-weight: 650; letter-spacing: .04em; }
+.eq-intro h1 { margin: 7px 0; font-size: clamp(28px, 4vw, 42px); line-height: 1.16; letter-spacing: -.04em; }
+.eq-intro p, .eq-summary p, .eq-panel > p { margin: 6px 0; color: var(--dim); line-height: 1.7; white-space: pre-line; overflow-wrap: anywhere; }
+.eq-heading, .eq-entry-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin: 25px 0 16px; }
+.eq-heading h2, .eq-summary h2, .eq-panel h3, .eq-entry-head h4 { margin: 0; }
+.eq-library .eq-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.eq-library button:not(.vt-scope button) { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); color: var(--text); padding: 8px 13px; font: inherit; font-size: 13px; cursor: pointer; }
+.eq-library button:hover:not(.vt-scope button), .eq-library button:focus-visible { border-color: var(--brand); color: var(--brand); }
+.eq-library button.eq-primary, .eq-library button.eq-primary:hover { background: var(--brand); color: white; border-color: var(--brand); }
+.eq-library button:disabled { opacity: .55; cursor: wait; }
+.eq-library [hidden] { display: none !important; }
+.eq-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 285px), 1fr)); gap: 14px; }
+.eq-card { display: flex; min-height: 185px; flex-direction: column; padding: 22px; text-decoration: none; color: var(--text); background: var(--surface); border: 1px solid var(--rule); border-radius: 18px; transition: border-color .15s, box-shadow .15s; }
+.eq-card:hover, .eq-card:focus-visible { border-color: var(--brand); box-shadow: 0 6px 20px var(--brand-ring); }
+.eq-card h3 { font-size: 21px; letter-spacing: -.025em; margin: 13px 0 5px; overflow-wrap: anywhere; }
+.eq-card p, .eq-caption, #eq-entries time { color: var(--mute); font-size: 13px; }
+.eq-card p { margin: 0 0 16px; line-height: 1.65; overflow-wrap: anywhere; }
+.eq-card b { margin-top: auto; color: var(--brand); font-size: 13px; }
+.eq-caption { margin: 18px 0; line-height: 1.7; }
+#eq-status, #eq-form-error { padding: 10px 14px; border-radius: 10px; background: var(--brand-soft); color: var(--text); font-size: 13px; line-height: 1.55; }
+.eq-summary { padding: 4px 0 18px; }
+.eq-summary h2 { margin-top: 5px; font-size: 26px; overflow-wrap: anywhere; }
+.eq-layout { display: grid; grid-template-columns: minmax(210px, .8fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.eq-panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 18px; padding: 20px; min-width: 0; }
+.eq-panel h3 { margin: 5px 0 12px; font-size: 18px; overflow-wrap: anywhere; }
+.eq-panel ul, #eq-entries { list-style: none; padding: 0; margin: 0; }
+#eq-parts { overflow: auto; max-height: 62vh; }
+#eq-parts button { display: block; width: 100%; margin-bottom: 2px; border-color: transparent; text-align: start; padding-left: calc(10px + var(--indent) * 10px); overflow-wrap: anywhere; }
+#eq-parts button[aria-current="true"] { color: var(--brand); background: var(--brand-soft); }
+#eq-drawing-row { margin-top: 12px; font-size: 13px; color: var(--dim); }
+#eq-drawing { margin-left: 5px; color: var(--brand); font-family: ui-monospace, monospace; }
+.eq-sources:empty { display: none; }
+.eq-sources:not(:empty) { margin-top: 10px; padding: 12px; border-radius: 12px; }
+.eq-entry-head { border-top: 1px solid var(--rule-soft); padding-top: 17px; }
+#eq-entries li { border-top: 1px solid var(--rule-soft); padding: 12px 0; font-size: 13px; color: var(--dim); }
+#eq-entries time { display: inline-block; margin-left: 8px; font-size: 11px; }
+#eq-entries p { margin: 5px 0 0; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+#eq-editor { margin: auto; padding: 24px; width: min(450px, calc(100vw - 32px)); max-height: 86dvh; overflow-y: auto; border: 1px solid var(--rule); border-radius: 18px; color: var(--text); background: var(--surface); }
+#eq-editor h2 { margin: 0 0 15px; font-size: 21px; }
+#eq-editor::backdrop { background: #0e17275c; }
+#eq-fields label { display: grid; gap: 5px; margin: 11px 0; color: var(--dim); font-size: 13px; }
+#eq-fields :is(input,textarea,select) { width: 100%; font: inherit; padding: 8px 11px; color: var(--text); background: var(--surface-2); border: 1px solid var(--rule); border-radius: 8px; }
+#eq-fields textarea { min-height: 75px; resize: vertical; }
+#eq-form .eq-actions { justify-content: flex-end; margin-top: 18px; }
+@media(max-width:700px){.eq-layout{grid-template-columns:1fr}#eq-parts{max-height:28vh}.eq-panel{padding:15px}}

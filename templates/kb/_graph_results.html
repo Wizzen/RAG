@@ -1,0 +1,10 @@
+{% if ambiguous %}<p class="graph-stale">编号对应多个实体，请同时提供设备编号或缩小知识库范围。未自动选择实体。</p>{% endif %}
+{% if truncated %}<p class="graph-stale">结果达到上限，请缩小查询范围；当前列表不是完整清单。</p>{% endif %}
+{% if paths %}<section class="graph-panel"><h2>关联依据 · 已核对路径</h2>{% for path in paths %}<div class="graph-path">{{ path }}</div>{% endfor %}</section>{% endif %}
+{% for row in rows %}
+{% include "kb/_graph_relation.html" %}
+{% empty %}<div class="empty">暂无符合条件的关系。可点击「自动构建」从现有文档提取，或上传新资料自动生成候选。</div>{% endfor %}
+{% if extractions %}<section class="graph-panel"><h2>自动抽取进度</h2>
+{% for item in extractions %}<p {% if item.active %}data-graph-active="true"{% endif %}>{{ item.job.document.original_name }} · {{ item.job.focus|default:"旧版全书抽取" }} · {{ item.label }} · {{ item.job.done }}/{{ item.job.total }} 批 · 新增 {{ item.job.created_relations }} 条候选{% if item.job.coverage.mode == 'systematic' %} · 正文已检查 {{ item.job.coverage.chunks_done }}/{{ item.job.coverage.chunks_total }} 段{% endif %}{% if item.job.rejected %} · {{ item.job.rejected }} 条未通过原文检查{% endif %}</p>
+{% if item.job.error and can_manage %}<p class="graph-stale">{{ item.job.error }}</p>{% endif %}{% endfor %}
+</section>{% endif %}

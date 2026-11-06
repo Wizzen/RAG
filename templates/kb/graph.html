@@ -1,0 +1,104 @@
+{% extends "kb/_base.html" %}
+{% load static %}
+{% block title %}知识图谱 · SHDR RAG{% endblock %}
+{% block content %}
+<div id="graphPage" class="graph-page" data-graph-url="{% url 'kb:graph' %}" data-action-url="{% url 'kb:graph_action' %}" data-document="{{ selected_document.pk|default:'' }}" data-hierarchy-url="{% url 'kb:knowledge_structure' %}" data-hierarchy-action="{% url 'kb:knowledge_action' %}" data-hierarchy-scope="{{ hierarchy_scope.slug|default:'' }}">
+<header class="page-head">
+  <div class="page-head-main">
+    <h1>知识图谱</h1>
+    <p class="page-desc">从资料中按主题抽取对象、属性与取值，逐条核对原文后用于问答。</p>
+  </div>
+</header>
+<section class="graph-compose">
+  <label class="graph-document-label" for="graphDocument">资料</label>
+  <select id="graphDocument" aria-label="选择资料"><option value="">请选择资料</option>{% for group in document_groups %}<optgroup label="{{ group.name }}">{% for doc in group.documents %}<option value="{{ doc.pk }}" {% if selected_document.pk == doc.pk %}selected{% endif %}>{{ doc.original_name }}</option>{% endfor %}</optgroup>{% endfor %}</select>
+  {% if can_manage %}<form id="extractForm" class="graph-compose-form">
+    {% csrf_token %}<input type="hidden" name="action" value="extract"><input type="hidden" name="document" value="{{ selected_document.pk|default:'' }}">
+    <label for="graphFocus">关注什么</label><div class="graph-compose-input"><textarea id="graphFocus" name="focus" required minlength="2" maxlength="1000" rows="2" placeholder="例如：锻件的质量分级、各级参数和适用条件"></textarea>
+    <button class="btn primary" type="submit" {% if not selected_document %}disabled{% endif %}>开始构建</button></div>
+    {% if knowledge_objects %}<details class="knowledge-target"><summary>跨资料追加到已有对象（可选）</summary><select name="target_object" aria-label="追加到已有对象"><option value="">自动按集合与对象身份归并</option>{% for object in knowledge_objects %}<option value="{{ object.pk }}">{{ object.label }}</option>{% endfor %}</select></details>{% endif %}
+  </form><p class="graph-meta graph-compose-hint">按主题定位原文，自动展开相关表格的分类、参数和取值；逐条确认后用于问答。</p>{% endif %}
+</section>
+<details class="graph-filters"><summary>筛选与历史</summary>
+<form id="graphSearch" class="graph-controls">
+  <input type="hidden" name="offset" value="{{ offset }}">
+  <input type="hidden" name="kb" value="{{ selected_kb.slug|default:'' }}"><input type="hidden" name="document" value="{{ selected_document.pk|default:'' }}">
+  <label>实体 / 关键词 <input name="q" value="{{ q }}" placeholder="实体名称、编号或术语" maxlength="1000"></label>
+  <label>状态 <select name="status"><option value="">全部可见关系</option>{% for value,label in statuses %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <label>关注批次 <select name="run"><option value="">全部批次</option>{% for run in runs %}<option value="{{ run.pk }}" {% if selected_run.pk == run.pk %}selected{% endif %}>#{{ run.pk }} · {{ run.focus|default:"旧版全书抽取"|truncatechars:35 }} · {{ run.document.original_name|truncatechars:20 }}</option>{% endfor %}</select></label>
+  <button class="btn primary" type="submit">查询关系</button>
+</form>
+</details>
+<p id="graphStatus" role="status" aria-live="polite"></p>
+{% if can_manage %}{% include "kb/_graph_live.html" %}{% endif %}
+<section class="knowledge-hierarchy" id="knowledgeHierarchy" aria-label="对象与层级属性">
+  <div class="knowledge-heading"><h2>对象知识 <span class="graph-meta" id="knowledgeCounts"></span></h2><label><input type="checkbox" id="knowledgeCurrentRun"> 只看本次抽取</label></div>
+  <div class="knowledge-objects" id="knowledgeObjects" aria-label="选择知识对象"></div>
+  <p id="knowledgeStatus" class="graph-meta" role="status">正在读取对象知识…</p>
+  <div class="knowledge-workspace"><nav id="knowledgeTree" aria-label="属性与子参数"></nav><aside id="knowledgeInspector" aria-label="内容、条件与原文审核"><p class="graph-meta">展开属性并选择具体内容，查看完整取值和原文。</p></aside></div>
+</section>
+<details class="graph-list-view" id="graphLegacyView"><summary>旧版关系图与历史记录</summary>
+<section class="graph-explorer" id="graphExplorer">
+  <div class="graph-toolbar">
+    <div><strong>图谱</strong> <span id="graphCounts" class="graph-meta"></span></div>
+    <div class="graph-legend"><span class="pending">待确认</span><span class="verified">已确认</span><span class="rejected">已拒绝</span><span class="stale">来源失效</span></div>
+    <button type="button" class="btn sm outline" id="graphFit">适应画布</button>
+    <button type="button" class="btn sm outline" id="graphReset" hidden>重置视图</button>
+    <button type="button" class="btn sm outline" id="graphPrevious" data-graph-offset="0" disabled hidden>上一页关系</button>
+    <button type="button" class="btn sm outline" id="graphNext" data-graph-offset="100" disabled hidden>下一页关系</button>
+  </div>
+  <p id="graphCanvasStatus" class="graph-meta" role="status" aria-live="polite">正在加载关系图…</p>
+  <div class="graph-workspace">
+    <div id="graphCanvas" role="img" aria-label="知识关系图：点击实体查看关联，点击连线查看来源并确认结果。也可使用右侧和下方的文字列表。"></div>
+    <aside id="graphInspector" aria-label="关系与原文审核"><p class="graph-inspector-hint">点击一条连线查看关系、适用条件与原文依据；点击实体查看关联。</p></aside>
+  </div>
+</section>
+<details class="graph-list-view"><summary>查看文字列表</summary><div id="graphResults">{% include "kb/_graph_results.html" %}</div></details>
+</details>
+{% if can_manage %}
+<details class="graph-panel graph-advanced"><summary>高级工具</summary>
+<details class="graph-panel" id="graphAttach">
+  <summary>高级：手动补充原文依据（可选）</summary>
+  <p>在上方选择一条关系，再粘贴手册原文中的连续片段。原文将用于检索与引用；保存后关系返回待核对状态。</p>
+  <form id="attachForm" class="graph-controls">
+    {% csrf_token %}<input type="hidden" name="action" value="attach"><input type="hidden" name="relation" id="attachRelation">
+    <span id="attachLabel">请先在上方关系中点击「关联原文」</span>
+    <input type="hidden" name="document" value="{{ selected_document.pk|default:'' }}">
+    <label class="graph-wide">连续原文 <textarea name="quote" required minlength="8" maxlength="4000" rows="3"></textarea></label>
+    <button class="btn primary" type="submit" id="attachSave" disabled>保存原文依据</button>
+  </form>
+</details>
+<section class="graph-panel">
+  <h2>构建候选关系</h2>
+  <p>上传到本库的 CSV/XLSX 会自动生成候选。缺少设备编号的行保留独立作用域，不自动合并同名部件。</p>
+  <button class="btn outline" id="backfill" type="button">补建本库候选</button>
+  {% if unassigned %}
+  <form id="bindForm" class="graph-controls">
+    <input type="hidden" name="action" value="bind">
+    <label>未归属数据集 <select name="dataset" required>{% for ds in unassigned %}<option value="{{ ds.pk }}">{{ ds.source_name }}</option>{% endfor %}</select></label>
+    <button class="btn outline" type="submit">归入本库并构建</button>
+  </form>
+  {% endif %}
+</section>
+</details>
+{% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{% static 'js/evidence_panel.js' %}"></script>
+<script src="{% static 'js/vendor/g6-5.1.1.min.js' %}"></script>
+<script src="{% static 'js/graph_explorer.js' %}"></script>
+<script src="{% static 'js/graph_live.js' %}"></script>
+<script src="{% static 'js/knowledge_hierarchy.js' %}"></script>
+<link rel="stylesheet" href="{% static 'css/knowledge_hierarchy.css' %}">
+<link rel="stylesheet" href="{% static 'css/graph_explorer.css' %}">
+<style>
+.graph-controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:16px 0}
+.graph-controls label{display:flex;flex-direction:column;gap:6px;font-size:13px}
+.graph-wide{flex-basis:100%}.graph-panel,.graph-relation{border:1px solid var(--rule);border-radius:var(--radius-lg);padding:18px 20px;margin:16px 0;background:var(--surface);box-shadow:var(--shadow-sm)}
+.graph-relation h3{font-size:15px;margin:0 0 10px}.graph-meta{color:var(--dim);font-size:12px}.graph-quote{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;max-height:220px;overflow:auto}
+.graph-path{padding:10px;border-left:3px solid var(--ok);background:var(--paper);margin:6px 0;overflow-wrap:anywhere}.graph-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.graph-stale{color:var(--danger)}
+@media(max-width:620px){.graph-controls label{width:100%}.graph-panel,.graph-relation{padding:12px}}
+</style>
+<script src="{% static 'js/graph_page.js' %}"></script>
+{% endblock %}

@@ -1,0 +1,249 @@
+{% extends "kb/_base.html" %}
+{% block title %}运行日志 · SHDR RAG{% endblock %}
+
+{% block content %}
+<header class="page-head">
+  <div class="page-head-main">
+    <h1>知识库运行一览</h1>
+    <p class="page-desc">生成于 {{ generated_at|date:"Y-m-d H:i" }} · 统计来自用户、文档、会话与消息记录。</p>
+  </div>
+  <div class="page-actions">
+    <a class="btn outline" href="">刷新</a>
+  </div>
+</header>
+
+<!-- 顶部统计卡 -->
+<div class="stat-cards">
+  <div class="stat-card">
+    <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 5a3.5 3.5 0 0 1 0 7M21 20c0-2.5-1.5-4.6-3.7-5.5"/></svg></span>
+    <div class="label">累计用户</div>
+    <div class="num">{{ stat_users }}</div>
+  </div>
+  <div class="stat-card">
+    <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4.5 4.5v11A1.5 1.5 0 0 1 17 20.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z"/><path d="M13.5 3.5V8h5M9 13h6M9 16.5h4"/></svg></span>
+    <div class="label">手册文档</div>
+    <div class="num">{{ stat_docs }}</div>
+  </div>
+  <div class="stat-card">
+    <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3.5 8 4.2-8 4.3-8-4.3z"/><path d="m4 12 8 4.3 8-4.3M4 16.3l8 4.2 8-4.2"/></svg></span>
+    <div class="label">向量块总数</div>
+    <div class="num">{{ stat_chunks }}</div>
+  </div>
+  <div class="stat-card">
+    <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span>
+    <div class="label">检索会话</div>
+    <div class="num">{{ stat_convs }}</div>
+  </div>
+  <div class="stat-card">
+    <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 5.5h14A1.5 1.5 0 0 1 20.5 7v8.5A1.5 1.5 0 0 1 19 17h-8l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z"/></svg></span>
+    <div class="label">累计消息</div>
+    <div class="num">{{ stat_messages }}</div>
+  </div>
+  <div class="stat-card is-live">
+    <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 12h4l2.5-6 4 12 2.5-6h4"/></svg></span>
+    <div class="label">今日活跃用户</div>
+    <div class="num">{{ active_today }}</div>
+  </div>
+</div>
+
+<!-- 14 天问答趋势 -->
+<div class="card dash-chart-card" style="margin-top:16px">
+  <div class="dash-card-title">
+    <span>近 {{ trend.labels|length }} 天问答趋势</span>
+    <span class="dash-legend">
+      <span class="lg lg-q">提问 {{ trend.user_total }}</span>
+      <span class="lg lg-a">回复 {{ trend.ai_total }}</span>
+    </span>
+  </div>
+
+  {% if trend.user_total == 0 and trend.ai_total == 0 %}
+    <div class="dash-empty">该时段暂无问答记录</div>
+  {% else %}
+  <svg class="dash-svg" viewBox="0 0 {{ trend.svg.w }} {{ trend.svg.h }}"
+       preserveAspectRatio="xMidYMid meet" role="img" aria-label="近14天问答趋势折线图">
+    <defs>
+      <linearGradient id="dashFillQ" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" class="dash-stop-q" stop-opacity=".22"/><stop offset="1" class="dash-stop-q" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="dashFillA" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" class="dash-stop-a" stop-opacity=".18"/><stop offset="1" class="dash-stop-a" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <!-- 网格线 + y 刻度 -->
+    {% for t in trend.svg.y_ticks %}
+      <line x1="{{ trend.svg.pad_l }}" y1="{{ t.y }}" x2="{{ trend.svg.w }}" y2="{{ t.y }}"
+            class="dash-base" stroke-width="1"{% if not forloop.first %} stroke-dasharray="3 4"{% endif %}/>
+      <text x="{{ trend.svg.pad_l|add:"-6" }}" y="{{ t.y|add:"3" }}" text-anchor="end"
+            class="dash-tick" font-size="11">{{ t.label }}</text>
+    {% endfor %}
+    <!-- x 标签 -->
+    {% for lab in trend.svg.x_labels %}
+      {% if lab.show %}
+        <text x="{{ lab.x }}" y="{{ trend.svg.h|add:"-8" }}" text-anchor="middle"
+              class="dash-tick" font-size="11">{{ lab.text }}</text>
+      {% endif %}
+    {% endfor %}
+    <g class="dash-plot">
+    <!-- 面积 -->
+    <polygon points="{{ trend.svg.ai_area }}" fill="url(#dashFillA)"/>
+    <polygon points="{{ trend.svg.user_area }}" fill="url(#dashFillQ)"/>
+    <!-- 回复 -->
+    <polyline points="{{ trend.svg.ai_path }}" fill="none" class="dash-line-a" stroke-width="1.6"
+              stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="4 3"/>
+    <!-- 提问 -->
+    <polyline points="{{ trend.svg.user_path }}" fill="none" class="dash-line-q" stroke-width="1.8"
+              stroke-linejoin="round" stroke-linecap="round"/>
+    <!-- 数据点 -->
+    {% for p in trend.svg.ai_pts %}
+      <circle cx="{{ p.0 }}" cy="{{ p.1 }}" r="2.2" class="dash-dot-a" stroke-width="1.4"/>
+    {% endfor %}
+    {% for p in trend.svg.user_pts %}
+      <circle cx="{{ p.0 }}" cy="{{ p.1 }}" r="2.6" class="dash-dot-q" stroke-width="1.6"/>
+    {% endfor %}
+    </g>
+  </svg>
+  {% endif %}
+</div>
+
+<!-- 文档状态分布 -->
+<div class="card dash-chart-card">
+  <div class="dash-card-title"><span>文档处理状态分布</span><span class="dash-legend">共 {{ doc_bars.total }} 份</span></div>
+  {% if doc_bars.total == 0 %}
+    <div class="dash-empty">暂无文档</div>
+  {% else %}
+  <div class="dash-bars">
+    {% for b in doc_bars.bars %}
+    <div class="bar-row">
+      <div class="bar-label">
+        <span class="dot" style="background:{{ b.color }}"></span>{{ b.label }}
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:{{ b.pct|floatformat:1 }}%;background:{{ b.color }}"></div>
+      </div>
+      <div class="bar-val">{{ b.count }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- 手册库一览 -->
+<div class="card dash-chart-card">
+  <div class="dash-card-title"><span>手册库一览</span><span class="dash-legend">{{ kbs|length }} 个库</span></div>
+  {% if kbs %}
+  <div class="dash-kb-list">
+    {% for kb in kbs %}
+    <div class="dash-kb-row">
+      <div class="dash-kb-main">
+        <a class="dash-kb-name" href="/kb/manage/{{ kb.slug }}/">{{ kb.name }}</a>
+        <span class="dash-kb-slug">{{ kb.slug }}</span>
+      </div>
+      <div class="dash-kb-stats">
+        <span class="ks"><b>{{ kb.doc_total }}</b> 文档</span>
+        <span class="ks"><b>{{ kb.chunk_count }}</b> 向量块</span>
+        <span class="ks ok"><b>{{ kb.doc_completed }}</b> 完成</span>
+        {% if kb.doc_in_progress %}<span class="ks warn"><b>{{ kb.doc_in_progress }}</b> 处理中</span>{% endif %}
+        {% if kb.doc_failed %}<span class="ks danger"><b>{{ kb.doc_failed }}</b> 失败</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="dash-empty">尚无手册库</div>
+  {% endif %}
+</div>
+
+<!-- 最近活动 -->
+<div class="card dash-chart-card">
+  <div class="dash-card-title"><span>最近会话活动</span></div>
+  {% if recent %}
+  <div class="dash-act-list">
+    {% for c in recent %}
+    <a class="dash-act-row" href="/kb/ask/?kb={{ c.kb.slug }}">
+      <span class="da-title">{{ c.title|default:"（无标题会话）" }}</span>
+      <span class="da-meta">{{ c.user.username }} · {{ c.kb.slug }} · {{ c.updated_at|date:"m-d H:i" }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="dash-empty">暂无会话记录</div>
+  {% endif %}
+</div>
+
+<!-- 说明 tag -->
+<div class="fos-tag">
+  <div class="th">说明<span class="stamp">统计范围</span></div>
+  <div class="tb">
+    <p style="font-size:13px;line-height:1.7;color:var(--dim)">
+      本看板统计来自系统既有数据（用户、文档、会话、消息）。LLM token 用量仅在每次请求内存累计、未持久化，故暂不展示；
+      趋势图中的「提问」以会话内用户消息数近似统计。
+    </p>
+  </div>
+</div>
+
+<style>
+  .dash-chart-card{padding:18px 20px}
+  .dash-card-title{display:flex;align-items:center;justify-content:space-between;
+    font-family:var(--fd);font-weight:600;font-size:15px;
+    margin-bottom:12px;color:var(--text)}
+  .dash-legend{font-size:12.5px;font-weight:400;color:var(--mute);display:flex;gap:14px}
+  .dash-legend .lg{display:inline-flex;align-items:center;gap:5px}
+  .dash-legend .lg::before{content:"";width:10px;height:10px;border-radius:3px}
+  .dash-legend .lg-q::before{background:var(--brand)}
+  .dash-legend .lg-a::before{background:var(--ok)}
+  .dash-svg{width:100%;height:auto;display:block;max-height:280px;overflow:visible}.dash-base{stroke:var(--rule)}.dash-tick{fill:var(--mute);font-family:var(--fb)}.dash-line-q{stroke:var(--brand)}.dash-line-a{stroke:var(--ok)}.dash-dot-q{fill:var(--surface);stroke:var(--brand)}.dash-dot-a{fill:var(--surface);stroke:var(--ok)}.dash-stop-q{stop-color:var(--brand)}.dash-stop-a{stop-color:var(--ok)}
+
+  .dash-empty{padding:30px 10px;text-align:center;color:var(--mute);
+    font-family:var(--fd);font-weight:500;font-size:13px}
+
+  .dash-bars{display:flex;flex-direction:column;gap:10px}
+  .bar-row{display:grid;grid-template-columns:90px 1fr 40px;align-items:center;gap:10px}
+  .bar-label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--dim)}
+  .bar-label .dot{width:9px;height:9px;border-radius:3px}
+  .bar-track{height:10px;background:var(--rule-soft);border-radius:999px;overflow:hidden}
+  .bar-fill{height:100%;min-width:2px;border-radius:999px;transition:width .4s ease}
+  .bar-val{font-size:13px;font-weight:600;text-align:right;color:var(--text)}
+  .bar-fill{transform-origin:left}
+  .dash-dot-q,.dash-dot-a{transition:r .25s cubic-bezier(.34,1.56,.64,1)}
+  .dash-dot-q:hover,.dash-dot-a:hover{r:5}
+  @media (prefers-reduced-motion:no-preference){
+    .dash-plot{animation:dashReveal 1.6s cubic-bezier(.6,0,.2,1) .35s backwards}
+    .bar-fill{animation:dashGrow 1.2s cubic-bezier(.2,.8,.2,1) .5s backwards}
+    .bar-row:nth-child(2) .bar-fill{animation-delay:.6s}
+    .bar-row:nth-child(3) .bar-fill{animation-delay:.7s}
+    .bar-row:nth-child(4) .bar-fill{animation-delay:.8s}
+    .bar-row:nth-child(5) .bar-fill{animation-delay:.9s}
+  }
+  @keyframes dashReveal{from{clip-path:inset(-20px 100% -20px 0)}to{clip-path:inset(-20px 0 -20px 0)}}
+  @keyframes dashGrow{from{transform:scaleX(0)}}
+
+  .dash-kb-list{display:flex;flex-direction:column}
+  .dash-kb-row{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:10px 0;border-bottom:1px solid var(--rule-soft);flex-wrap:wrap}
+  .dash-kb-row:last-child{border-bottom:0}
+  .dash-kb-main{display:flex;align-items:center;gap:8px;min-width:0}
+  .dash-kb-name{font-family:var(--fd);font-weight:600;font-size:14px;color:var(--text)}
+  .dash-kb-name:hover{color:var(--brand)}
+  .dash-kb-slug{font-family:var(--fcode);font-size:11px;color:var(--mute);
+    background:var(--paper);border:1px solid var(--rule-soft);padding:1px 7px;border-radius:var(--radius-sm)}
+  .dash-kb-stats{display:flex;gap:14px;flex-wrap:wrap}
+  .dash-kb-stats .ks{font-size:12.5px;color:var(--mute)}
+  .dash-kb-stats .ks b{font-size:14px;font-weight:600;color:var(--text)}
+  .dash-kb-stats .ks.ok b{color:var(--ok)}
+  .dash-kb-stats .ks.warn b{color:var(--warn-text)}
+  .dash-kb-stats .ks.danger b{color:var(--danger)}
+
+  .dash-act-list{display:flex;flex-direction:column}
+  .dash-act-row{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--rule-soft);
+    border-radius:var(--radius);background:var(--surface-2);margin-bottom:8px;transition:border-color .15s,background .15s}
+  .dash-act-row:hover{border-color:color-mix(in srgb,var(--brand) 40%,transparent);background:var(--brand-soft)}
+  .dash-act-row:last-child{margin-bottom:0}
+  .da-title{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .da-meta{font-size:12px;color:var(--mute)}
+
+  @media (max-width:520px){
+    .bar-row{grid-template-columns:80px 1fr 34px;gap:8px}
+    .dash-kb-row{flex-direction:column;align-items:flex-start}
+  }
+</style>
+{% endblock %}

@@ -1,0 +1,22 @@
+<article class="graph-relation" data-graph-relation="{{ row.relation.pk }}">
+  <h3>{{ row.relation.subject.label }} → {{ row.predicate }} → {{ row.relation.object.label }}</h3>
+  {% if row.relation.extraction.focus %}<p><strong>本次关注：</strong>{{ row.relation.extraction.focus }}</p>{% endif %}
+  {% if row.conditions %}<dl class="graph-conditions">{% for condition in row.conditions %}<dt>{{ condition.label }}</dt><dd>{{ condition.value }}</dd>{% endfor %}</dl>{% endif %}
+  <p class="graph-meta">#{{ row.relation.pk }} · {{ row.relation.get_status_display }}{% if row.relation.qualifiers.equipment %} · 设备范围：{{ row.relation.qualifiers.equipment }}{% else %} · 适用范围以原文及条件为准{% endif %}{% if row.relation.reviewed_at %} · 核对于 {{ row.relation.reviewed_at|date:"Y-m-d H:i" }}{% endif %}</p>
+  {% if not row.current %}<p class="graph-stale">原始来源已变更或失效，此关系不参与检索。</p>{% endif %}
+  {% for evidence in row.evidence %}
+  <details open>
+    <summary>{% if evidence.item.record_id %}{{ evidence.item.record.dataset.source_name }} · {{ evidence.item.record.sheet_name }} · 第 {{ evidence.item.record.row_number }} 行{% else %}{{ evidence.item.document.original_name }} · 手册原文{% endif %}{% if not evidence.current %}（已失效）{% endif %}</summary>
+    <p class="graph-quote">{{ evidence.item.quote }}</p>
+    {% for location in evidence.locations %}<button type="button" class="btn sm outline" data-graph-chunk="{{ location.chunk_id }}">{{ location.page }} · 查看原文圈注</button>{% endfor %}
+    {% if evidence.item.document_id and not evidence.locations %}<p class="graph-meta">暂无页码定位，可查看下方原文文本。</p>{% endif %}
+    {% if evidence.item.document_id %}<a class="btn sm outline" href="{% url 'kb:document_html' evidence.item.document_id %}?h={{ evidence.item.quote|urlencode }}" target="_blank" rel="noopener">查看原文</a>{% endif %}
+  </details>
+  {% endfor %}
+  {% if can_manage %}<div class="graph-actions">
+    <button class="btn sm primary" data-relation="{{ row.relation.pk }}" data-status="verified" {% if not row.current %}disabled{% endif %}>确认此结果（核对通过）</button>
+    <button class="btn sm outline" data-relation="{{ row.relation.pk }}" data-status="candidate">设为待核对</button>
+    <button class="btn sm danger" data-relation="{{ row.relation.pk }}" data-status="rejected">拒绝</button>
+    <button class="btn sm outline" data-relation="{{ row.relation.pk }}" data-action="attach">关联原文</button>
+  </div>{% endif %}
+</article>

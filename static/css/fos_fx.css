@@ -1,0 +1,276 @@
+/* ════════════════════════════════════════════════════════════
+   FOS·RAG 动效层（加载于 fos_shell.css 之后）
+   环境光 · 页面色彩身份 · 入场编排 · 悬停聚光 / 倾斜 · 微交互。
+   动画全部在 prefers-reduced-motion: reduce 下关闭；入场动画只在首屏加载
+   期间（html.fx-enter，由 fos_vibe.js 约 1.6s 后移除）生效，之后切换显隐不会重播。
+   ════════════════════════════════════════════════════════════ */
+
+:root{
+  --spring:cubic-bezier(.34,1.56,.64,1);
+  --ease-out:cubic-bezier(.2,.8,.2,1);
+  --glow-rgb:59,130,246;
+  accent-color:var(--brand);
+}
+html[data-theme="dark"]{--glow-rgb:96,165,250}
+@property --fx-ang{syntax:"<angle>";inherits:false;initial-value:0deg}
+
+/* 色彩身份：侧栏图标、页头徽章、页头光晕与眉标共用 */
+[data-tone]{--t1:#60A5FA;--t2:#2563EB}
+[data-tone=cyan]{--t1:#22D3EE;--t2:#0284C7}
+[data-tone=violet]{--t1:#C084FC;--t2:#7C3AED}
+[data-tone=pink]{--t1:#F472B6;--t2:#DB2777}
+[data-tone=green]{--t1:#34D399;--t2:#059669}
+[data-tone=amber]{--t1:#FBBF24;--t2:#EA580C}
+[data-tone=indigo]{--t1:#A5B4FC;--t2:#4F46E5}
+[data-tone=teal]{--t1:#2DD4BF;--t2:#0D9488}
+[data-tone=rose]{--t1:#FDA4AF;--t2:#E11D48}
+
+* {scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--mute) 40%,transparent) transparent}
+
+/* ── 环境光：三团缓慢漂移的色晕 ── */
+.fx-aurora{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
+.fx-aurora i{position:absolute;border-radius:50%;will-change:transform}
+.fx-aurora i:nth-child(1){width:64vmax;height:64vmax;right:-20vmax;top:-34vmax;
+  background:radial-gradient(closest-side,rgba(59,130,246,.15),transparent);animation:fxAuroraA 26s ease-in-out infinite alternate}
+.fx-aurora i:nth-child(2){width:50vmax;height:50vmax;left:calc(var(--side-w) - 22vmax);top:28vh;
+  background:radial-gradient(closest-side,rgba(139,92,246,.10),transparent);animation:fxAuroraB 34s ease-in-out infinite alternate}
+.fx-aurora i:nth-child(3){width:56vmax;height:56vmax;right:6vw;bottom:-36vmax;
+  background:radial-gradient(closest-side,rgba(20,184,166,.10),transparent);animation:fxAuroraC 40s ease-in-out infinite alternate}
+html[data-theme="dark"] .fx-aurora i:nth-child(1){background:radial-gradient(closest-side,rgba(59,130,246,.16),transparent)}
+html[data-theme="dark"] .fx-aurora i:nth-child(2){background:radial-gradient(closest-side,rgba(139,92,246,.12),transparent)}
+html[data-theme="dark"] .fx-aurora i:nth-child(3){background:radial-gradient(closest-side,rgba(20,184,166,.09),transparent)}
+@keyframes fxAuroraA{to{transform:translate(-16vw,12vh) scale(1.15)}}
+@keyframes fxAuroraB{to{transform:translate(20vw,-14vh) scale(.88)}}
+@keyframes fxAuroraC{to{transform:translate(-22vw,-10vh) scale(1.12)}}
+.rag-chat-embedded .fx-aurora{display:none}
+
+/* ── 侧栏：星空 + 流星 ── */
+.side-stars{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.side-stars::before,.side-stars::after{content:"";position:absolute;inset:0;
+  background-image:
+    radial-gradient(1.3px 1.3px at 18% 12%,#fff 50%,transparent),radial-gradient(1px 1px at 72% 8%,#fff 50%,transparent),
+    radial-gradient(1.4px 1.4px at 86% 26%,#BFDBFE 50%,transparent),radial-gradient(1px 1px at 34% 33%,#fff 50%,transparent),
+    radial-gradient(1.2px 1.2px at 60% 47%,#C7D2FE 50%,transparent),radial-gradient(1px 1px at 12% 58%,#fff 50%,transparent),
+    radial-gradient(1.5px 1.5px at 80% 66%,#fff 50%,transparent),radial-gradient(1px 1px at 44% 74%,#BFDBFE 50%,transparent),
+    radial-gradient(1.2px 1.2px at 24% 86%,#fff 50%,transparent),radial-gradient(1px 1px at 66% 92%,#fff 50%,transparent);
+  animation:fxTwinkle 4.2s ease-in-out infinite alternate}
+.side-stars::after{transform:translate(9%,6%);background-size:115% 110%;animation-duration:5.6s;animation-delay:-2.4s}
+@keyframes fxTwinkle{from{opacity:.12}to{opacity:.6}}
+.side-stars i{position:absolute;top:8%;right:-30px;width:90px;height:1px;border-radius:1px;
+  background:linear-gradient(90deg,transparent,rgba(191,219,254,.9));transform:rotate(-32deg);opacity:0;
+  animation:fxMeteor 11s ease-in 3s infinite}
+@keyframes fxMeteor{0%{opacity:0;transform:rotate(-32deg) translateX(0)}2%{opacity:1}9%{opacity:0;transform:rotate(-32deg) translateX(-300px)}100%{opacity:0;transform:rotate(-32deg) translateX(-300px)}}
+.fos-sidebar>:not(.side-stars){position:relative}
+
+/* 品牌徽标：流光描边 + 三圆呼吸 */
+.side-logo{position:relative;transition:transform .5s var(--spring)}
+.side-logo::before{content:"";position:absolute;inset:-3px;border-radius:15px;padding:1.5px;
+  background:conic-gradient(from var(--fx-ang),transparent 0 62%,rgba(147,197,253,.9) 80%,#fff 88%,transparent 96%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;
+          mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;
+  animation:fxSpinAng 5s linear infinite}
+@keyframes fxSpinAng{to{--fx-ang:360deg}}
+.side-logo .brand-mark circle{transform-box:fill-box;transform-origin:center;animation:fxBreath 3.6s ease-in-out infinite}
+.side-logo .brand-mark circle:nth-child(2){animation-delay:-1.2s}
+.side-logo .brand-mark circle:nth-child(3){animation-delay:-2.4s}
+@keyframes fxBreath{50%{transform:scale(.93)}}
+.side-brand:hover .side-logo{transform:rotate(-10deg) scale(1.07)}
+
+/* 导航：滑块跟随悬停（随目标色相变色）+ 弹性图标 + 分色激活态 */
+.fos-sidebar nav.has-glider .nav-item:hover{background:transparent}
+.nav-glider{position:absolute;left:6px;right:6px;top:0;height:40px;border-radius:10px;pointer-events:none;opacity:0;
+  background-color:color-mix(in srgb,var(--t2,#3B82F6) 22%,rgba(255,255,255,.04));
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--t1,#60A5FA) 18%,transparent);
+  transition:transform .42s var(--spring),height .3s var(--ease-out),opacity .2s,background-color .3s,box-shadow .3s}
+.nav-glider.on{opacity:1}
+.fos-sidebar .nav-item .ni{transition:transform .45s var(--spring),color .2s,opacity .2s}
+.fos-sidebar .nav-item:hover .ni{color:var(--t1);opacity:1;transform:scale(1.16) rotate(-8deg)}
+.fos-sidebar .nav-item.active{
+  background:linear-gradient(90deg,color-mix(in srgb,var(--t2) 40%,transparent),color-mix(in srgb,var(--t2) 6%,transparent));
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--t1) 28%,transparent)}
+.fos-sidebar .nav-item.active::before{background:var(--t1);box-shadow:0 0 14px 1px var(--t2)}
+.fos-sidebar .nav-item.active .ni{color:var(--t1);filter:drop-shadow(0 0 6px color-mix(in srgb,var(--t1) 70%,transparent))}
+
+.side-ava{position:relative;background:linear-gradient(135deg,#F59E0B,#EC4899,#8B5CF6,#F59E0B);background-size:300% 300%;
+  animation:fxAva 9s ease-in-out infinite alternate;transition:transform .45s var(--spring)}
+.side-ava::after{content:"";position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;
+  background:#22C55E;box-shadow:0 0 0 2px #0D172C}
+@keyframes fxAva{to{background-position:100% 100%}}
+.side-user:hover .side-ava{transform:rotate(-8deg) scale(1.08)}
+.fos-sidebar .theme-btn svg,.side-icon-btn svg{transition:transform .5s var(--spring)}
+.fos-sidebar .theme-btn:hover svg{transform:rotate(40deg) scale(1.1)}
+.side-icon-btn:hover svg{transform:translateX(-2px)}
+
+/* ── 页头：色彩身份 + 徽章 + 尘埃画布 ── */
+.page-head[data-tone]{
+  background:
+    radial-gradient(560px 240px at 100% 0%,color-mix(in srgb,var(--t1) 24%,transparent),transparent 70%),
+    radial-gradient(420px 220px at 74% 135%,color-mix(in srgb,var(--t2) 14%,transparent),transparent 70%),
+    linear-gradient(180deg,var(--surface),color-mix(in srgb,var(--surface) 93%,var(--t1)))}
+html[data-theme="dark"] .page-head[data-tone]{
+  background:
+    radial-gradient(560px 240px at 100% 0%,color-mix(in srgb,var(--t2) 30%,transparent),transparent 70%),
+    radial-gradient(420px 220px at 74% 135%,color-mix(in srgb,var(--t1) 12%,transparent),transparent 70%),
+    var(--surface)}
+.page-head[data-tone] .page-eyebrow{color:var(--t2)}
+html[data-theme="dark"] .page-head[data-tone] .page-eyebrow{color:var(--t1)}
+.page-head[data-tone] .page-eyebrow::before{background:linear-gradient(90deg,var(--t1),var(--t2))}
+.page-head:has(>.page-emblem){padding-left:122px}
+.page-emblem{position:absolute;left:32px;top:30px;width:64px;height:64px;display:grid;place-items:center;pointer-events:none}
+.pe-tile{position:relative;z-index:1;width:64px;height:64px;border-radius:20px;display:grid;place-items:center;color:#fff;overflow:hidden;
+  background:linear-gradient(140deg,var(--t1),var(--t2));
+  box-shadow:0 16px 30px -14px var(--t2),inset 0 1px 0 rgba(255,255,255,.4),inset 0 -10px 18px -10px rgba(0,0,0,.22);
+  animation:fxFloat 6s ease-in-out infinite}
+.pe-tile::after{content:"";position:absolute;left:3px;right:3px;top:3px;height:46%;border-radius:17px 17px 50% 50%;
+  background:linear-gradient(180deg,rgba(255,255,255,.34),transparent)}
+.pe-tile svg{position:relative;z-index:1;width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;
+  filter:drop-shadow(0 2px 3px rgba(0,0,0,.18))}
+.pe-tile svg.brand-mark{width:34px;height:27px}
+.pe-tile svg.brand-mark circle{stroke-width:26}
+.pe-orbit{position:absolute;inset:-11px;border-radius:50%;border:1px dashed color-mix(in srgb,var(--t2) 38%,transparent);animation:fxSpin 18s linear infinite}
+.pe-orbit::after{content:"";position:absolute;top:-4px;left:50%;width:7px;height:7px;margin-left:-3.5px;border-radius:50%;
+  background:var(--t1);box-shadow:0 0 10px 2px color-mix(in srgb,var(--t1) 80%,transparent)}
+@keyframes fxFloat{50%{transform:translateY(-4px) rotate(-3deg)}}
+@keyframes fxSpin{to{transform:rotate(360deg)}}
+.fx-dust{position:absolute;inset:0;z-index:-1;width:100%;height:100%;pointer-events:none;
+  -webkit-mask-image:linear-gradient(90deg,rgba(0,0,0,.2) 10%,#000 60%);mask-image:linear-gradient(90deg,rgba(0,0,0,.2) 10%,#000 60%)}
+
+/* ── 卡片：跟随指针的聚光 + 轻微 3D 倾斜 ── */
+@media (hover:hover) and (pointer:fine){
+  :is(.kb-card,.card,.fos-tag,.home-feats .f,.dash-act-row):hover{
+    background-image:radial-gradient(480px circle at var(--mx,50%) var(--my,-40%),rgba(var(--glow-rgb),.075),transparent 42%)}
+  .stat-card:hover{background-image:radial-gradient(360px circle at var(--mx,50%) var(--my,-40%),rgba(var(--tone),.11),transparent 45%)}
+  .kb-card,.stat-card,.home-feats .f{transition:transform .4s var(--ease-out),box-shadow .25s,border-color .2s}
+  .kb-card:hover,.stat-card:hover,.home-feats .f:hover{
+    transform:perspective(900px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg)) translateY(-4px);box-shadow:var(--shadow-md)}
+}
+.kb-mono{position:relative;overflow:hidden;transition:transform .5s var(--spring)}
+.kb-mono::after{content:"";position:absolute;inset:0;transform:translateX(-130%);
+  background:linear-gradient(115deg,transparent 30%,rgba(255,255,255,.6) 50%,transparent 70%)}
+.kb-card:hover .kb-mono{transform:rotate(-8deg) scale(1.08)}
+.kb-card:hover .kb-mono::after{transform:translateX(130%);transition:transform .75s var(--ease-out)}
+.stat-ico{transition:transform .5s var(--spring),background .25s,color .25s,box-shadow .25s}
+.stat-card:hover .stat-ico{transform:scale(1.12) rotate(-8deg);background:rgb(var(--tone));color:#fff;
+  box-shadow:0 10px 20px -8px rgba(var(--tone),.8);filter:none}
+.section-bar h2::before{background-size:100% 200%;animation:fxBarShift 4s ease-in-out infinite alternate}
+@keyframes fxBarShift{to{background-position:0 100%}}
+
+/* ── 按钮：按压回弹 + 主按钮流光 + 涟漪 ── */
+.btn{position:relative;transition:background .15s,color .15s,border-color .15s,box-shadow .2s,transform .3s var(--spring),filter .15s}
+.btn:active:not(:disabled){transform:scale(.95);transition-duration:.08s}
+.btn.primary{overflow:hidden;isolation:isolate}
+.btn.primary::after{content:"";position:absolute;z-index:-1;top:0;bottom:0;left:-70%;width:45%;opacity:0;pointer-events:none;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.5),transparent);transform:skewX(-20deg)}
+.btn.primary:hover:not(:disabled)::after{animation:fxShine .9s var(--ease-out)}
+@keyframes fxShine{from{opacity:1;transform:skewX(-20deg) translateX(0)}to{opacity:1;transform:skewX(-20deg) translateX(480%)}}
+.fx-ripple{position:absolute;inset:0;border-radius:inherit;overflow:hidden;pointer-events:none}
+.fx-ripple i{position:absolute;border-radius:50%;background:currentColor;opacity:.22;transform:scale(0);animation:fxRipple .65s var(--ease-out) forwards}
+@keyframes fxRipple{to{transform:scale(1);opacity:0}}
+.fx-spark{position:fixed;z-index:10000;border-radius:50%;pointer-events:none}
+
+/* ── Toast：类型图标 + 倒计时条 + 弹入 ── */
+#toastHost{top:calc(var(--topbar-h) + 18px);right:20px;gap:10px}
+.toast{--tc:var(--brand);display:flex;align-items:flex-start;gap:10px;padding:12px 16px 13px 12px;border-radius:14px;
+  border:1px solid var(--rule);border-left-width:1px;color:var(--text);
+  background:linear-gradient(var(--tc),var(--tc)) left bottom/100% 2px no-repeat,color-mix(in srgb,var(--surface) 92%,transparent);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  transform:translateX(30px) scale(.94);transition:opacity .3s,transform .5s var(--spring);box-shadow:var(--shadow-md)}
+.toast::before{content:"";flex:0 0 22px;height:22px;margin-top:-1px;border-radius:50%;
+  background:var(--tc) center/13px no-repeat;box-shadow:0 4px 10px -3px var(--tc)}
+.toast-ok{--tc:var(--ok)}
+.toast-ok::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.6l3 3 6-6.5' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
+.toast-err{--tc:var(--danger);color:var(--text)}
+.toast-err::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 4.5l7 7M11.5 4.5l-7 7' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E")}
+.toast-warn{--tc:var(--warn)}
+.toast-warn::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3.5v6' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3Ccircle cx='8' cy='12.5' r='1.4' fill='%23fff'/%3E%3C/svg%3E")}
+.toast-info::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='3.8' r='1.4' fill='%23fff'/%3E%3Cpath d='M8 7v5.5' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E")}
+.toast.show{transform:none}
+.toast.show:not(.sticky){animation:fxToastLife 4s linear forwards}
+.toast-warn.show:not(.sticky){animation-duration:8s}
+.toast.sticky{background-size:0 0,auto}
+@keyframes fxToastLife{to{background-size:0% 2px,auto}}
+
+/* ── 对话框：弹性展开 + 毛玻璃遮罩 ── */
+.fos-dialog[open]{animation:fxDlgIn .42s var(--spring)}
+.fos-dialog::backdrop{background:rgba(8,12,24,.42);-webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px)}
+@keyframes fxDlgIn{from{opacity:0;transform:translateY(14px) scale(.94)}}
+
+/* ── 空状态：漂浮的三圆标记 ── */
+.empty::before,.dash-empty::before{content:"";display:block;width:88px;height:66px;margin:0 auto 14px;opacity:.85;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='70 50 320 260'%3E%3Cg fill='none' stroke='%233B82F6' stroke-width='10' stroke-opacity='.55'%3E%3Ccircle cx='166' cy='146' r='46'/%3E%3Ccircle cx='294' cy='146' r='46'/%3E%3Ccircle cx='230' cy='214' r='74'/%3E%3C/g%3E%3Cg fill='%238B5CF6'%3E%3Ccircle cx='110' cy='90' r='6' opacity='.5'/%3E%3Ccircle cx='352' cy='100' r='8' opacity='.35'/%3E%3Ccircle cx='340' cy='270' r='5' opacity='.5'/%3E%3Ccircle cx='120' cy='262' r='4' opacity='.4'/%3E%3C/g%3E%3C/svg%3E") center/contain no-repeat;
+  animation:fxFloat 5s ease-in-out infinite}
+
+/* ── 表格行悬停 ── */
+.data-table tbody tr{transition:background .15s}
+.data-table tbody tr:hover td:first-child{box-shadow:inset 3px 0 0 var(--brand)}
+
+/* ── AI 助手入口：呼吸光晕 + 漂浮 + 眨眼 ── */
+.rag-chat-launcher{animation:fxLauncherGlow 3.4s ease-in-out infinite}
+.rag-chat-launcher svg{animation:fxBob 3.4s ease-in-out infinite}
+.rag-chat-launcher svg rect:nth-of-type(2),.rag-chat-launcher svg rect:nth-of-type(3){transform-box:fill-box;transform-origin:center;animation:fxBlink 5s infinite}
+@keyframes fxLauncherGlow{
+  0%,100%{box-shadow:0 6px 22px -6px rgba(59,130,246,.45),0 0 0 0 rgba(139,92,246,0)}
+  50%{box-shadow:0 10px 28px -6px rgba(139,92,246,.5),0 0 0 7px rgba(139,92,246,.09)}}
+@keyframes fxBob{50%{transform:translateY(-2px) rotate(-4deg)}}
+@keyframes fxBlink{0%,93%,100%{transform:none}96%{transform:scaleY(.1)}}
+
+/* ── 主题切换：从按钮处圆形展开 ── */
+html.fx-theme-vt::view-transition-old(root),html.fx-theme-vt::view-transition-new(root){animation:none;mix-blend-mode:normal}
+html.fx-theme-vt .fos-sidebar,html.fx-theme-vt .rag-chat-launcher{view-transition-name:none}
+
+/* ── 跨页过渡：侧栏与助手入口保持不动，内容区淡入 ── */
+@view-transition{navigation:auto}
+.fos-sidebar{view-transition-name:fos-side}
+.rag-chat-launcher{view-transition-name:fos-launcher}
+::view-transition-old(root){animation:fxVtOut .16s ease both}
+::view-transition-new(root){animation:fxVtIn .3s var(--ease-out) both}
+@keyframes fxVtOut{to{opacity:0}}
+@keyframes fxVtIn{from{opacity:0}}
+
+/* ── 首屏入场编排 ── */
+@keyframes fxRise{from{opacity:0;transform:translateY(16px)}}
+@keyframes fxTitle{from{opacity:0;transform:translateY(8px);filter:blur(8px)}}
+@keyframes fxSlide{from{opacity:0;transform:translateX(-12px)}}
+@keyframes fxPop{from{opacity:0;transform:scale(.6) rotate(-14deg)}}
+html.fx-enter .page-head{animation:fxRise .7s var(--ease-out) backwards}
+html.fx-enter .page-emblem{animation:fxPop .8s var(--spring) .12s backwards}
+html.fx-enter .page-eyebrow,html.fx-enter .page-back{animation:fxSlide .6s var(--ease-out) .16s backwards}
+html.fx-enter .page-head h1{animation:fxTitle .9s var(--ease-out) .1s backwards}
+html.fx-enter .page-head .page-desc{animation:fxRise .7s var(--ease-out) .22s backwards}
+html.fx-enter .page-head .page-actions{animation:fxRise .7s var(--ease-out) .28s backwards}
+html.fx-enter body:not(.rag-chat-embedded) .fos-container>:not(.page-head,script,style,dialog,link,.kb-grid,.stat-cards,.home-hero,.home-feats):not(:has(.kb-grid,.stat-cards)){
+  animation:fxRise .7s var(--ease-out) backwards}
+html.fx-enter .fos-container>:nth-child(2){animation-delay:.1s}
+html.fx-enter .fos-container>:nth-child(3){animation-delay:.16s}
+html.fx-enter .fos-container>:nth-child(4){animation-delay:.22s}
+html.fx-enter .fos-container>:nth-child(5){animation-delay:.28s}
+html.fx-enter .fos-container>:nth-child(n+6){animation-delay:.34s}
+html.fx-enter :is(.kb-grid,.stat-cards,.home-feats)>*{animation:fxRise .7s var(--ease-out) .14s backwards}
+html.fx-enter :is(.kb-grid,.stat-cards,.home-feats)>:nth-child(2){animation-delay:.19s}
+html.fx-enter :is(.kb-grid,.stat-cards,.home-feats)>:nth-child(3){animation-delay:.24s}
+html.fx-enter :is(.kb-grid,.stat-cards,.home-feats)>:nth-child(4){animation-delay:.29s}
+html.fx-enter :is(.kb-grid,.stat-cards,.home-feats)>:nth-child(5){animation-delay:.34s}
+html.fx-enter :is(.kb-grid,.stat-cards,.home-feats)>:nth-child(6){animation-delay:.39s}
+html.fx-enter :is(.kb-grid,.stat-cards,.home-feats)>:nth-child(n+7){animation-delay:.44s}
+html.fx-enter .home-hero-copy>*{animation:fxRise .8s var(--ease-out) backwards}
+html.fx-enter .home-hero-copy>:nth-child(2){animation:fxTitle 1s var(--ease-out) .08s backwards}
+html.fx-enter .home-hero-copy>:nth-child(3){animation-delay:.16s}
+html.fx-enter .home-hero-copy>:nth-child(4){animation-delay:.24s}
+html.fx-enter .home-hero-copy>:nth-child(5){animation-delay:.32s}
+
+@media (max-width:620px){
+  .page-head:has(>.page-emblem){padding-left:20px}
+  .page-emblem{position:relative;left:auto;top:auto;width:46px;height:46px;flex:0 0 auto}
+  .pe-tile{width:46px;height:46px;border-radius:15px}
+  .pe-tile svg{width:23px;height:23px}
+  .pe-orbit{inset:-7px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .fx-aurora i,.side-stars::before,.side-stars::after,.side-stars i,.side-logo::before,.side-logo .brand-mark circle,.side-ava,
+  .pe-tile,.pe-orbit,.section-bar h2::before,.empty::before,.dash-empty::before,.rag-chat-launcher,.rag-chat-launcher svg,
+  .rag-chat-launcher svg rect,.toast.show{animation:none!important}
+  .btn.primary::after{display:none}
+  .btn:active:not(:disabled){transform:none}
+  ::view-transition-old(root),::view-transition-new(root){animation:none!important}
+}

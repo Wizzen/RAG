@@ -1,0 +1,429 @@
+{% extends "kb/_base.html" %}
+{% load static %}
+{% block title %}SHDR RAG{% endblock %}
+{% block content %}
+<style>
+  /* 落地页专属样式（复用 fos.css 的设计 token）。
+     借鉴 SHDR Engineering Toolbox 的蓝图网格底纹——仅作用于首页 hero，随亮暗主题取色 */
+  .home-hero{
+    padding:64px 0 44px;border-bottom:1px solid var(--rule-soft);
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size:26px 26px;
+    --grid:rgba(0,82,217,.05);
+  }
+  html[data-theme="dark"] .home-hero{--grid:rgba(38,103,212,.07)}
+  .home-hero .kick{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+  .home-hero .kick .bar{width:26px;height:4px;border-radius:2px;background:var(--brand)}
+  .home-hero .kick span{font-family:var(--fm);font-size:11px;font-weight:600;letter-spacing:.16em;color:var(--brand)}
+  .home-hero h1{font-size:clamp(30px,5vw,46px);font-weight:700;line-height:1.15;letter-spacing:-.01em;margin-bottom:14px}
+  .home-hero .desc{font-size:15px;color:var(--dim);margin-bottom:30px}
+  /* 签名元素：搜索框样式的 CTA */
+  .home-ask{display:flex;align-items:center;gap:10px;max-width:560px;background:var(--surface);
+    border:1px solid var(--rule);border-radius:12px;padding:8px 8px 8px 16px;
+    box-shadow:0 8px 24px -14px rgba(0,0,0,.2);transition:border-color .15s,box-shadow .15s}
+  .home-ask:hover{border-color:var(--brand);box-shadow:0 10px 28px -14px rgba(0,82,217,.35)}
+  .home-ask svg{width:17px;height:17px;color:var(--mute);flex-shrink:0}
+  .home-ask .q{flex:1;color:var(--mute);font-size:14px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .home-ask .go{display:inline-flex;align-items:center;gap:6px;background:var(--brand);color:#fff;
+    font-size:13px;font-weight:500;border-radius:8px;padding:9px 16px;flex-shrink:0}
+  .home-alt{margin-top:14px;font-size:13px;color:var(--mute)}
+  .home-alt a{color:var(--brand);font-weight:500}
+  /* 真实数据统计条 */
+  .home-stats{display:flex;gap:0;margin-top:40px;border-top:1px solid var(--rule-soft)}
+  .home-stats .st{flex:1;padding:18px 4px 0;min-width:0}
+  .home-stats .st+.st{border-left:1px solid var(--rule-soft);padding-left:26px}
+  .home-stats .n{font-family:var(--fm);font-size:26px;font-weight:600;color:var(--text);line-height:1.1}
+  .home-stats .l{font-size:12px;color:var(--mute);margin-top:4px}
+  /* 能力三项（module-card 式 3px 顶条） */
+  .home-feats{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;padding:36px 0 56px}
+  .home-feats .f{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--rule-soft);border-radius:10px;padding:20px}
+  .home-feats .f::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--brand)}
+  .home-feats .ic{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;
+    border-radius:8px;background:var(--brand-soft);color:var(--brand);margin-bottom:12px}
+  .home-feats .ic svg{width:18px;height:18px}
+  .home-feats h3{font-size:14px;font-weight:600;margin-bottom:5px}
+  .home-feats p{font-size:13px;color:var(--dim);line-height:1.6}
+  /* hero 两栏：文案 + 三圆标记 */
+  .home-hero-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:clamp(28px,4vw,56px);align-items:center}
+  .home-mark{display:flex;justify-content:center}
+  .home-mark svg{width:100%;height:auto}
+  /* 循环剧场的样式/脚本已抽到 _loop_mark.html（登录/注册/登出共用） */
+  /* 内置 AI 问答 */
+  .home-ask input{flex:1;min-width:0;border:0;outline:none;background:transparent;color:var(--text);
+    font-size:15px;font-family:inherit;padding:0;min-height:0;box-shadow:none}
+  .home-ask:focus-within{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-ring)}
+  .home-ask input::placeholder{color:var(--mute)}
+  .home-ask .go{border:0;cursor:pointer;font-family:inherit}
+  @media (max-width:760px){.home-ask input{font-size:16px}}
+  .home-qa{min-width:0;max-width:600px}
+  .qa-log{min-width:0;max-height:340px;overflow-y:auto;margin-bottom:12px;display:flex;flex-direction:column;gap:12px}
+  .qa-log .msg{display:flex;flex-direction:column;gap:4px;max-width:100%;min-width:0}
+  .qa-log .msg.user{align-items:flex-end}
+  .qa-log .bubble{padding:9px 13px;border-radius:10px;max-width:92%;min-width:0;overflow-wrap:anywhere;line-height:1.6;font-size:13.5px}
+  .qa-log .msg.user .bubble{background:var(--brand);color:#fff}
+  .qa-log .msg.ai .bubble{background:var(--surface);border:1px solid var(--rule)}
+  .qa-log .answer p{margin:0 0 6px}.qa-log .answer p:last-child{margin:0}
+  .qa-log .answer ul,.qa-log .answer ol{margin:0 0 6px;padding-left:18px}
+  .qa-log .answer strong{font-weight:600}
+  .qa-log .answer table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;font-size:12px;margin:4px 0}
+  .qa-log .answer th,.qa-log .answer td{border:1px solid var(--rule-soft);padding:3px 7px}
+  .qa-log .answer pre{overflow-x:auto;background:var(--paper);border-radius:6px;padding:8px;font-family:var(--fm);font-size:12px}
+  .tool-status{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--mute);padding:2px 0}
+  .tool-status .ts-spin{width:11px;height:11px;border:2px solid var(--rule-soft);border-top-color:var(--brand);
+    border-radius:50%;animation:qaspin .7s linear infinite;flex-shrink:0}
+  @keyframes qaspin{to{transform:rotate(360deg)}}
+  .tool-status.done .ts-spin{display:none}
+  .tool-status .ts-check{width:12px;height:12px;flex-shrink:0;color:var(--ok)}
+  .tool-status .ts-check path{fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+  .tool-status.done{opacity:.6}
+  .tool-status.done .ts-label{text-decoration:line-through;text-decoration-color:var(--rule-soft)}
+  .answer.thinking::after{content:"";display:inline-block;width:7px;height:12px;vertical-align:-1px;
+    border-radius:1.5px;background:var(--brand);animation:qablink .9s steps(2,start) infinite}
+  @keyframes qablink{50%{opacity:0}}
+  .cite-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .cite-chip{font-family:var(--fm);font-size:11px;padding:3px 9px;border-radius:5px;
+    background:var(--brand-soft);color:var(--brand);text-decoration:none;max-width:220px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cite-chip:hover{background:var(--brand);color:#fff}
+  /* ── 动效层：流光标题、旋转光边提问框、分色能力卡 ── */
+  .home-hero h1{width:fit-content;background:linear-gradient(100deg,var(--text) 0 36%,#2563EB 46%,#8B5CF6 54%,#EC4899 60%,var(--text) 70% 100%);
+    background-size:300% 100%;background-position:100% 0;-webkit-background-clip:text;background-clip:text;color:transparent;
+    animation:homeSheen 8s ease-in-out 1.2s infinite}
+  @keyframes homeSheen{0%,12%{background-position:100% 0}55%,100%{background-position:0 0}}
+  .home-hero .kick .bar{background:linear-gradient(90deg,#60A5FA,#8B5CF6);animation:homeBar 3s ease-in-out infinite alternate}
+  @keyframes homeBar{to{width:44px}}
+  .home-ask{position:relative;isolation:isolate;border-radius:14px;padding:9px 9px 9px 18px}
+  .home-ask::before{content:"";position:absolute;inset:-1px;z-index:-1;border-radius:inherit;padding:1.5px;opacity:.35;
+    background:conic-gradient(from var(--fx-ang),#3B82F6,#8B5CF6,#EC4899,#F59E0B,#14B8A6,#3B82F6);
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;
+            mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;
+    animation:fxSpinAng 6s linear infinite;transition:opacity .3s}
+  .home-ask:hover::before{opacity:.75}
+  .home-ask:focus-within::before{opacity:1;animation-duration:2.6s}
+  .home-ask:focus-within{border-color:transparent;box-shadow:0 0 0 5px var(--brand-ring),0 18px 40px -18px rgba(99,102,241,.55)}
+  .home-ask .go{position:relative;overflow:hidden;isolation:isolate;border-radius:10px;padding:10px 18px;font-weight:600;
+    background:linear-gradient(135deg,#3B82F6,#0052D9 55%,#6D28D9);box-shadow:0 8px 18px -8px rgba(37,99,235,.8);transition:transform .3s var(--spring),filter .15s}
+  .home-ask .go:hover{filter:brightness(1.1);transform:translateY(-1px)}
+  .home-ask .go:active{transform:scale(.95)}
+  .home-stats .n{background:linear-gradient(135deg,var(--text),color-mix(in srgb,var(--text) 55%,var(--brand)));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .home-feats .f{--t1:#60A5FA;--t2:#2563EB;border-radius:16px;padding:22px;border-color:var(--rule)}
+  .home-feats .f:nth-child(2){--t1:#C084FC;--t2:#7C3AED}
+  .home-feats .f:nth-child(3){--t1:#2DD4BF;--t2:#0D9488}
+  .home-feats .f::before{height:3px;background:linear-gradient(90deg,var(--t1),var(--t2));transform:scaleX(.18);transform-origin:left;transition:transform .5s var(--ease-out,ease)}
+  .home-feats .f:hover::before{transform:none}
+  .home-feats .ic{width:42px;height:42px;border-radius:13px;color:#fff;background:linear-gradient(140deg,var(--t1),var(--t2));
+    box-shadow:0 10px 20px -10px var(--t2),inset 0 1px 0 rgba(255,255,255,.35);transition:transform .5s var(--spring,ease)}
+  .home-feats .ic svg{width:20px;height:20px}
+  .home-feats .f:hover .ic{transform:rotate(-10deg) scale(1.1)}
+  .home-feats h3{font-size:15px;font-weight:700}
+  @media (prefers-reduced-motion:reduce){.home-hero h1,.home-hero .kick .bar,.home-ask::before{animation:none}}
+  @media (max-width:760px){
+    .home-hero-grid{grid-template-columns:1fr;gap:24px}
+    .home-mark{order:-1}
+    .home-mark svg{width:170px}
+    .home-hero{padding:36px 0 28px}
+    .home-stats{flex-direction:column;gap:14px}
+    .home-stats .st+.st{border-left:0;padding-left:4px}
+    .home-feats{grid-template-columns:1fr}
+  }
+</style>
+
+<section class="home-hero">
+  <div class="home-hero-grid">
+    <!-- 循环剧场：粒子逐字拼成文字环 → 双子绕行 + 星尘 → 溃散循环（引擎在 _loop_mark.html） -->
+    {% include "_loop_mark.html" with mark_class="home-mark" %}
+    <div class="home-hero-copy">
+      <div class="kick"><span class="bar"></span><span>SHDR RAG · 知识库系统</span></div>
+      <h1>文档检索问答</h1>
+      <p class="desc">检索各部门上传的文档，回答附原文出处。</p>
+      <div class="home-qa">
+        <div class="qa-log" id="qaLog" hidden></div>
+        <form class="home-ask" id="homeAskForm" autocomplete="off">
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.8"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <input id="homeQ" type="text" maxlength="500" aria-label="问题">
+          <button class="go" type="submit">提问</button>
+        </form>
+        <div class="home-alt">完整会话与历史，去 <a href="/kb/ask/">检索</a> · 管理文档，去 <a href="/kb/manage/">资料上传</a></div>
+      </div>
+      <div class="home-stats">
+        <div class="st"><div class="n">{{ kb_count }}</div><div class="l">知识库</div></div>
+        <div class="st"><div class="n">{{ doc_count }}</div><div class="l">文档</div></div>
+        <div class="st"><div class="n">{{ chunk_count }}</div><div class="l">检索片段</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="home-feats">
+  <div class="f">
+    <span class="ic"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 2.5l6 3v4.5c0 3.6-2.5 6.4-6 7.5-3.5-1.1-6-3.9-6-7.5V5.5l6-3z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+    <h3>解析入库</h3>
+    <p>PDF / Markdown / TXT，OCR 与分块自动完成。</p>
+  </div>
+  <div class="f">
+    <span class="ic"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.7"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M6.5 9h5M9 6.5v5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+    <h3>混合检索</h3>
+    <p>语义与关键词双路召回，重排序后作答。</p>
+  </div>
+  <div class="f">
+    <span class="ic"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5 3.5h7.5L16 7v9.5H5V3.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M8 10.5l1.7 1.7L13 8.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    <h3>出处引用</h3>
+    <p>回答附带来源切片，一键跳转原文高亮。</p>
+  </div>
+</section>
+
+<footer class="fos-footer">SHDR RAG</footer>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/vendor/marked.min.js' %}"></script>
+<script src="{% static 'js/vendor/purify.min.js' %}"></script>
+<script src="{% static 'js/chat_stream.js' %}?v=20260921"></script>
+<script src="{% static 'js/chat_recovery.js' %}?v=20260921"></script>
+<script>
+
+// ── 提问框占位：逐字打出示例问题（聚焦或已有输入时停住） ──
+(function(){
+  const input = document.getElementById('homeQ');
+  if (!input) return;
+  const TIPS = ['无损检测国标对焊缝超声检测有哪些要求？', '今天上海迪士尼乐园各项目几点开放？',
+    '未来三天的天气适合户外项目运营吗？', 'maintenance manual 里液压系统多久保养一次？'];
+  const STILL = '输入问题，回车即问';
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { input.placeholder = TIPS[0]; return; }
+  let tip = 0, pos = 0, dir = 1, timer = 0;
+  function tick(){
+    if (document.activeElement === input || input.value) { input.placeholder = STILL; timer = setTimeout(tick, 600); return; }
+    const t = TIPS[tip];
+    pos += dir;
+    input.placeholder = t.slice(0, pos) + (dir > 0 ? '▍' : '');
+    let wait = dir > 0 ? 70 + Math.random() * 60 : 28;
+    if (dir > 0 && pos >= t.length) { dir = -1; wait = 2200; input.placeholder = t; }
+    else if (dir < 0 && pos <= 0) { dir = 1; tip = (tip + 1) % TIPS.length; wait = 380; }
+    timer = setTimeout(tick, wait);
+  }
+  timer = setTimeout(tick, 1400);
+})();
+
+// ── 内置 AI 问答（复用 /kb/stream/ SSE；同 ask 页语义的精简前端） ──
+(function(){
+  const form = document.getElementById('homeAskForm');
+  const input = document.getElementById('homeQ');
+  const log = document.getElementById('qaLog');
+  if (!form || !input || !log) return;
+  const AUTHED = {% if user.is_authenticated %}true{% else %}false{% endif %};
+  const CHECK = '<svg class="ts-check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.6l3 3 6-6.5"/></svg>';
+  const csrf = () => {
+    const m = document.cookie.match(/(?:^|; )csrftoken=([^;]*)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  };
+  let threadId = '', busy = false, activeStream = null, recovery = null;
+  const recoveryKey = 'rag-home-{{ user.pk }}';
+  function restoreHome() {
+    if (!threadId) return;
+    busy = true;
+    if (recovery) recovery.stop();
+    recovery = FosAnswerRecovery.watch(threadId, {onUpdate(data) {
+      if (activeStream) return;
+      busy = !!data.active_answer;
+      log.hidden = false; log.innerHTML = '';
+      data.messages.forEach(message => {
+        const row = document.createElement('div');
+        row.className = 'msg ' + (message.role === 'user' ? 'user' : 'ai');
+        const bubble = document.createElement('div'); bubble.className = 'bubble';
+        if (message.role === 'ai' && window.marked && window.DOMPurify) bubble.innerHTML = DOMPurify.sanitize(marked.parse(message.content || ''));
+        else bubble.textContent = message.content || '';
+        if (message.completion_status === 'incomplete') {
+          const note = document.createElement('div'); note.textContent = message.failure_reason || '回答未完成'; bubble.appendChild(note);
+        }
+        row.appendChild(bubble); log.appendChild(row);
+      });
+      if (busy) {
+        const status = document.createElement('div'); status.textContent = (data.active_answer.stage || '后台生成中') + '…'; log.appendChild(status);
+        const stop = document.createElement('button'); stop.type = 'button'; stop.textContent = '停止回答';
+        stop.onclick = async () => { stop.disabled = true; try { await FosAnswerRecovery.stop(threadId, csrf()); } catch(error) { status.textContent = error.message; stop.disabled = false; } };
+        log.appendChild(stop);
+      }
+      const link = document.createElement('a'); link.href = '/kb/ask/?conv=' + encodeURIComponent(threadId); link.textContent = '打开完整会话与出处'; log.appendChild(link);
+    }, onError(error) {
+      busy = false; log.hidden = false;
+      const terminal = [401,403,404].includes(error.status);
+      if (terminal) { threadId = ''; FosAnswerRecovery.remember(recoveryKey, ''); }
+      log.textContent = error.message + (terminal ? '' : '，正在重试…');
+    }});
+  }
+  window.addEventListener('pagehide', () => {
+    if (recovery) recovery.stop();
+    if (activeStream) activeStream.abort('已离开页面，回答仍在后台生成。');
+  });
+  window.addEventListener('pageshow', event => { if (event.persisted) restoreHome(); });
+  threadId = FosAnswerRecovery.recalled(recoveryKey);
+  if (threadId && AUTHED) restoreHome();
+
+  form.addEventListener('submit', e => { e.preventDefault(); submitQ(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submitQ(); }
+  });
+
+  function submitQ(){
+    const text = input.value.trim();
+    if (!text || busy) return;
+    if (!AUTHED) { location.href = '/accounts/login/?next=/'; return; }
+    input.value = '';
+    if (!threadId) threadId = 'home-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    FosAnswerRecovery.remember(recoveryKey, threadId);
+    if (recovery) recovery.stop();
+    log.hidden = false;
+    // 用户气泡
+    const um = document.createElement('div');
+    um.className = 'msg user';
+    um.innerHTML = '<div class="bubble"></div>';
+    um.querySelector('.bubble').textContent = text;
+    log.appendChild(um);
+    // AI 容器：工具区 + 回答区（思考光标）
+    const am = document.createElement('div');
+    am.className = 'msg ai';
+    am.innerHTML = '<div class="tool-area"></div><div class="bubble"><div class="answer thinking"></div><div class="cites"></div></div>';
+    log.appendChild(am);
+    log.scrollTop = log.scrollHeight;
+    ask(text, am);
+  }
+
+  async function ask(text, am){
+    busy = true;
+    const answerEl = am.querySelector('.answer');
+    const toolArea = am.querySelector('.tool-area');
+    const stopButton = document.createElement('button');
+    stopButton.type = 'button'; stopButton.textContent = '停止回答';
+    toolArea.appendChild(stopButton);
+    stopButton.onclick = async () => {
+      stopButton.disabled = true;
+      try { await FosAnswerRecovery.stop(threadId, csrf()); }
+      catch(error) { stopButton.disabled = false; stopButton.textContent = error.message; }
+    };
+    const toolRows = {}; let firstToken = true; let buf = ''; let cites = [];
+    const render = () => {
+      answerEl.innerHTML = (window.marked && window.DOMPurify)
+        ? DOMPurify.sanitize(window.marked.parse(buf))
+        : buf.replace(/</g, '&lt;');
+      log.scrollTop = log.scrollHeight;
+    };
+    const markDone = row => {
+      if (!row || row.classList.contains('done')) return;
+      row.classList.add('done');
+      row.insertAdjacentHTML('beforeend', CHECK);
+    };
+    let stream;
+    const showFailure = err => {
+      answerEl.classList.remove('thinking');
+      toolArea.querySelectorAll('.ts-spin').forEach(el => el.remove());
+      if (am.querySelector('.answer-interrupted')) return;
+      const note = document.createElement('div');
+      note.className = 'answer-interrupted';
+      note.style.cssText = 'color:var(--danger);font-size:12px';
+      note.textContent = (err.message || String(err)) + (buf ? ' 已保留部分正文，请勿作为完整结论。' : ' 尚未生成答案正文。');
+      answerEl.appendChild(note);
+      const retry = document.createElement('button');
+      retry.type = 'button'; retry.textContent = '重试此问题';
+      retry.addEventListener('click', () => { if (!busy) { input.value = text; submitQ(); retry.disabled = true; } });
+      answerEl.appendChild(retry);
+    };
+    try {
+      const fd = new FormData();
+      fd.set('csrfmiddlewaretoken', csrf());
+      fd.set('message', text);
+      fd.set('thread_id', threadId);
+      stream = FosChatStream.create({onAbort(error) {
+        if (activeStream !== stream) return;
+        showFailure(error);
+        activeStream = null; busy = false;
+        if (!error.message.startsWith('已离开页面')) setTimeout(restoreHome, 0);
+      }, onEvent(etype, payload) {
+          if (activeStream !== stream) return;
+          if (etype === 'heartbeat') {
+            if (!toolRows.progress) {
+              const progress = document.createElement('div');
+              progress.className = 'tool-status';
+              toolArea.appendChild(progress); toolRows.progress = progress;
+            }
+            toolRows.progress.textContent = (payload.stage || '处理中') + ' · ' + (payload.elapsed || 0) + ' 秒';
+          } else if (etype === 'token') {
+            if (firstToken) { firstToken = false; answerEl.classList.remove('thinking');
+              Object.values(toolRows).forEach(markDone); }
+            buf += payload.text || ''; render();
+          } else if (etype === 'reasoning') {
+            const t = (payload.text || '').trim().split('\n')[0];
+            if (t) {
+              const r = document.createElement('div');
+              r.className = 'tool-status';
+              r.innerHTML = '<span class="ts-spin"></span><span class="ts-label"></span>';
+              r.querySelector('.ts-label').textContent = t.slice(0, 80);
+              toolArea.appendChild(r);
+              toolRows['think-' + Math.random().toString(36).slice(2)] = r;
+            }
+          } else if (etype === 'tool_start') {
+            const row = document.createElement('div');
+            row.className = 'tool-status';
+            row.innerHTML = '<span class="ts-spin"></span><span class="ts-label"></span>';
+            row.querySelector('.ts-label').textContent = payload.label || '调用工具…';
+            toolArea.appendChild(row);
+            if (payload.run_id) toolRows[payload.run_id] = row;
+          } else if (etype === 'tool_end') {
+            markDone(toolRows[payload.run_id]);
+          } else if (etype === 'citations') {
+            cites = cites.concat(payload.citations || []);
+          }
+          log.scrollTop = log.scrollHeight;
+      }});
+      activeStream = stream;
+      await stream.run('/kb/stream/', {method: 'POST', body: fd});
+      answerEl.classList.remove('thinking');
+      Object.values(toolRows).forEach(markDone);
+      render();
+      // 引用 chip → 切片页；图片命中内联缩略图直接展示
+      if (cites.length) {
+        const row = document.createElement('div');
+        row.className = 'cite-row';
+        const imgRow = document.createElement('div');
+        imgRow.className = 'cite-imgs';
+        cites.forEach(c => {
+          if (!c.doc_id) return;
+          const a = document.createElement('a');
+          a.className = 'cite-chip';
+          a.target = '_blank'; a.rel = 'noopener';
+          // 查询串必须以 ? 开头——此前漏掉导致 /slices/h=…&h=… 变路径段 → 404
+          const hls = (c.highlights || []).filter(h => h && h.length >= 3).slice(0, 12);
+          const qs = hls.map(h => 'h=' + encodeURIComponent(h)).join('&');
+          a.href = '/kb/doc/' + encodeURIComponent(c.doc_id) + '/slices/' + (qs ? '?' + qs : '');
+          let name = (c.source || '文档').replace(/\.[^.]+$/, '');
+          a.textContent = name.slice(0, 22);
+          row.appendChild(a);
+          (c.images || []).forEach((u, idx) => {
+            const ia = document.createElement('a');
+            ia.className = 'cite-img-link';
+            ia.href = u;
+            ia.target = '_blank'; ia.rel = 'noopener';
+            ia.title = '命中图片 ' + (idx + 1) + '（来自 ' + name + '）· 点击看原图';
+            const im = document.createElement('img');
+            im.src = u; im.loading = 'lazy'; im.alt = '命中图片';
+            ia.appendChild(im);
+            imgRow.appendChild(ia);
+          });
+        });
+        const citesEl = am.querySelector('.cites');
+        if (row.children.length) citesEl.appendChild(row);
+        if (imgRow.children.length) citesEl.appendChild(imgRow);
+      }
+    } catch (err) {
+      if (activeStream === stream) showFailure(err);
+    } finally {
+      stopButton.remove();
+      if (activeStream === stream) { busy = false; activeStream = null; }
+      log.scrollTop = log.scrollHeight;
+    }
+  }
+})();
+
+</script>
+{% endblock %}

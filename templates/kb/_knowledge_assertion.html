@@ -1,0 +1,21 @@
+<article class="knowledge-assertion" data-knowledge-card="{{ card.assertion.pk }}">
+  <h3>{{ card.path }}</h3>
+  <p class="knowledge-state">{{ card.assertion.get_status_display }} · {{ card.assertion.document.original_name }}</p>
+  {% if card.assertion.subject_label != card.assertion.node.object.label %}<p class="graph-meta">原文对象名：{{ card.assertion.subject_label }}</p>{% endif %}
+  <section class="knowledge-content"><h4>{% if card.assertion.value.type == 'rule' %}判定规则{% else %}内容与取值{% endif %}</h4>
+    {% if card.assertion.value.operator %}<span class="knowledge-operator">{{ card.assertion.value.operator }}</span>{% endif %}
+    {% if card.rule %}{% include "kb/_knowledge_rule.html" with rule=card.rule %}{% else %}{% include "kb/_knowledge_value.html" with item=card.value %}{% endif %}
+    {% if card.assertion.value.unit %}<span class="knowledge-unit">{{ card.assertion.value.unit }}</span>{% endif %}
+  </section>
+  {% if card.scope.children %}<section class="knowledge-context"><h4>适用范围</h4>{% include "kb/_knowledge_value.html" with item=card.scope %}</section>{% endif %}
+  {% if card.conditions.children %}<section class="knowledge-context"><h4>条件与例外</h4>{% include "kb/_knowledge_value.html" with item=card.conditions %}</section>{% endif %}
+  {% if not card.current %}<p class="graph-stale">来源已变化，此内容不参与问答。</p>{% endif %}
+  {% for evidence in card.evidence %}<details open><summary>{{ evidence.document }} · 原文依据</summary><blockquote class="graph-quote">{{ evidence.quote }}</blockquote>
+    {% for location in evidence.locations %}<button type="button" class="btn sm outline" data-graph-chunk="{{ location.chunk_id }}">{{ location.page }} · 查看原文圈注</button>{% endfor %}
+  </details>{% endfor %}
+  {% if card.can_manage %}<div class="graph-actions">
+    <button type="button" class="btn sm primary" data-knowledge-assertion="{{ card.assertion.pk }}" data-status="verified" {% if not card.current %}disabled{% endif %}>确认此条内容</button>
+    <button type="button" class="btn sm outline" data-knowledge-assertion="{{ card.assertion.pk }}" data-status="rejected">拒绝此条内容</button>
+    <button type="button" class="btn sm outline" data-knowledge-assertion="{{ card.assertion.pk }}" data-status="candidate">恢复待确认</button>
+  </div>{% endif %}
+</article>

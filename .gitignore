@@ -1,0 +1,48 @@
+# ── 敏感配置 / 密钥（绝不进仓库）──
+.env
+.env.*
+!.env.example
+
+# ── 运行时数据 ──
+db.sqlite3
+/db.sqlite3.*
+db.sqlite3-journal
+data/
+media/
+logs/
+staticfiles/
+static/vendor/pyodide/
+*.sqlite3
+output/
+.workbuddy/
+
+# ── 真实文档（客户机密，不上传）──
+pdf files/
+
+# ── IDE 内部文件 ──
+.zcode/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv-mineru/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+.DS_Store
+*.swp
+db.sqlite3-wal
+db.sqlite3-shm
+
+# ── 运行时/本地工具（不进仓库）──
+blobs/
+.mineru-service.lock
+tools/
+watch_doc.py
+watch_ocr.py
