@@ -4,26 +4,27 @@
 {% block extra_head %}
 <link rel="stylesheet" href="{% static 'vehicle_tracker/css/vehicle_tracker.css' %}?v=1">
 <link rel="stylesheet" href="{% static 'vehicle_tracker/css/vehicle_workspace.css' %}?v=20261103">
-<link rel="stylesheet" href="{% static 'vehicle_tracker/css/equipment_library.css' %}?v=20261103">
+<link rel="stylesheet" href="{% static 'vehicle_tracker/css/equipment_library.css' %}?v=20261107">
 {% endblock %}
 {% block content %}
-<main id="equipment-library" class="eq-library" data-account="{{ request.user.pk }}">
-  <header class="eq-intro">
-    <span class="eq-kicker">SHDR RAG · 工程知识</span>
+<header class="page-head">
+  <div class="page-head-main">
     <h1>设备模型知识库</h1>
-    <p>按设备浏览部件结构、学习资料和追踪记录。</p>
-  </header>
+    <p class="page-desc">按设备浏览部件结构、学习资料和追踪记录。</p>
+  </div>
+</header>
+<main id="equipment-library" class="eq-library" data-account="{{ request.user.pk }}">
   <p id="eq-status" role="status" hidden></p>
   <section id="eq-catalog" aria-labelledby="eq-catalog-heading">
-    <div class="eq-heading">
+    <div class="section-bar eq-heading">
       <h2 id="eq-catalog-heading">设备目录</h2>
       <div class="eq-actions">
-        <button id="eq-import" type="button">导入模型</button>
-        <button id="eq-create" class="eq-primary" type="button">新建设备</button>
+        <button id="eq-import" class="btn outline" type="button">导入模型</button>
+        <button id="eq-create" class="btn primary" type="button">新建设备</button>
       </div>
     </div>
-    <div id="eq-cards" class="eq-grid">
-      <a href="{% url 'vehicle_tracker:sdmt' %}" class="eq-card"><span>游乐设备 · 三维模型</span><h3>七个小矮人矿山车</h3><p>查看列车三维模型、部件资料与历次检验记录。</p><b>打开模型 →</b></a>
+    <div id="eq-cards" class="kb-grid eq-grid">
+      <a href="{% url 'vehicle_tracker:sdmt' %}" class="kb-card eq-card"><span>游乐设备 · 三维模型</span><h3>七个小矮人矿山车</h3><p>查看列车三维模型、部件资料与历次检验记录。</p><b>打开模型 →</b></a>
     </div>
     <p class="eq-caption">新建或导入的模型按账号保存在此浏览器中。使用「导出模型」可备份或转移部件、笔记与记录。</p>
   </section>
@@ -54,5 +55,5 @@
   <div class="vt-scope">{% include "vehicle_tracker/_source.html" %}</div>
 </main>
 {{ registry|json_script:"equipment-registry" }}
-<script type="module" src="{% static 'vehicle_tracker/js/equipment-library.mjs' %}?v=20261103"></script>
+<script type="module" src="{% static 'vehicle_tracker/js/equipment-library.mjs' %}?v=20261107-shell"></script>
 {% endblock %}

@@ -57,12 +57,24 @@ class HistoryBudgetTests(SimpleTestCase):
         self.assertEqual(recent_history(items,enhanced=False,visible=lambda c:True,max_chars=4),[])
 
 
-    def test_unverified_alias_is_not_a_source_for_next_answer(self):
+    def test_completed_normal_answers_remain_in_conversation(self):
         from types import SimpleNamespace as M
         from kb.history import recent_history
         items=[M(role='user',content='设备甲天气'), M(role='ai',content='设备甲 (UNSUPPORTED_NAME)',verified=False,citations=[],completion_status='complete')]
         history=recent_history(items,enhanced=False,visible=lambda c:True)
-        self.assertNotIn('UNSUPPORTED_NAME',str(history))
+        self.assertIn('UNSUPPORTED_NAME',str(history))
         self.assertIn('设备甲天气',str(history))
         items[1].completion_status='incomplete'
         self.assertEqual(recent_history(items,enhanced=False,visible=lambda c:True),[])
+
+    def test_default_memory_does_not_drop_older_pairs_or_long_answers(self):
+        from types import SimpleNamespace as M
+        from kb.history import recent_history
+        items = []
+        for i in range(6):
+            items.extend([M(role='user',content=f'question-{i}'), M(role='ai',content=str(i)*9000,
+                verified=False,citations=[],completion_status='complete')])
+        history = recent_history(items, enhanced=False, visible=lambda c:True)
+        self.assertEqual(len(history), 12)
+        self.assertEqual(history[0]['content'], 'question-0')
+        self.assertEqual(len(history[-1]['content']), 9000)

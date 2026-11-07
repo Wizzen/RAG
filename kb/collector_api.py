@@ -29,7 +29,7 @@ from .feed_credentials import api_origin, bindings, discard_if_unused, secret_va
 from .feed_cron import CronSchedule
 from .feed_http import validate_headers
 from .feed_protocol import validate_url
-from .feeds import claim as claim_feed, start_async as start_feed
+from .feeds import claim as claim_feed, execute as execute_feed, start_async as start_feed
 from .models import ConnectorDraft, DEPARTMENT_GENERAL, KnowledgeBase, KnowledgeFeed
 
 _UNSET = object()          # 区分「没给这个参数」和「显式给了 None/False」
@@ -47,15 +47,13 @@ def require_manager(user) -> None:
 def resolve_private(user, requested, *, inherited=False) -> bool:
     """内网/本机地址开关的唯一判定。
 
-    - 没给参数＝沿用上一轮（编辑已有内网数据源的对话照常继续）。
-    - 关闭→开启仅限全局管理员；随时允许关闭。
+    - 采集任务默认开放内网：新任务没给参数即开启，链路本地、组播等硬底线仍在 `feed_http`/`browser_runtime`。
+    - 编辑对话里没给参数＝沿用上一轮；显式传 False 仍可关闭。
     """
     if requested is None or requested is _UNSET:
         return bool(inherited)
     if not isinstance(requested, bool):
         raise ValueError("内网开关格式无效。")
-    if requested and not inherited and not access.is_global_admin(user):
-        raise ValueError("内网服务须由全局管理员启用。")
     return requested
 
 
@@ -100,7 +98,7 @@ def resolve_auth(user, url, *, authentication=_UNSET, credential=_UNSET, header_
 # ---------------------------------------------------------------- 生成任务
 
 def create_draft(*, user, requirement, api_url="", authentication=_UNSET, credential=_UNSET,
-                 header_env=_UNSET, allow_private=False, sample=None, kb=None, created_via="web"):
+                 header_env=_UNSET, allow_private=True, sample=None, kb=None, created_via="web"):
     """创建采集脚本生成任务并在后台启动，立即返回草稿（不等生成结果）。
 
     认证三种给法：结构化的 `authentication={'type':'bearer','token':…}`（API/CLI/对话，
@@ -190,8 +188,12 @@ def cancel(*, user, job) -> ConnectorDraft:
 
 # ---------------------------------------------------------------- 批准入库
 
-def approve(*, user, job, write_mode=None, department=None, run_now=True, trigger="manual") -> KnowledgeFeed:
-    """把已通过真实样例校验的候选脚本落成定时数据源（页面「确认」按钮的同一实现）。"""
+def approve(*, user, job, write_mode=None, department=None, run_now=True, trigger="manual",
+            first_run_async=True, selected_fields=None) -> KnowledgeFeed:
+    """批准已验证方案；页面异步首跑，CLI 用 first_run_async=False 等待入库完成。
+
+    selected_fields 只筛选正文字段，保留取数/计算依赖与系统生成的采集日期。
+    """
     with transaction.atomic():
         authorize(job)
         if job.user_id != user.pk:
@@ -203,6 +205,14 @@ def approve(*, user, job, write_mode=None, department=None, run_now=True, trigge
         if not ConnectorDraft.objects.filter(pk=job.pk, status="ready", feed__isnull=True).update(status="enabling"):
             raise ValueError("连接器正在启用，请稍后查看。")
         spec = check_spec(job, job.spec)
+        if selected_fields is not None:
+            available = {field['label'] for field in spec['body_fields']}
+            if (not isinstance(selected_fields, list) or
+                    any(not isinstance(label, str) or label not in available for label in selected_fields)):
+                raise ValueError('请选择预览中已有的保留字段。')
+            # Only project the output. Browser capture, stable IDs and calculation inputs stay intact.
+            keep = set(selected_fields) | {'采集日期'}
+            spec = {**spec, 'body_fields': [field for field in spec['body_fields'] if field['label'] in keep]}
         if spec.get("source_type") == "browser" and (
                 not job.browser_state.get("tested") or job.browser_state.get("validation_scope") != "full_batch"):
             raise ValueError("网页脚本尚未通过完整批次验证，请继续对话重新验证后确认。")
@@ -256,7 +266,10 @@ def approve(*, user, job, write_mode=None, department=None, run_now=True, trigge
         retain_chain(job)
         run = claim_feed(feed.pk, trigger=trigger, force=True)[0] if run_now else None
     if run is not None:
-        start_feed(run.pk)
+        if first_run_async:
+            start_feed(run.pk)
+        else:
+            execute_feed(run.pk)
     return feed
 
 

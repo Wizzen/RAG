@@ -1,12 +1,7 @@
-/* Operations uses the workspace theme for controls and a fixed, dark masthead in both themes. */
-.fos-container:has(.ops-workbench) {
-  width: 100%;
-  max-width: 1530px;
-  padding: clamp(18px, 2.2vw, 36px) clamp(16px, 2.8vw, 48px) 100px;
-}
+/* Page headers and outer spacing come from the shared workspace shell. */
 .ops-workbench {
-  --ops-radius: 18px;
-  --ops-pad: clamp(18px, 2.1vw, 32px);
+  --ops-radius: var(--radius-lg);
+  --ops-pad: 22px;
   --ops-line: color-mix(in srgb, var(--dim) 18%, var(--surface));
   color: var(--text);
 }
@@ -16,31 +11,15 @@
   width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
   stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round;
 }
-.ops-masthead, .ops-panel {
+.ops-sources, .ops-panel {
   min-width: 0; background: var(--surface); border: 1px solid var(--rule);
-  border-radius: var(--ops-radius); box-shadow: 0 5px 16px -14px #15264247;
+  border-radius: var(--ops-radius); box-shadow: var(--shadow-sm);
 }
-.ops-masthead { overflow: hidden; }
-.ops-page-head {
-  position: relative; isolation: isolate; overflow: hidden; color: #f7faff;
-  padding: clamp(21px, 2.15vw, 31px) var(--ops-pad);
-  background: radial-gradient(ellipse at 80% 80%, #18506a 0%, transparent 50%),
-              linear-gradient(110deg, #101b2d 0%, #172c46 56%, #173a52 100%);
-}
-.ops-head-copy { position: relative; z-index: 1; width: fit-content; }
-.ops-overline, .ops-section-label {
+.ops-section-label {
   font: 650 10px/1.35 var(--fb); letter-spacing: .13em; text-transform: uppercase;
 }
-.ops-overline { display: flex; align-items: center; gap: 9px; color: #b7d5e9; }
-.ops-overline span { display: block; width: 19px; height: 2px; border-radius: 2px; background: #86dedb; }
-.ops-page-head h1 { margin: 10px 0 8px; font-size: clamp(30px, 2.85vw, 43px); line-height: 1.16; letter-spacing: -.035em; color: inherit; }
-.ops-intro { color: #ccdae6; font-size: clamp(13px, 1.05vw, 15px); line-height: 1.55; }
-.ops-head-art {
-  position: absolute; z-index: 0; top: 0; right: 0; height: 100%; width: 51%;
-  object-fit: contain; object-position: 70% center; pointer-events: none;
-}
 
-.ops-sources { display: flex; padding: 0 var(--ops-pad); gap: clamp(8px, 2.6vw, 40px); }
+.ops-sources { display: flex; overflow: hidden; padding: 0 var(--ops-pad); gap: clamp(8px, 2.6vw, 40px); }
 .ops-sources:empty { display: none; }
 .ops-source {
   position: relative; display: flex; align-items: center; justify-content: flex-start; gap: 10px;
@@ -131,14 +110,10 @@ html[data-theme="dark"] .ops-source[aria-pressed="true"] strong { color: #91bbff
   margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule-soft);
 }
 .ops-query-footer > .ops-form-actions { margin-left: auto; }
-.ops-workbench .btn { box-shadow: none; border-radius: 9px; }
 .ops-query .btn.primary {
-  min-height: 39px; gap: 7px; padding: 0 18px; background: var(--brand); color: white; box-shadow: none;
+  min-height: 39px; gap: 7px; padding: 0 18px;
 }
 .ops-query .btn.primary .ops-icon { width: 16px; height: 16px; stroke-width: 2; }
-.ops-query .btn.primary:hover:not(:disabled) { background: var(--brand-hover); filter: none; }
-html[data-theme="dark"] .ops-query .btn.primary { background: #305fc1; }
-html[data-theme="dark"] .ops-query .btn.primary:hover:not(:disabled) { background: #396acb; }
 .ops-more[open] { width: 100%; }
 .ops-workbench summary { color: var(--dim); cursor: pointer; font-size: 13px; font-weight: 550; }
 .ops-more > summary {
@@ -233,20 +208,11 @@ a.ops-row-open { text-decoration: none; }
   .ops-dt-card b { font-size: 20px; }
 }
 
-@media (min-width: 1081px) {
-  .fos-container:has(.ops-workbench) { padding-right: max(76px, calc(env(safe-area-inset-right) + 64px)); }
-}
 @media (max-width: 820px) {
   .ops-fields { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .ops-head-art { width: 46%; object-position: right center; }
 }
 @media (max-width: 600px) {
-  .fos-container:has(.ops-workbench) { padding: 14px 12px 90px; }
-  .ops-workbench { --ops-pad: 16px; --ops-radius: 14px; }
-  .ops-page-head { padding-block: 20px; }
-  .ops-head-art { width: 40%; opacity: .55; object-fit: cover; object-position: 66% center; mask-image: linear-gradient(to right, transparent, #000 50%); }
-  .ops-intro { max-width: 23em; font-size: 12px; }
-  .ops-overline { font-size: 9px; }
+  .ops-workbench { --ops-pad: 16px; }
   .ops-sources { padding: 0 7px; gap: 4px; }
   .ops-source { justify-content: center; flex: 1; min-width: 0; gap: 5px; padding: 12px 0; }
   .ops-source strong { font-size: 13px; }

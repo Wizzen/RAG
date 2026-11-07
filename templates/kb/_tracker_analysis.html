@@ -1,0 +1,45 @@
+{% load static %}
+<link rel="stylesheet" href="{% static 'css/tracker_analysis.css' %}?v=20261107-2">
+<section class="ta-panel" id="trackerAnalysis" data-url="{% url 'kb:tracker_analysis' kb.slug %}" aria-labelledby="taHeading">
+  <header class="ta-header">
+    <div><span class="ta-kicker">业务数据 · 趋势洞察</span><h2 id="taHeading">采集参数分析</h2>
+      <p>选择同一对象的参数，按采集时间分析变化与周期统计。</p></div>
+    <span class="ta-badge">只读分析</span>
+  </header>
+  <form class="ta-filters" id="taFilters">
+    <div class="ta-object">
+      <label for="taItem">采集对象</label>
+      <input type="search" id="taSearch" placeholder="搜索名称、来源或 ID" aria-label="搜索采集对象" autocomplete="off">
+      <select id="taItem" required><option value="">正在读取对象…</option></select>
+      <span class="ta-help" id="taSearchHint" hidden>最多显示 200 个对象，请搜索以缩小范围。</span>
+    </div>
+    <div><label for="taParameter">分析参数</label><select id="taParameter" required><option value="">正在读取参数…</option></select></div>
+    <div><label for="taGrain">时间粒度</label><select id="taGrain"><option value="hour">每小时</option><option value="day" selected>每天</option><option value="week">每周</option><option value="month">每月</option><option value="year">每年</option></select></div>
+    <div><label for="taStart">开始日期时间</label><input id="taStart" type="datetime-local" step="1"></div>
+    <div><label for="taEnd">结束日期时间</label><input id="taEnd" type="datetime-local" step="1"></div>
+    <div class="ta-filter-actions"><button class="btn primary" type="submit" id="taApply">应用筛选</button><button class="btn outline" type="button" id="taReset">重置时间</button></div>
+  </form>
+  <div class="ta-meta"><span id="taTimezone">按数据源的采集时区统计</span><span id="taStatus" role="status" aria-live="polite">正在准备分析…</span></div>
+  <div class="ta-message" id="taError" role="alert" hidden></div>
+  <div class="ta-message" id="taEmpty" hidden>当前范围没有采集样本，请调整对象或时间范围。</div>
+  <div id="taResult" hidden>
+    <div class="ta-chart-head"><div><h3 id="taChartTitle">参数趋势</h3><p id="taChartHint"></p></div>
+      <div class="ta-view-controls">
+        <label class="ta-metric" for="taMetric">统计指标<select id="taMetric"><option value="avg">均值</option><option value="latest">期末有效值</option><option value="sum">合计</option><option value="min">最低值</option><option value="max">最高值</option></select></label>
+        <div class="ta-view-switch" role="group" aria-label="分析视图">
+          <button type="button" data-ta-view="table" aria-pressed="true" aria-controls="taTableWrap"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M2 6h12M2 10h12M7 2v12"/></svg>表格</button>
+          <button type="button" data-ta-view="chart" aria-pressed="false" aria-controls="taChartWrap"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2v12h12M4 10l3-4 3 2 4-5"/></svg>图表</button>
+        </div>
+      </div>
+    </div>
+    <div id="taChartWrap" hidden><div class="ta-chart" id="taChart"></div></div>
+    <div id="taTableWrap">
+      <div class="ta-table-head"><h3>周期分析表</h3><span id="taTableHint"></span></div>
+      <div class="ta-analysis-table-wrap" tabindex="0" aria-label="周期分析表，可横向滚动">
+        <table class="ta-analysis-table"><caption class="ta-sr-only">按采集时间汇总的参数分析</caption><thead id="taTableHead"></thead><tbody id="taTableBody"></tbody></table>
+      </div>
+    </div>
+    <p class="ta-footnote" id="taFootnote"></p>
+  </div>
+</section>
+<script type="module" src="{% static 'js/tracker_analysis.js' %}?v=20261107-3"></script>

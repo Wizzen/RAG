@@ -1296,7 +1296,7 @@ function aiBusy(busy) {
   $('ai-cancel').hidden = !busy;
   $('ai-thread').setAttribute('aria-busy', String(busy));
   $('ai-launcher').classList.toggle('is-busy', busy);
-  $('ai-launcher').setAttribute('aria-label', busy ? '运维 AI 正在分析，点击查看' : '打开运维 AI');
+  $('ai-launcher').setAttribute('aria-label', busy ? 'EnGenie 正在分析运维数据，点击查看' : '打开 EnGenie 运维助手');
 }
 
 function recentHistory(turns) {
@@ -1371,7 +1371,7 @@ $('question').addEventListener('keydown', event => {
 });
 $('ai-new').addEventListener('click', startSession);
 $('ai-clear').addEventListener('click', async () => {
-  if (!window.confirm('清空本浏览器中保存的全部运维 AI 历史对话？')) return;
+  if (!window.confirm('清空本浏览器中保存的全部 EnGenie 运维历史对话？')) return;
   await clearSessions(account).catch(() => {});
   startSession();
 });

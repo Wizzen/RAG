@@ -20,6 +20,14 @@ class TableQualityTests(SimpleTestCase):
             with self.assertRaises(ValueError):
                 _html_table_to_text(f'<table><tr><td colspan="{span}">Required fact</td></tr></table>')
 
+    def test_overflowing_rowspan_degrades_to_flat_cells_not_document_failure(self):
+        # MinerU 实测会把 rowspan 写过表尾（2 行表标 rowspan=17）；
+        # 嵌入渲染必须降级平铺保内容，不能让整份文档的重建索引失败。
+        value = '<table><tr><td rowspan="17">图示：</td><td colspan="4"></td></tr><tr><td>自由度</td><td>X:200-电动</td></tr></table>'
+        result = _html_table_to_text(value)
+        self.assertIn('图示：', result)
+        self.assertIn('自由度 | X:200-电动', result)
+
     def test_omitted_row_and_cell_end_tags_follow_html_rules(self):
         # MinerU output seen on FL-8B electrical tables: last row lacks </tr>.
         last_row = _html_table_to_text('<table><tr><td>44</td><td>B2</td></tr><tr><td>45</td><td>JB2</td></table>')

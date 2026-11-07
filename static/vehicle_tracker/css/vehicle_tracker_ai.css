@@ -12,4 +12,14 @@
 .vt-ai-status{min-height:26px;padding:4px 16px;color:var(--vt-muted);font-size:11px;flex-shrink:0}.vt-ai-status.error{color:#b06530}
 .vt-ai-form{padding:8px 16px 12px;border-top:1px solid var(--vt-line);display:flex;flex-direction:column;gap:7px;flex-shrink:0}.vt-ai-form textarea{resize:none;min-height:67px;font-size:12px}.vt-ai-form>div{display:flex;justify-content:space-between;gap:12px;align-items:center}.vt-ai-form small{font-size:10px;color:var(--vt-muted)}.vt-ai-form button{padding:6px 15px}
 .vt-ai-foot{padding:0 16px 12px;font-size:10px;color:var(--vt-muted);line-height:1.6;flex-shrink:0}
+.vt-scope .vt-ai-launcher{display:inline-flex;align-items:center;gap:7px}.vt-scope .vt-ai-launcher svg{width:21px;height:21px}
+.vt-scope .vt-ai-head{color:#f7faff;background:radial-gradient(ellipse at 90% 100%,#18506a 0%,transparent 65%),linear-gradient(110deg,#101b2d,#172c46 60%,#173a52);border-bottom-color:#ffffff18}
+.vt-scope .vt-ai-head h2{color:inherit;font-size:20px;letter-spacing:-.035em}.vt-scope .vt-ai-head small{color:#ccdae6}
+.vt-scope .vt-ai-avatar{display:grid;place-items:center;flex:none;width:38px;height:38px;border:1px solid #ffffff18;border-radius:12px;color:#a5e2e4;background:#ffffff0d}
+.vt-ai-avatar svg{width:29px;height:29px}.vt-scope .vt-ai-head button{color:#ccdae6;background:transparent;border-color:#ffffff25;border-radius:9px}
+.vt-scope .vt-ai-head button:hover{color:white;background:#ffffff14}.vt-scope .vt-ai-head button:focus-visible{outline-color:#a5e2e4}
+.vt-scope .vt-ai-panel:not([hidden]){transform-origin:top right;animation:vt-engenie-in .3s cubic-bezier(.2,.85,.25,1)}
+@keyframes vt-engenie-in{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.vt-scope .vt-ai-panel:not([hidden]){animation:none}}
+@media(max-width:620px){.vt-scope #vt-ai-panel{left:12px;right:12px;top:70px;bottom:12px;width:auto;max-width:none}.vt-scope .vt-ai-head{gap:7px;padding:13px}.vt-scope .vt-ai-head small{font-size:9px}}
 @media(max-height:740px){.vt-ai-panel{top:65px;bottom:30px}.vt-ai-head{padding:9px 12px}.vt-ai-context{padding:6px 12px}.vt-ai-suggestions{padding:7px 12px}.vt-ai-form{padding:7px 12px}.vt-ai-foot{padding-bottom:7px}}

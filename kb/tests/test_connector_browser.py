@@ -46,7 +46,8 @@ class BrowserPlanTests(SimpleTestCase):
         payload=build_batch(spec,data);self.assertEqual(payload['items'][0]['fields']['Duration'],'')
         job=SimpleNamespace(api_url=spec['url'],prompt=spec['url'],header_env={})
         preview=sample_preview(job,spec,data);self.assertNotIn('warning',preview)
-        duration=preview['field_coverage'][-1];self.assertEqual(duration['not_applicable'],1);self.assertEqual(duration['total'],0)
+        duration=next(field for field in preview['field_coverage'] if field['label']=='Duration')
+        self.assertEqual(duration['not_applicable'],1);self.assertEqual(duration['total'],0)
         data['records'][0]['state']='Open'
         with self.assertRaisesMessage(ValueError,'start'):build_batch(spec,data)
 

@@ -4,17 +4,23 @@
   const messages = document.getElementById('connectorMessages'), welcome = document.getElementById('connectorWelcome');
   const composer = document.getElementById('composerForm');
   const prompt = document.getElementById('connectorPrompt'), send = document.getElementById('connectorSend'), hint = document.getElementById('connectorHint');
-  // 内网开关只在后端已经认出全局管理员时才会渲染；普通用户看不到，也不能自己改。static 代码不能当安全边界。
-  const privatePanel = document.getElementById('connectorPrivatePanel');
-  const privateAccess = document.getElementById('connectorPrivate');
-  const PRIVATE_HOST = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|localhost|0\.0\.0\.0|::1)/i;
-  const mentionsPrivate = (text) => [...text.matchAll(/https?:\/\/([^\/:?#\s]+)/gi)].some(match => PRIVATE_HOST.test(match[1]));
+  // 内网/本机地址默认开放（规则在 collector_api），页面上不再有开关。static 代码不能当安全边界。
   const newTask = document.getElementById('connectorNew');
   const clearContext = document.getElementById('connectorClearContext');
   let thread = [], timer = null, generation = 0, submitting=false, stopping=false, confirming=false, clearing=false;
   const detailStates=new Map();
   const writeModes=new Map();
+  const fieldSelections=new Map();
+  const availableFields=job=>[...new Set([...(job.spec.body_fields||[]).map(field=>field.label),'采集日期'])];
+  const selectedFields=job=>fieldSelections.get(job.id)||new Set(availableFields(job));
   messages.addEventListener('change',event=>{if(event.target.matches('[data-cx-write-mode]'))writeModes.set(event.target.dataset.cxWriteMode,event.target.value);});
+  messages.addEventListener('change',event=>{
+    const input=event.target;if(!input.matches('[data-cx-field]'))return;
+    const job=thread.find(turn=>turn.id===input.dataset.cxField);if(!job||job.status!=='ready')return;
+    const selected=new Set(selectedFields(job));
+    if(input.checked)selected.add(input.value);else selected.delete(input.value);
+    selected.add('采集日期');fieldSelections.set(job.id,selected);render();
+  });
   const completedTools=new Set();
   messages.addEventListener('animationend',event=>{if(event.animationName==='cx-tool-complete')event.target.closest('.cx-tool')?.classList.remove('is-fresh');});
   messages.addEventListener('toggle',event=>{const details=event.target;if(details.matches?.('details[data-detail-key]')&&details.isConnected)detailStates.set(details.dataset.detailKey,details.open);},true);
@@ -87,7 +93,7 @@
         : run?.status === 'failed' ? '已启用，但首次入库失败：' + (run.error || '') + ' 可在数据源页面重试。' : '已启用自动更新。'));
       if(run?.counts?.warnings)card.append(el('p','cx-badge is-warning',`${run.counts.warnings} 条记录已保留原文，请在追踪表查看采集提示。`));
       const actions = el('div', 'cx-actions');
-      const again=el('button','btn primary','继续与 AI 修改脚本');again.type='button';again.dataset.cxContinue=job.id;actions.append(again);
+      const again=el('button','btn primary','继续与 EnGenie 调整任务');again.type='button';again.dataset.cxContinue=job.id;actions.append(again);
       const link = el('a', 'btn outline', '查看数据源'); link.href = '/kb/feeds/'; actions.append(link); card.append(actions);
       if(job.tracker_url){const table=el('a','btn outline','打开追踪表');table.href=job.tracker_url;actions.prepend(table);}
       card.append(el('p','cx-note','此任务的对话与 AI 上下文会保留。以后可从「自动更新」页面继续修改；新方案经你确认后才替换当前脚本。'));
@@ -101,6 +107,16 @@
     const selectedMode=writeModes.get(job.id)||job.spec.write_mode||'append';
     for(const [value,label] of [['append','追加新记录，保留全部历史（推荐）'],['upsert','按相同 ID 覆盖当前记录']]){const option=el('option',null,label);option.value=value;if(value===selectedMode)option.setAttribute('selected','');modeSelect.append(option);}
     modeSelect.disabled=job.status!=='ready';modeField.append(modeLabel,modeSelect,el('small',null,'AI 已按需求选择，可直接调整。每次采集自动记录时间和来源 ID；切换方式保留已有历史。'));card.append(modeField);
+    const selection=el('fieldset','cx-field-selection');selection.dataset.nodeKey='field-selection';
+    selection.append(el('legend',null,'选择要保留的字段'),el('p','cx-note','默认全部保留，可多选。采集日期按任务时区自动生成，始终保留；名称、来源 ID 等系统信息仍会保留。'));
+    const choices=el('div','cx-field-choices'),selected=selectedFields(job);
+    for(const label of availableFields(job)){
+      const choice=el('label','cx-field-choice'),input=el('input');input.type='checkbox';input.value=label;input.dataset.cxField=job.id;
+      if(selected.has(label))input.setAttribute('checked','');
+      input.disabled=job.status!=='ready'||label==='采集日期';
+      choice.append(input,el('span',null,label+(label==='采集日期'?' · 必留':'')));choices.append(choice);
+    }
+    selection.append(choices);card.append(selection);
     const coverage = el('div', 'cx-coverage');
     for (const field of job.preview.field_coverage || []) {
       const badge = el('span', 'cx-badge' + (field.present === field.total ? ' is-complete' : ' is-warning'),
@@ -111,7 +127,7 @@
     card.append(coverage);
     for (const item of job.preview.preview || []) {
       const sample = el('div', 'cx-sample'); sample.append(el('h4', null, item.title));
-      if(item.fields&&Object.keys(item.fields).length){const table=el('table'),body=el('tbody');for(const [label,value] of Object.entries(item.fields)){const row=el('tr');const unit=(job.spec.body_fields||[]).find(field=>field.label===label)?.unit;row.append(el('th',null,label),el('td',null,String(value)+(unit?' '+unit:'')));body.append(row);}table.append(body);sample.append(table);}
+      if(item.fields&&Object.keys(item.fields).length){const table=el('table'),body=el('tbody');for(const [label,value] of Object.entries(item.fields)){if(availableFields(job).includes(label)&&!selected.has(label))continue;const row=el('tr');const unit=(job.spec.body_fields||[]).find(field=>field.label===label)?.unit;row.append(el('th',null,label),el('td',null,String(value)+(unit?' '+unit:'')));body.append(row);}table.append(body);sample.append(table);}
       else{const body = el('div'); body.innerHTML = md(item.content); sample.append(body);}card.append(sample);
     }
     const config = el('details');config.dataset.detailKey=job.id+':config';config.open=detailStates.get(config.dataset.detailKey)??false;config.append(el('summary', null, '采集字段与更新计划'));
@@ -136,7 +152,7 @@
     const bot = el('div', 'cx-msg-bot'); bot.dataset.status = job.status;
     const head = el('div', 'cx-turn-head');head.dataset.nodeKey='head';
     const avatar=el('span','cx-avatar');avatar.setAttribute('aria-hidden','true');avatar.append(document.getElementById('connectorAvatarTemplate').content.cloneNode(true));if(job.status==='running')avatar.classList.add('is-live');
-    head.append(avatar, el('span', 'cx-turn-status', STATUS[job.status] || job.status));
+    head.append(avatar, el('span', 'cx-turn-name', 'EnGenie'), el('span', 'cx-turn-status', STATUS[job.status] || job.status));
     bot.append(head);
     const metrics=job.metrics||{};
     if(metrics.context_resumed){const note=el('div','cx-meta',metrics.context_source==='saved'?'已恢复保存的上下文':'已接续上下文与浏览器');note.dataset.nodeKey='context';bot.append(note);}
@@ -192,19 +208,14 @@
     const nearBottom=messages.scrollHeight-messages.scrollTop-messages.clientHeight<90,scroll=messages.scrollTop;
     for(const detail of messages.querySelectorAll('details[data-detail-key]'))detailStates.set(detail.dataset.detailKey,detail.open);
     if (!thread.length) { messages.replaceChildren(welcome); welcome.querySelectorAll('.cx-prompt').forEach(b => { b.hidden = false; }); return; }
-    const nodes=thread.map((job,index)=>{const signature=JSON.stringify([job.status,job.event_cursor,job.first_run,job.error,job.metrics]);const previous=[...messages.children].find(node=>node.dataset.jobId===job.id);if(previous?.dataset.signature===signature)return previous;const node=turn(job,index);node.dataset.signature=signature;return node;});
+    const nodes=thread.map((job,index)=>{const signature=JSON.stringify([job.status,job.event_cursor,job.first_run,job.error,job.metrics,[...selectedFields(job)]]);const previous=[...messages.children].find(node=>node.dataset.jobId===job.id);if(previous?.dataset.signature===signature)return previous;const node=turn(job,index);node.dataset.signature=signature;return node;});
     const old=[...messages.children];
     nodes.forEach((node,index)=>{const previous=old.find(item=>item.dataset.jobId===node.dataset.jobId);if(previous&&previous!==node)patchNode(previous,node);const current=previous||node;if(messages.children[index]!==current)messages.insertBefore(current,messages.children[index]||null);});
     for(const node of old)if(!thread.some(job=>job.id===node.dataset.jobId))node.remove();
     messages.scrollTop=nearBottom?messages.scrollHeight:scroll;
   }
-  function syncPrivate(job) {
-    if (!privateAccess) return;
-    if (job && typeof job.allow_private === 'boolean') privateAccess.checked = job.allow_private;
-  }
   function syncComposer(job) {
     const running = job?.status === 'running';
-    if (privateAccess) privateAccess.disabled = running || submitting || confirming || clearing;
     send.disabled=submitting||stopping||confirming||clearing;prompt.disabled=running||submitting||confirming||clearing;newTask.disabled=running||submitting||stopping||confirming||clearing;
     clearContext.hidden=!page.dataset.feedId&&!thread.some(turn=>turn.feed_id);
     clearContext.disabled=running||job?.status==='enabling'||submitting||stopping||confirming||clearing;
@@ -213,19 +224,19 @@
     const label=stopping?'正在停止…':confirming?'正在确认…':submitting?'正在发送…':running?'停止任务':'发送';send.setAttribute('aria-label',label);send.title=label;send.querySelector('.cx-sr-only').textContent=label;send.setAttribute('aria-busy',String(submitting||stopping||confirming));
     prompt.maxLength=job?4000:10000;
     prompt.placeholder = running ? '任务执行中，点击右侧停止按钮可中止'
-      : job?.status === 'needs_info' ? '回答上面 AI 的问题，Enter 发送…'
+      : job?.status === 'needs_info' ? '回答上面 EnGenie 的问题，Enter 发送…'
       : job?.status === 'ready' ? '想调整哪里？直接说，例如：标题改用设备名；加一个持续时长字段…'
-      : job?.status === 'enabled' ? '继续描述修改要求，AI 将编辑当前脚本…'
-      : '描述要采集的数据，例如：打开某网页，采集名称与开放时间，每天8点更新…';
-    hint.textContent = job?.status === 'needs_info' ? '你的回答会连同原始需求一起交给 AI 继续生成。'
+      : job?.status === 'enabled' ? '告诉 EnGenie 想怎样调整这个任务…'
+      : '告诉 EnGenie 数据在哪、要采集什么、多久更新一次…';
+    hint.textContent = job?.status === 'needs_info' ? '你的回答会连同原始需求一起交给 EnGenie，继续完善任务。'
       : job?.status === 'ready' ? '确认无误后点击样例卡片中的「确认数据并开始自动更新」。'
       : job?.status === 'enabled' ? '可继续修改当前脚本；新版本验证并经你确认后更新原数据源，不重复创建知识库。'
-      : '任务由真实浏览器与工具执行；预览确认后才会入库并启动定时更新。';
+      : '先查看样例，再确认启用 · Enter 发送，Shift+Enter 换行';
   }
   function activate(jobs) {
     for(const job of jobs||[])for(const event of job.events||[])if(event.kind==='tool_end')completedTools.add(job.id+':'+(event.turn||0)+':'+event.call_id);
     thread = (jobs||[]).map(mergeJob); generation++; clearTimeout(timer); render();
-    const last = jobs.at(-1); syncPrivate(last); syncComposer(last);
+    const last = jobs.at(-1); syncComposer(last);
     if(last)poll(thread.at(-1),generation);
   }
   async function poll(job, gen) {
@@ -250,18 +261,11 @@
       const last = thread.at(-1);
       if (last && !['ready', 'needs_info', 'failed', 'cancelled','enabled'].includes(last.status)) throw new Error('当前任务尚未结束，请稍候或先停止。');
       const data = last ? { feedback: text } : { prompt: text };
-      if (mentionsPrivate(text) && !(privateAccess ? privateAccess.checked : last?.allow_private)) {
-        if (privatePanel) privatePanel.open = true;
-        throw new Error(privateAccess
-          ? '你给出的地址是内网或本机地址。请先勾选输入框上方的「允许访问内网或本机 API」，再重新发送。'
-          : '内网或本机 API 需由全局管理员开启「允许访问内网或本机 API」；当前账号没有该开关，请改用公开地址或请管理员新建。');
-      }
-      if (privateAccess) data.allow_private = privateAccess.checked;
       const response = await request(last ? last.refine_url : page.dataset.createUrl, data);
       if(submittedGeneration!==generation)return;
       if(last&&last.status!=='enabled')last.status='revised';
       prompt.value = ''; prompt.style.height = 'auto';
-      thread.push(mergeJob(response.job)); generation++; clearTimeout(timer); render(); syncPrivate(response.job); syncComposer(response.job);
+      thread.push(mergeJob(response.job)); generation++; clearTimeout(timer); render(); syncComposer(response.job);
       poll(response.job, generation);
     } catch (error) { hint.textContent = error.message; } finally { submitting=false;syncComposer(thread.at(-1)); }
   });
@@ -269,13 +273,13 @@
   prompt.addEventListener('input', () => { prompt.style.height = 'auto'; prompt.style.height = Math.min(prompt.scrollHeight, 160) + 'px'; });
   messages.addEventListener('click', async event => {
     const again=event.target.closest('[data-cx-continue]');
-    if(again){prompt.focus();prompt.placeholder='告诉 AI 想修改哪些字段、采集方式或更新时间…';return;}
+    if(again){prompt.focus();prompt.placeholder='告诉 EnGenie 想调整哪些字段、采集方式或更新时间…';return;}
     const enable = event.target.closest('[data-cx-enable]'); if (!enable) return;
     const job = thread.at(-1); if (!job||enable.dataset.cxEnable!==job.id) return;
     if(confirming)return;
     const confirmedGeneration=generation;confirming=true;clearTimeout(timer);enable.disabled=true;enable.textContent='正在确认…';syncComposer(job);
     try {
-      await request(job.enable_url, {write_mode:writeModes.get(job.id)||job.spec.write_mode||'append'});
+      await request(job.enable_url, {write_mode:writeModes.get(job.id)||job.spec.write_mode||'append',selected_fields:[...selectedFields(job)]});
       if(confirmedGeneration===generation)await poll(job,confirmedGeneration);
     } catch (error) { hint.textContent = error.message; enable.disabled = false;enable.textContent='重新确认'; }
     finally{confirming=false;syncComposer(thread.at(-1));}
@@ -295,7 +299,7 @@
   }
   newTask.addEventListener('click',async()=>{
     if(newTask.disabled)return;newTask.disabled=true;
-    try{const response=await forget();if(response&&!response.ok)throw new Error('临时记录清理失败，请稍后重试。');generation++;clearTimeout(timer);thread=[];eventCache.clear();detailStates.clear();completedTools.clear();writeModes.clear();page.dataset.feedId='';prompt.value='';if(privateAccess)privateAccess.checked=false;const url=new URL(location.href);url.searchParams.delete('feed');history.replaceState(null,'',url);page.querySelector('.cx-heading h1').textContent='AI 采集助手';page.querySelector('.cx-heading p').textContent='描述网页或接口 → 查看真实样例 → 对话调整 → 确认后自动更新到追踪表';render();syncComposer(null);prompt.focus();}
+    try{const response=await forget();if(response&&!response.ok)throw new Error('临时记录清理失败，请稍后重试。');generation++;clearTimeout(timer);thread=[];eventCache.clear();detailStates.clear();completedTools.clear();writeModes.clear();page.dataset.feedId='';prompt.value='';const url=new URL(location.href);url.searchParams.delete('feed');history.replaceState(null,'',url);page.querySelector('.cx-heading h1').textContent='EnGenie · 自动任务';page.querySelector('.cx-heading p').textContent='告诉我数据在哪，剩下的我们一起完成。';render();syncComposer(null);prompt.focus();}
     catch(error){hint.textContent=error.message;newTask.disabled=false;}
   });
   clearContext.addEventListener('click',async()=>{

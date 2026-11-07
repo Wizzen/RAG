@@ -22,14 +22,14 @@
  function render(){
   const opened=new Set([...list.querySelectorAll('.feed-card')].filter(card=>card.querySelector('details')?.open).map(card=>card.dataset.feedId));
   list.replaceChildren();
-  if(!feeds.length){list.append(node('p','暂无数据源。创建一个自动更新知识库，或将数据源加入已有资料集合。','feed-empty'));return;}
+  if(!feeds.length){list.append(node('p','暂无自动任务。点击「用 EnGenie 创建自动任务」，提供网页或 API 地址即可开始。','feed-empty'));return;}
   for(const feed of feeds){
    const card=node('section',undefined,'feed-card');card.dataset.feedId=feed.id;
    card.append(node('h2',feed.name));const link=node('a',feed.kb_name);link.href='/kb/manage/'+encodeURIComponent(feed.kb)+'/';card.append(link);
    card.append(node('p',(feed.mode==='pull'?'定时采集 · '+feed.cron+' · '+feed.timezone:'外部脚本推送')+' · '+(feed.enabled?'已启用':'已暂停')+' · '+(feed.write_mode==='upsert'?'覆盖相同 ID':'追加保留历史')+' · '+feed.items+' 条记录','feed-meta'));
    if(feed.mode==='pull')card.append(node('p','下次运行：'+date(feed.next_run_at,feed.timezone),'feed-meta'));
    const actions=node('div',undefined,'feed-actions');
-   if(feed.ai_edit_url){const ai=node('a','与 AI 对话修改脚本','btn sm primary');ai.href=feed.ai_edit_url;actions.append(ai);}
+   if(feed.ai_edit_url){const ai=node('a','与 EnGenie 调整任务','btn sm primary');ai.href=feed.ai_edit_url;actions.append(ai);}
    if(feed.mode==='pull')actions.append(button('立即更新','run',feed.id));else actions.append(button('生成／轮换推送令牌','rotate_token',feed.id));
    actions.append(button('编辑配置','edit',feed.id),button(feed.enabled?'暂停后续更新':'启用更新',feed.enabled?'pause':'resume',feed.id));
    const tracker=node('a','查看追踪表','btn sm outline');tracker.href='/kb/manage/'+encodeURIComponent(feed.kb)+'/tracker/';actions.append(tracker);card.append(actions);
@@ -46,7 +46,7 @@
   try{
    const data=await request(page.dataset.stateUrl+(filter.value?'?kb='+encodeURIComponent(filter.value):''));if(disposed||ticket!==sequence)return;
    feeds=data.feeds;const next=JSON.stringify(feeds);if(next!==fingerprint){fingerprint=next;render();}
-   document.getElementById('feedScheduler').textContent=data.scheduler_recent?'调度器最近已扫描；启用的 API 数据源将按计划运行。':'调度器最近未扫描。手动更新仍可用；请按接入包说明启动调度器或配置系统 cron。';
+   document.getElementById('feedScheduler').textContent=data.scheduler_recent?'调度服务运行正常，已启用的数据源将按计划更新。':'调度服务最近未响应，请联系管理员检查。现有数据仍可查看，也可手动更新。';
    if(data.truncated)message.textContent='当前仅显示最近100个数据源，请按资料集合筛选。';
   }catch(exc){if(!disposed&&ticket===sequence)message.textContent=exc.message;}
   finally{if(!disposed&&!document.hidden&&ticket===sequence)timer=setTimeout(refresh,feeds.some(feed=>feed.runs[0]?.status==='running')?2000:15000);}
@@ -61,7 +61,7 @@
   form.reset();error.textContent='';form.elements.id.value=feed?.id||'';
   auth.load(feed?.authentication);
   document.getElementById('feedUrlLabel').textContent=feed?.source_type==='browser'?'网页来源地址':'标准数据 API 地址';
-  document.getElementById('feedSourceHint').textContent=feed?.source_type==='browser'?'此来源使用 AI 已验证的网页采集步骤，定时任务会重放浏览器操作。改变页面结构或采集字段时请重新生成并预览。':'API 返回 fos-rag-feed/v1 JSON。网页或其他接口格式可通过 AI 采集页面生成采集脚本。';
+  document.getElementById('feedSourceHint').textContent=feed?.source_type==='browser'?'此来源使用 EnGenie 已试采的网页操作步骤。要调整采集内容，请与 EnGenie 对话并查看新样例。':'API 返回 fos-rag-feed/v1 JSON。网页或其他接口格式可通过 EnGenie 创建自动采集任务。';
   document.getElementById('feedEditorTitle').textContent=feed?'编辑数据源':'新建自动更新知识库';
   document.getElementById('feedLibraryFields').hidden=!!feed;
   if(feed){for(const key of ['name','mode','url','cron','timezone','write_mode'])form.elements[key].value=feed[key];if(form.elements.header_env)form.elements.header_env.value=JSON.stringify(feed.header_env,null,2);if(form.elements.allow_private)form.elements.allow_private.checked=feed.allow_private;}
@@ -69,7 +69,7 @@
   fields();editor.showModal();form.elements.name.focus();
  }
  form.elements.kb.addEventListener('change',fields);form.elements.mode.addEventListener('change',fields);
- document.getElementById('feedCreate').addEventListener('click',()=>edit());filter.addEventListener('change',refresh);
+ filter.addEventListener('change',refresh);
  document.addEventListener('click',e=>{const close=e.target.closest('[data-close]');if(close){const dialog=document.getElementById(close.dataset.close);dialog.close();if(dialog.id==='feedToken')document.getElementById('feedTokenValue').value='';}});
  form.addEventListener('submit',async event=>{
   event.preventDefault();const save=document.getElementById('feedSave');save.disabled=true;error.textContent='';

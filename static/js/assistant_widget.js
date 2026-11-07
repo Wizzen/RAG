@@ -5,16 +5,17 @@
  const badge=document.getElementById('ragChatBadge'),live=document.getElementById('ragChatLive'),key='rag-assistant-ui-'+root.dataset.user;
  let saved={};try{saved=JSON.parse(sessionStorage.getItem(key)||'{}')||{};}catch(_){}
  let opened=false,expanded=saved.expanded===true,busy=saved.busy===true,unread=saved.unread===true,frame=null,ready=false,pendingThread='',pendingNew=false,evidencePromise=null,pollTimer;
+ let panelMotion=null,motionVersion=0;
  const mobile=()=>matchMedia('(max-width:620px)').matches,modal=()=>expanded||mobile();
  function store(){try{sessionStorage.setItem(key,JSON.stringify({open:opened,expanded,busy,unread}));}catch(_){}}
  function tell(data){if(frame&&ready)frame.contentWindow.postMessage(data,location.origin);}
- function signal(){launcher.classList.toggle('is-busy',busy);badge.hidden=!unread;launcher.setAttribute('aria-label',busy?'知识库助手正在回答，点击打开':unread?'知识库助手有新回答，点击打开':'打开知识库 AI 助手');store();}
+ function signal(){launcher.classList.toggle('is-busy',busy);badge.hidden=!unread;launcher.setAttribute('aria-label',busy?'EnGenie 正在回答，点击打开':unread?'EnGenie 有新回答，点击打开':'打开 EnGenie 工程助手');document.getElementById('ragChatLauncherStatus').textContent=busy?'正在回答…':unread?'有一条新回答':'随时提问';store();}
  function theme(){tell({type:'rag-chat:theme',theme:document.documentElement.dataset.theme||'light'});}
  function viewport(){const view=window.visualViewport;root.style.setProperty('--rag-chat-viewport-height',(view?.height||innerHeight)+'px');root.style.setProperty('--rag-chat-viewport-top',(view?.offsetTop||0)+'px');}
  function layout(){panel.classList.toggle('is-expanded',expanded);panel.setAttribute('aria-modal',String(opened&&modal()));expand.setAttribute('aria-pressed',String(expanded));expand.setAttribute('aria-label',expanded?'恢复紧凑聊天面板':'展开聊天面板');expand.title=expand.getAttribute('aria-label');backdrop.hidden=!opened||!modal();document.body.classList.toggle('rag-chat-modal-open',opened&&modal());tell({type:'rag-chat:mode',modal:modal()});viewport();store();}
  function ensureFrame(){
   if(frame)return;
-  frame=document.createElement('iframe');frame.title='知识库 AI 对话';frame.id='ragChatFrame';frame.setAttribute('allow','clipboard-write');
+  frame=document.createElement('iframe');frame.title='EnGenie 工程助手对话';frame.id='ragChatFrame';frame.setAttribute('allow','clipboard-write');
   const url=new URL(root.dataset.chatUrl,location.origin);url.searchParams.set('embed','1');if(pendingThread){url.searchParams.set('conv',pendingThread);pendingThread='';}
   frame.src=url.href;body.append(frame);
   frame.addEventListener('load',()=>{
@@ -22,9 +23,28 @@
    loading.hidden=true;
   });
  }
+ function revealPanel(value){
+  const version=++motionVersion,visible=!panel.hidden;
+  const current=visible?{opacity:getComputedStyle(panel).opacity,transform:getComputedStyle(panel).transform}:null;
+  panelMotion?.cancel();panelMotion=null;
+  panel.hidden=false;panel.inert=!value;panel.setAttribute('aria-hidden',String(!value));
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches||typeof panel.animate!=='function'){
+   panel.hidden=!value;return;
+  }
+  const rest={opacity:1,transform:'none'},fold={opacity:0,transform:'translateY(18px) scale(.965)'};
+  const motion=panel.animate([current||(value?fold:rest),value?rest:fold],
+   {duration:value?320:180,easing:value?'cubic-bezier(.2,.85,.25,1)':'cubic-bezier(.4,0,1,1)',fill:'both'});
+  panelMotion=motion;
+  motion.finished.then(()=>{
+   if(version!==motionVersion)return;
+   panel.hidden=!opened;panelMotion=null;motion.cancel();
+  }).catch(()=>{});
+ }
  function setOpen(value,thread=''){
   if(thread)pendingThread=thread;
-  opened=value;panel.hidden=!value;launcher.hidden=value;launcher.setAttribute('aria-expanded',String(value));
+  const changed=value!==opened;opened=value;
+  if(changed)revealPanel(value);
+  launcher.hidden=value;launcher.setAttribute('aria-expanded',String(value));
   if(value){unread=false;ensureFrame();if(ready&&pendingThread){tell({type:'rag-chat:thread',thread:pendingThread});pendingThread='';}if(mobile())close.focus();else tell({type:'rag-chat:focus'});}
   else launcher.focus();layout();signal();
  }
@@ -39,7 +59,7 @@
   if(data.type==='rag-chat:ready'){
    ready=true;loading.hidden=true;theme();layout();if(pendingNew){tell({type:'rag-chat:new'});pendingNew=false;}if(pendingThread){tell({type:'rag-chat:thread',thread:pendingThread});pendingThread='';}if(opened&&!mobile())tell({type:'rag-chat:focus'});
   }else if(data.type==='rag-chat:state'){
-   if(typeof data.busy!=='boolean')return;const was=busy;busy=data.busy;if(was&&!busy&&!opened){unread=true;live.textContent='知识库助手已完成回答';}signal();
+   if(typeof data.busy!=='boolean')return;const was=busy;busy=data.busy;if(was&&!busy&&!opened){unread=true;live.textContent='EnGenie 已完成回答';}signal();
   }else if(data.type==='rag-chat:close')setOpen(false);
   else if(data.type==='rag-chat:evidence')openEvidence(data);
   else if(data.type==='rag-chat:focus-header'&&opened&&modal()){

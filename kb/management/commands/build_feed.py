@@ -4,7 +4,7 @@ from __future__ import annotations
 
     # 默认最多等 15 分钟，实时打印工具活动，结束后给出真实样例与候选脚本
     python manage.py build_feed "每天13点拉 http://host/api/v1/lightboard/board/ 每车里程" \
-        --url http://host/api/v1/lightboard/board/ --token-env LIGHTBOARD_TOKEN --private
+        --url http://host/api/v1/lightboard/board/ --token-env LIGHTBOARD_TOKEN
 
     # 等生成结束并批准入库、启动 cron
     python manage.py build_feed "……" --token-env LIGHTBOARD_TOKEN --wait 900 --approve
@@ -40,7 +40,8 @@ class Command(BaseCommand):
         parser.add_argument("--token-env", default="", help="存放 Bearer Token 的环境变量名")
         parser.add_argument("--header-env", default="", help='服务器环境变量引用，JSON 形式如 {"Authorization":"FOS_FEED_X"}（仅全局管理员）')
         parser.add_argument("--kb", default="", help="归入已有知识库 slug；留空则由模型建议、批准时新建")
-        parser.add_argument("--private", action="store_true", help="允许内网/本机地址（仅全局管理员）")
+        parser.add_argument("--no-private", action="store_false", dest="private", default=True,
+                            help="关闭内网/本机地址访问（默认开放，仅影响本次任务）")
         parser.add_argument("--wait", type=int, default=900,
                             help="等待生成结束的秒数（生成在本进程里跑；设 0 会随命令退出而中断，不推荐）")
         parser.add_argument("--approve", action="store_true", help="批准样例并建立定时数据源（会立即首跑）")
@@ -59,7 +60,7 @@ class Command(BaseCommand):
             job = collector_api.create_draft(
                 user=user, requirement=options["requirement"], api_url=options["url"],
                 authentication=self._auth(options), header_env=self._header_env(options),
-                allow_private=True if options["private"] else None, kb=self._kb(user, options["kb"]),
+                allow_private=options["private"], kb=self._kb(user, options["kb"]),
                 created_via="cli")
             if not options["as_json"]:
                 self.stdout.write(self.style.SUCCESS(f"已启动生成任务 {job.pk}（通常需要几分钟）"))
@@ -74,10 +75,15 @@ class Command(BaseCommand):
                 raise CommandError(f"任务当前是 {job.status}，只有样例校验通过（ready）才能批准。"
                                    + (f" 待补充：{job.questions}" if job.questions else ""))
             feed = collector_api.approve(user=user, job=job, write_mode=options["write_mode"] or None,
-                                         run_now=not options["no_first_run"])
+                                         run_now=not options["no_first_run"], first_run_async=False)
             job.refresh_from_db()
             if not options["as_json"]:
                 self.stdout.write(self.style.SUCCESS(f"已启用定时数据源 {feed.pk}｜{feed.name}｜cron={feed.cron} {feed.timezone}"))
+            if not options['no_first_run']:
+                first_run = feed.runs.order_by('-started_at').first()
+                if first_run and first_run.status != 'completed':
+                    self.report(job, as_json=options['as_json'])
+                    raise CommandError('定时任务已启用，但首次入库未完成：' + (first_run.error or first_run.status))
         self.report(job, as_json=options["as_json"])
         if job.status in TERMINAL_FAIL:
             raise SystemExit(1)

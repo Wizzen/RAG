@@ -208,6 +208,26 @@ class ChunkProvenance(models.Model):
         return f"第 {self.page_start + 1} 页"
 
 
+class KnowledgeBaseLink(models.Model):
+    """顶层知识库之间的无向关联；关系说明仅供选库，不视为业务事实证据。"""
+
+    left = models.ForeignKey(KnowledgeBase, on_delete=models.CASCADE, related_name='links_as_left')
+    right = models.ForeignKey(KnowledgeBase, on_delete=models.CASCADE, related_name='links_as_right')
+    summary = models.CharField('关系说明', max_length=1000, blank=True, default='')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['pk']
+        constraints = [
+            models.UniqueConstraint(fields=['left', 'right'], name='unique_kb_link_pair'),
+            models.CheckConstraint(condition=models.Q(left__lt=models.F('right')), name='ordered_distinct_kb_link'),
+        ]
+        verbose_name = '知识库关联'
+        verbose_name_plural = '知识库关联'
+
+
 class KbTracker(models.Model):
     """知识库追踪表配置（一库一表）：文档入库完成后由 AI 按字段抽取关键信息登记。
 
@@ -451,8 +471,7 @@ class ConfigPreset(models.Model):
 class Conversation(models.Model):
     """一次问答会话（多轮上下文）。
 
-    thread_id 同时是 langgraph checkpointer 的 thread_id，
-    选中同一 thread_id 即接续同一会话的上下文（持久化于 checkpoints.sqlite3）。
+    thread_id 标识会话；agent_context 保存最近完成的完整模型消息和工具上下文。
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -463,6 +482,8 @@ class Conversation(models.Model):
     title = models.CharField("标题", max_length=120, default="新对话")
     thread_id = models.CharField("会话线程", max_length=80, unique=True)
     last_read_answer_id = models.PositiveBigIntegerField(default=0)
+    relationship_origin = models.UUIDField('关联检索起点', null=True, blank=True, editable=False)
+    agent_context = models.JSONField("模型会话上下文", default=dict, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -477,7 +498,7 @@ class Conversation(models.Model):
 
 class Message(models.Model):
     """会话内的一条消息（用户/助手），用于 UI 渲染历史。
-    仅已完成回复保存为 AI 消息；下轮从此处取有界历史，不重放旧工具状态。
+    完成的模型消息和工具结果保存在 Conversation.agent_context；这里保留界面消息。
     """
 
     class Role(models.TextChoices):

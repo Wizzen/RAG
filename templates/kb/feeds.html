@@ -1,17 +1,15 @@
 {% extends "kb/_base.html" %}{% load static %}
-{% block title %}自动更新知识库 · SHDR RAG{% endblock %}
+{% block title %}自主数据引擎 · SHDR RAG{% endblock %}
 {% block content %}
 <div id="feedPage" data-state-url="{% url 'kb:feed_state' %}" data-action-url="{% url 'kb:feed_action' %}" data-global="{{ is_global_admin|yesno:'true,false' }}">
   <header class="page-head">
     <div class="page-head-main">
       <a class="page-back" href="{% url 'kb:manage_list' %}">资料上传中心</a>
-      <h1>自动更新知识库</h1>
-      <p class="page-desc">定时采集网页或 API，数据归入业务数据。默认追加保留每次采集记录，也可按 ID 覆盖更新。</p>
+      <h1>自主数据引擎</h1>
+      <p class="page-desc">告诉 EnGenie 数据来源和更新时间，先查看采集样例，确认后自动更新到知识库。</p>
     </div>
     <div class="page-actions">
-      <a class="btn outline" href="{% url 'kb:feed_kit' %}" download>下载接入标准与示例</a>
-      <a class="btn outline" href="{% url 'kb:connector_builder' %}">让 AI 采集网页或 API</a>
-      <button type="button" class="btn primary" id="feedCreate">＋ 新建自动更新知识库</button>
+      <a class="btn primary" href="{% url 'kb:connector_builder' %}">用 EnGenie 创建自动任务</a>
     </div>
   </header>
   <div class="feed-toolbar">
@@ -32,7 +30,7 @@
   <div class="field"><label for="feedWriteMode">数据写入方式</label><select id="feedWriteMode" name="write_mode"><option value="append">追加新记录，保留全部历史（推荐）</option><option value="upsert">按相同 ID 覆盖当前记录</option></select><small>追加适合运营时间、价格、指标及同比分析，每次采集都保留快照；切换方式不会清除已有历史。</small></div>
   <div class="feed-pull-fields">
     <div class="field"><label id="feedUrlLabel">标准数据 API 地址</label><input name="url" type="url" placeholder="https://example.com/reports/feed"></div>
-    <p class="dialog-hint" id="feedSourceHint">API 返回 fos-rag-feed/v1 JSON。网页或其他接口格式可通过 AI 采集页面生成采集脚本。</p>
+    <p class="dialog-hint" id="feedSourceHint">API 返回 fos-rag-feed/v1 JSON。网页或其他接口格式可通过 EnGenie 创建自动采集任务。</p>
     <div class="field"><label>Cron（分 时 日 月 星期）</label><input name="cron" value="0 * * * *" maxlength="100"><small>每小时：0 * * * *　每天早上8点：0 8 * * *</small></div>
     <div class="field"><label>时区</label><input name="timezone" value="Asia/Shanghai" maxlength="100"></div>
     {% include "kb/_feed_auth_fields.html" %}
@@ -48,4 +46,4 @@
 <dialog class="fos-dialog feed-dialog" id="feedToken"><h2>脚本推送接入</h2><p>此令牌只显示一次；生成后旧令牌立即失效。</p><label>推送地址<input id="feedIngestUrl" readonly></label><label>Bearer 令牌<textarea id="feedTokenValue" readonly rows="2"></textarea></label><p>将令牌放入脚本运行环境，按接入包示例调用。暂停数据源或轮换令牌可停用旧接入。</p><button type="button" class="btn outline" data-close="feedToken">已保存，关闭</button></dialog>
 <link rel="stylesheet" href="{% static 'css/feeds.css' %}">
 {% endblock %}
-{% block scripts %}<script src="{% static 'js/feed_auth.js' %}?v=1" defer></script><script src="{% static 'js/feeds.js' %}?v=4" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'js/feed_auth.js' %}?v=1" defer></script><script src="{% static 'js/feeds.js' %}?v=5" defer></script>{% endblock %}

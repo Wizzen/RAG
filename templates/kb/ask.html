@@ -1,21 +1,27 @@
 {% extends "kb/_base.html" %}
 {% load static %}
-{% block title %}智能问答 · SHDR RAG{% endblock %}
+{% block title %}EnGenie · SHDR RAG{% endblock %}
 {% block content %}
+<link rel="stylesheet" href="{% static 'css/assistant_activity.css' %}?v=1">
 <style>
 @keyframes answerPulse { 0%,100% {opacity:1} 50% {opacity:.38} }
-.conv-item.is-generating .conv-title, .answer.thinking, .turn-progress {animation:answerPulse 1.6s ease-in-out infinite}
+.conv-item.is-generating .conv-title, .answer.thinking {animation:answerPulse 1.6s ease-in-out infinite}
 .conv-state {display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--brand);min-height:14px}
 .conv-unread-dot {display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--brand)}
-@media (prefers-reduced-motion:reduce) {.conv-item.is-generating .conv-title,.answer.thinking,.turn-progress {animation:none}}
+@media (prefers-reduced-motion:reduce) {.conv-item.is-generating .conv-title,.answer.thinking {animation:none}}
 </style>
 {{ pyodide_index_url|json_script:"pyodideIndexURL" }}
+<template id="engGenieAvatarTemplate">{% include 'kb/_assistant_avatar.html' %}</template>
 {% if chat_embedded %}
-<link rel="stylesheet" href="{% static 'css/assistant_embedded.css' %}?v=1">
+<link rel="stylesheet" href="{% static 'css/assistant_embedded.css' %}?v=20261107">
 <template id="ragChatWelcomeTemplate"><div class="rag-chat-welcome">
-  <div class="rag-chat-welcome-icon">{% include 'kb/_assistant_avatar.html' %}</div><h2>有什么可以帮你？</h2>
-  <p>查找知识与原文依据，梳理要求，分析追踪表数据。</p>
-  <div class="rag-chat-prompts"><button type="button" data-rag-prompt="帮我查找资料中的判断条件，并给出原文依据">查找要求与原文依据</button><button type="button" data-rag-prompt="帮我对比资料中不同等级的要求和参数">对比等级、条件与参数</button><button type="button" data-rag-prompt="帮我查看知识库中的追踪表，并分析其中的数据">分析追踪表数据</button></div>
+  <div class="rag-chat-welcome-icon">{% include 'kb/_assistant_avatar.html' %}</div><span class="rag-welcome-kicker">工程知识 · 有据可查</span><h2>你好，我是 EnGenie</h2>
+  <p>查找工程资料，理清参数与条件，<br>让每个答案都能回到原文。</p>
+  <div class="rag-chat-prompts">
+    <button type="button" data-rag-prompt="帮我查找资料中的判断条件，并给出原文依据"><span class="rag-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zm0 0v6h6M8 13h8M8 17h5"/></svg></span><span><strong>查找原文依据</strong><small>定位要求与判断条件</small></span><span class="rag-prompt-arrow" aria-hidden="true">↗</span></button>
+    <button type="button" data-rag-prompt="帮我对比资料中不同等级的要求和参数"><span class="rag-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7M15 7h5M4 17h3M11 17h9"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></span><span><strong>对比参数与等级</strong><small>理清取值、差异与适用范围</small></span><span class="rag-prompt-arrow" aria-hidden="true">↗</span></button>
+    <button type="button" data-rag-prompt="帮我查看知识库中的追踪表，并分析其中的数据"><span class="rag-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M7 16v-5M12 16V5M17 16V8"/></svg></span><span><strong>分析追踪表</strong><small>筛选历史、统计趋势与变化</small></span><span class="rag-prompt-arrow" aria-hidden="true">↗</span></button>
+  </div>
 </div></template>
 {% endif %}
 <div class="qa-layout">
@@ -45,13 +51,13 @@
         <button class="qa-hist" id="histBtn" type="button" aria-label="历史会话">
           <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
-        <span class="qa-title">智能问答 · 自动选库</span>
+        <span class="qa-title">EnGenie · 知识检索</span>
         <span id="convTitle" class="qa-conv"></span>
         <span id="sandboxStatus" class="sandbox-chip" title="代码分析沙箱状态">⬚ 沙箱准备中…</span>
       </div>
 
       <div id="messages">
-        <div class="msg ai"><div class="msg-who"><span class="who-ava"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="7.5" width="12" height="8.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="8" cy="11.6" r="1.1" fill="currentColor"/><circle cx="12" cy="11.6" r="1.1" fill="currentColor"/><path d="M10 7.5V5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="10" cy="3.9" r="1.2" fill="currentColor"/></svg></span><span class="who-name">助手</span></div><div class="bubble"><div class="answer">输入问题。</div></div></div>
+        <div class="msg ai"><div class="msg-who"><span class="who-ava">{% include 'kb/_assistant_avatar.html' %}</span><span class="who-name">EnGenie</span></div><div class="bubble"><div class="answer">向 EnGenie 提问，查找工程知识与原文依据。</div></div></div>
       </div>
 
       <div class="composer">
@@ -71,6 +77,7 @@
 <script src="{% static 'js/evidence_panel.js' %}"></script>
 <script src="{% static 'js/chat_input.js' %}"></script>
 <script src="{% static 'js/chat_stream.js' %}?v=20260921"></script>
+<script src="{% static 'js/assistant_activity.js' %}?v=1"></script>
 <script src="{% static 'js/chat_recovery.js' %}?v=20260921"></script>
 <script src="{% static 'js/conversation_badges.js' %}?v=1"></script>
 <script src="{% static 'js/vendor/jspdf.umd.min.js' %}" defer></script>
@@ -277,8 +284,8 @@ except ImportError:
 (function(){
   // AI 消息统一头部：助手头像 + 名称（Toonflow 式 agent 标识）
   const AI_WHO = '<div class="msg-who"><span class="who-ava">'
-    + '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="7.5" width="12" height="8.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="8" cy="11.6" r="1.1" fill="currentColor"/><circle cx="12" cy="11.6" r="1.1" fill="currentColor"/><path d="M10 7.5V5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="10" cy="3.9" r="1.2" fill="currentColor"/></svg>'
-    + '</span><span class="who-name">助手</span></div>';
+    + document.getElementById('engGenieAvatarTemplate').innerHTML
+    + '</span><span class="who-name">EnGenie</span></div>';
 
   const input = document.getElementById('input');
   const sendBtn = document.getElementById('sendBtn');
@@ -731,6 +738,7 @@ except ImportError:
     busy = true; sendBtn.disabled = true;
     FosAnswerRecovery.remember(recoveryKey, thread);
     document.querySelectorAll('.conv-item').forEach(el => el.classList.toggle('active', el.dataset.thread === thread));
+    let lastHistoryView = null;
     recovery = FosAnswerRecovery.watch(thread, {onUpdate(data) {
       if (revision !== historyRevision || thread !== currentThreadId) return;
       if (!document.querySelector('.conv-item[data-thread="'+thread+'"]')) addConvItem(thread, data.title || '会话', '');
@@ -739,6 +747,9 @@ except ImportError:
       stopBtn.hidden = !busy; stopBtn.style.display = busy ? '' : 'none';
         if (data.kb_slug) { /* no dropdown anymore; agent picks KB automatically */ }
         if (convTitleEl) convTitleEl.textContent = data.title || '';
+        const view = JSON.stringify([data.messages, data.active_answer?.stage, !!data.active_answer]);
+        if (view === lastHistoryView) return;
+        lastHistoryView = view;
         messages.innerHTML = '';
         (data.messages || []).forEach(m => {
           const div = document.createElement('div');
@@ -749,10 +760,12 @@ except ImportError:
           div.innerHTML = inner;
           messages.appendChild(div);
           if (m.role === 'ai' && ['queued','running'].includes(m.completion_status)) {
-            const status = document.createElement('div');
-            status.className = 'turn-progress';
-            status.textContent = (data.active_answer?.stage || '后台生成中') + '…';
-            div.querySelector('.bubble').appendChild(status);
+            const area = document.createElement('div');
+            area.className = 'tool-area';
+            div.querySelector('.bubble').prepend(area);
+            FosToolActivity.create(area).update('heartbeat', {
+              stage: data.active_answer?.stage || '后台生成中', elapsed: data.active_answer?.elapsed || 0,
+            });
           }
           if (m.role === 'ai' && m.completion_status === 'incomplete') {
             const note = document.createElement('div');
@@ -815,6 +828,12 @@ except ImportError:
     imgRow.className = 'cite-imgs';
     let shown = 0;
     citations.forEach((c) => {
+      if (c.kind === 'tracker' && c.result_digest) {
+        const badge = document.createElement('span');
+        badge.className = 'cite-chip'; badge.textContent = '▦ 追踪表查询';
+        badge.title = '追踪表数据库结果（发布前复核） · ' + (c.kb_slug || '');
+        row.appendChild(badge); shown++; return;
+      }
       if (c.kind === 'graph' && c.relation_id && c.fact_digest) {
         const link = document.createElement('a');
         link.className = 'cite-chip'; link.target = '_blank'; link.rel = 'noopener';
@@ -856,7 +875,8 @@ except ImportError:
         a.target = '_blank'; a.rel = 'noopener';
         const base = '/kb/doc/' + encodeURIComponent(c.doc_id) + '/slices/';
         const hls = (c.highlights || []).filter(h => h && h.length >= 3).slice(0, 12);
-        const qs = hls.map(h => 'h=' + encodeURIComponent(h)).join('&');
+        const selected = (c.selected_chunk_ids || []).filter(id => typeof id === 'string').slice(0, 16);
+        const qs = selected.map(id => 'chunk=' + encodeURIComponent(id)).concat(hls.map(h => 'h=' + encodeURIComponent(h))).join('&');
         a.href = qs ? base + '?' + qs : base;
         a.innerHTML = '📄 ' + name + badge;
         a.title = '查看本次检索命中的切片（' + (hls.length || 0) + ' 个锚点）';
@@ -909,12 +929,7 @@ except ImportError:
     messages.appendChild(am);
     const answerEl = am.querySelector('.answer');
     const toolArea = am.querySelector('.tool-area');
-    const progressEl = document.createElement('div');
-    progressEl.className = 'tool-status turn-progress';
-    progressEl.setAttribute('role', 'status');
-    progressEl.textContent = '正在准备问答…';
-    toolArea.appendChild(progressEl);
-    const toolRows = {};  // run_id -> 状态行元素
+    const activity = FosToolActivity.create(toolArea);
     let firstToken = true;
     let turnCitations = [];  // 本轮检索的来源出处（citations 事件累积）
     messages.scrollTop = messages.scrollHeight;
@@ -937,122 +952,36 @@ except ImportError:
       messages.scrollTop = messages.scrollHeight;
     };
 
-    // 状态图标：进行中=转圈圆圈（CSS 动画），完成=SVG 打勾。不再用 emoji。
-    const CHECK_SVG = '<svg class="ts-check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.6l3 3 6-6.5"/></svg>';
-    const markDone = (row) => {
-      if (!row || row.classList.contains('done')) return;
-      row.classList.add('done');
-      row.insertAdjacentHTML('beforeend', CHECK_SVG);
-    };
-    let pendingThink = [];  // 思考行：下一个动作开始时即视为结束
-
-    /* ---------- 管线阶段条（站点开启 qa_enhance 时由 step 事件驱动） ---------- */
-    const PIPE_STAGES = ['query_plan', 'hybrid_search', 'answer_generation', 'answer_verification'];
-    const PIPE_LABELS = { query_plan: '问题理解', hybrid_search: '检索证据',
-                          answer_generation: '生成回答', answer_verification: '核对结论' };
-    let pipeEl = null;
-    const pipeChips = {};
-    function ensurePipe() {
-      if (pipeEl) return;
-      pipeEl = document.createElement('div');
-      pipeEl.className = 'pipe-line';
-      PIPE_STAGES.forEach(st => {
-        const s = document.createElement('span');
-        s.className = 'pipe-chip';
-        s.textContent = PIPE_LABELS[st];
-        pipeEl.appendChild(s);
-        pipeChips[st] = s;
-      });
-      toolArea.prepend(pipeEl);
-    }
-    function setPipe(stage, cls, title) {
-      const c = pipeChips[stage];
-      if (!c) return;
-      c.className = 'pipe-chip ' + cls;
-      if (title) c.title = title;
-    }
-    let planDetailEl = null;
-    function handleStep(p) {
-      if (!p || !p.stage) return;
-      ensurePipe();
-      if (p.stage === 'query_plan' && p.status === 'done' && p.detail) {
-        if (!planDetailEl) {
-          planDetailEl = document.createElement('div');
-          planDetailEl.className = 'pipe-plan';
-          pipeEl.after(planDetailEl);
-        }
-        planDetailEl.textContent = p.detail.length > 110 ? p.detail.slice(0, 110) + '…' : p.detail;
-      }
-      if (p.status === 'start') setPipe(p.stage, 'run');
-      else if (p.status === 'done') setPipe(p.stage, p.ok === false ? 'fail' : 'done', p.detail || '');
-      else if (p.status === 'skip') setPipe(p.stage, 'skip', p.detail || '跳过');
-    }
-
     const stream = FosChatStream.create({onAbort(error) {
       if (activeTurn !== stream) return;
       answerEl.classList.remove('thinking');
-      toolArea.querySelectorAll('.ts-spin').forEach(el => el.remove());
-      toolArea.querySelectorAll('.pipe-chip.run').forEach(el => el.classList.remove('run'));
-      progressEl.textContent = error.message;
+      activity.finish(/已停止|已切换/.test(error.message) ? 'stopped' : 'error', error.message);
       busy = false; sendBtn.disabled = false;
       stopBtn.hidden = true; stopBtn.style.display = 'none';
     }, onEvent(etype, payload) {
       if (activeTurn !== stream || currentThreadId !== submittedThread) return;
+      activity.update(etype, payload);
       if (etype === 'heartbeat') {
         if (!document.querySelector('.conv-item[data-thread="'+submittedThread+'"]')) addConvItem(submittedThread, text.slice(0,30), '');
-        const seconds = Number(payload.elapsed);
-        const elapsed = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
-        progressEl.textContent = String(payload.stage || '正在处理问答') + '… 已等待 ' + elapsed + ' 秒';
       } else if (etype === 'token') {
-        // 首个 token 到达 → 收起工具状态行（淡出但保留，让用户看到做过什么）
+        // 首个 token 到达后显示正文，工具状态继续由活动视图更新。
         if (firstToken) {
           firstToken = false;
           answerEl.classList.remove('thinking');
-          Object.values(toolRows).forEach(markDone);
         }
         mdBuffer += payload.text || ''; renderMd();
-      } else if (etype === 'reasoning') {
-        // 可选：把简短的思考作为工具区提示（同样：进行中转圈 → 后续动作开始/首个回答 token 打勾）
-        const rtxt = (payload.text || '').trim().split('\n')[0];
-        if (rtxt) {
-          const r = document.createElement('div');
-          r.className = 'tool-status';
-          r.innerHTML = '<span class="ts-spin"></span><span class="ts-label">' + rtxt.replace(/</g,'&lt;').slice(0,80) + '</span>';
-          toolArea.appendChild(r);
-          const rid = 'think-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-          toolRows[rid] = r;
-          pendingThink.push(r);
-          messages.scrollTop = messages.scrollHeight;
-        }
-      } else if (etype === 'tool_start') {
-        // 思考结束、动作开始：给前面的思考行打勾
-        pendingThink.forEach(markDone);
-        pendingThink.length = 0;
-        // 新增一行：转圈 + 可读标签
-        const row = document.createElement('div');
-        row.className = 'tool-status';
-        row.dataset.run = payload.run_id || '';
-        const label = payload.label || '调用工具…';
-        row.innerHTML = '<span class="ts-spin"></span>' +
-                        '<span class="ts-label">' + label.replace(/</g,'&lt;') + '</span>';
-        toolArea.appendChild(row);
-        if (payload.run_id) toolRows[payload.run_id] = row;
-        messages.scrollTop = messages.scrollHeight;
-      } else if (etype === 'tool_end') {
-        // 标记该行完成（打勾、去转圈）
-        markDone(toolRows[payload.run_id]);
       } else if (etype === 'code_run') {
         // 在浏览器 Pyodide 沙箱执行 agent 生成的代码
         renderMd();
         runCodeInSandbox(payload.code || '', payload.filename || 'analysis.xlsx', am, payload.aid || '');
       } else if (etype === 'citations') {
         // 累积本轮来源出处（流结束后渲染可点击链接）
-        turnCitations = Array.from(new Map(turnCitations.concat(payload.citations || []).map(c => [
-          c.kind === 'graph' ? 'graph:' + c.relation_id + ':' + c.fact_digest : 'document:' + c.doc_id, c
+        turnCitations = Array.from(new Map((payload.replace ? [] : turnCitations).concat(payload.citations || []).map(c => [
+          c.kind === 'graph' ? 'graph:' + c.relation_id + ':' + c.fact_digest : c.kind === 'tracker' ? 'tracker:' + c.result_digest : 'document:' + c.doc_id, c
         ])).values());
       } else if (etype === 'step') {
         // 管线阶段（问题理解/检索/生成/核对）
-        handleStep(payload);
+        // Stage presentation is handled by the shared activity view.
       } else if (etype === 'verify') {
         // 核实结论三态：fail → 拒答展示；warn → 黄条提示（附带信息未核实）；pass → 绿徽标
         if (payload.ok === false) {
@@ -1105,6 +1034,7 @@ except ImportError:
     } catch(e) {
       if (activeTurn !== stream || currentThreadId !== submittedThread) return;
       needsRecovery = true;
+      activity.finish('error', e.message || '本轮未完成');
       renderMd();
       const err = document.createElement('div');
       err.setAttribute('role', 'alert');
@@ -1112,13 +1042,11 @@ except ImportError:
       err.textContent = '正在恢复回答状态：' + (e.message || e);
       am.querySelector('.bubble').appendChild(err);
     } finally {
-      if (!stream.signal.aborted) progressEl.remove();
+      if (!stream.signal.aborted) activity.finish(needsRecovery ? 'error' : 'done');
       if (activeTurn === stream) {
         activeTurn = null;
         busy = false; sendBtn.disabled = false; stopBtn.hidden = true; stopBtn.style.display = 'none';
         answerEl.classList.remove('thinking');
-        toolArea.querySelectorAll('.ts-spin').forEach(el => el.remove());
-        toolArea.querySelectorAll('.pipe-chip.run').forEach(el => el.classList.remove('run'));
         if (turnCitations.length) renderCitations(am, turnCitations);
         if (!document.querySelector('.conv-item[data-thread="'+submittedThread+'"]')) {
           addConvItem(submittedThread, text.slice(0,30), '');
@@ -1152,5 +1080,5 @@ except ImportError:
   }
 })();
 </script>
-{% if chat_embedded %}<script src="{% static 'js/assistant_embedded.js' %}?v=1" data-user="{{ user.pk }}" defer></script>{% endif %}
+{% if chat_embedded %}<script src="{% static 'js/assistant_embedded.js' %}?v=20261107" data-user="{{ user.pk }}" defer></script>{% endif %}
 {% endblock %}

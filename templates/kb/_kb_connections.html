@@ -1,0 +1,50 @@
+{% load static %}
+<link rel="stylesheet" href="{% static 'css/kb_connections.css' %}?v=20261107-bubbles-3">
+<div id="kbConnections" data-url="{% url 'kb:kb_connections' %}">
+  <div class="kl-toolbar">
+    <div class="kl-view-switch" role="group" aria-label="知识库视图">
+      <button type="button" data-kb-view="category" aria-pressed="true">按分类</button>
+      <button type="button" data-kb-view="cluster" aria-pressed="false">按关联群</button>
+    </div>
+    <button type="button" class="btn outline" data-kb-connect="">＋ 连接知识库</button>
+  </div>
+  <section id="klClusterView" hidden aria-label="知识库关联群">
+    <div class="kl-intro"><div><h2>连接你的知识</h2><p>拖动气泡旁的圆点到另一个知识库，即可建立关联。备注可稍后补充。</p></div>
+      <input type="search" id="klSearch" placeholder="搜索库名或关系说明" aria-label="搜索关联群">
+    </div>
+    <div class="kl-meta"><span id="klCounts"></span><span><i class="kl-key"></i>手册库 <i class="kl-key business"></i>业务数据</span></div>
+    <p id="klStatus" class="kl-status" role="status" aria-live="polite"></p>
+    <div id="klClusterChips" class="kl-cluster-chips" aria-label="定位关联群"></div>
+    <div class="kl-canvas-shell">
+      <div id="klCanvas" class="kl-canvas" tabindex="0" aria-label="知识库气泡画布，拖动圆点连线、拖动气泡移动；也可依次点击两个圆点连接">
+        <div id="klWorld" class="kl-world"><svg id="klEdges" class="kl-edges" aria-label="已有的知识库关联"></svg><div id="klBubbles"></div><div id="klWireControls" class="kl-wire-controls"></div></div>
+      </div>
+      <div class="kl-canvas-tools" role="group" aria-label="画布工具">
+        <button type="button" id="klZoomOut" aria-label="缩小画布" title="缩小">−</button>
+        <span id="klZoomLevel" aria-live="off">100%</span>
+        <button type="button" id="klZoomIn" aria-label="放大画布" title="放大">＋</button>
+        <span class="kl-tools-divider"></span><button type="button" id="klFit" title="显示所有知识库" aria-label="显示所有知识库">全览</button>
+        <button type="button" id="klArrange" title="重新排列气泡" aria-label="自动排列知识库">排列</button>
+      </div>
+      <div class="kl-canvas-hint">拖动圆点连线 <span>·</span> 点击连线编辑 / 删除 <span>·</span> 拖动空白处平移</div>
+    </div>
+    <div id="klSelection" class="kl-selection" hidden></div>
+    <p id="klConnectStatus" class="kl-connect-status" role="status" aria-live="polite"></p>
+    <details class="kl-relations" id="klRelationDetails"><summary>关联备注 <span id="klRelationCount"></span></summary><div id="klLinkList" class="kl-link-list"></div></details>
+  </section>
+  <dialog id="klDialog" class="fos-dialog">
+    <form id="klForm">
+      {% csrf_token %}
+      <div class="dialog-title" id="klDialogTitle">连接知识库</div>
+      <p class="kl-dialog-hint">可以补充这两个知识库如何关联，帮助 EnGenie 更准确地查找资料；也可以直接保存。</p>
+      <div id="klPairPreview" class="kl-pair-preview" hidden></div>
+      <div class="kl-pair" id="klPairFields"><div class="field"><label for="klLeft">知识库 A</label><select id="klLeft" required></select></div>
+        <span aria-hidden="true">↔</span><div class="field"><label for="klRight">知识库 B</label><select id="klRight" required></select></div></div>
+      <div class="field"><label for="klSummary">关联备注 <span class="kl-optional">选填</span></label>
+        <textarea id="klSummary" maxlength="1000" rows="4" placeholder="例如：维护手册说明设备限值，运行台账记录实际参数，可通过设备编号一起查看。"></textarea></div>
+      <div class="dialog-err" id="klError" role="alert" hidden></div>
+      <div class="dialog-actions"><button type="button" class="btn outline" id="klCancel">取消</button><button type="submit" class="btn primary" id="klSave">保存关联</button></div>
+    </form>
+  </dialog>
+</div>
+<script type="module" src="{% static 'js/kb_connections.js' %}?v=20261107-bubbles-3"></script>

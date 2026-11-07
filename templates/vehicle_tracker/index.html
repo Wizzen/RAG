@@ -15,7 +15,7 @@
   <header class="vt-header">
     <div class="vt-heading"><div><a class="vt-eyebrow" href="{% url 'vehicle_tracker:equipment_library' %}">← 设备模型知识库</a><h1>七个小矮人矿山车</h1><p>车辆模型 · 部件追踪与学习</p></div></div>
     <div class="vt-overview" aria-label="车辆资料概览"><span><b>5</b> 节车厢</span><span><b>20</b> 个轮架</span><span><b id="vt-overview-records">0</b> 条记录</span><span><b id="vt-overview-bound">0</b> 已绑定</span></div>
-    <div class="vt-header-right"><button id="vt-focus-mode" type="button" aria-pressed="false">专注模式</button><button id="vt-ai-open" class="vt-ai-launcher" type="button" aria-expanded="false" aria-controls="vt-ai-panel">✦ 车辆 AI</button><button id="vt-help" class="vt-icon" title="使用指南" aria-label="操作说明">?</button></div>
+    <div class="vt-header-right"><button id="vt-focus-mode" type="button" aria-pressed="false">专注模式</button><button id="vt-ai-open" class="vt-ai-launcher" type="button" aria-expanded="false" aria-controls="vt-ai-panel">{% include 'kb/_assistant_avatar.html' %} EnGenie</button><button id="vt-help" class="vt-icon" title="使用指南" aria-label="操作说明">?</button></div>
   </header>
   <div class="vt-toolbar">
     <div class="vt-toolgroup"><label for="vt-project">项目</label><select id="vt-project" aria-label="切换项目"></select><button id="vt-projects" title="新建及编辑项目">项目管理</button></div>

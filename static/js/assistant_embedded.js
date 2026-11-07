@@ -8,7 +8,7 @@
  send.innerHTML=icon;send.setAttribute('aria-label','发送');send.title='发送';
  stop.innerHTML='<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="4" width="12" height="12" rx="2"/></svg>';stop.setAttribute('aria-label','停止回答');stop.title='停止回答';
  stop.classList.remove('outline');stop.classList.add('primary');
- input.placeholder='描述你的问题…';input.setAttribute('aria-label','向知识库助手提问');
+ input.placeholder='向 EnGenie 提问…';input.setAttribute('aria-label','向 EnGenie 提问');
  try{if(!input.value)input.value=sessionStorage.getItem(draftKey)||'';}catch(_){}
  input.dispatchEvent(new Event('input'));
  input.addEventListener('input',()=>{try{sessionStorage.setItem(draftKey,input.value);}catch(_){}});

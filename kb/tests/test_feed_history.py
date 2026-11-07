@@ -125,6 +125,20 @@ class FeedHistoryViewsTests(TestCase):
         self.assertEqual([kb.pk for kb in page.context['business_kbs']],[feed.kb_id])
         self.assertNotIn(feed.kb,list(page.context['kbs']));self.assertContains(page,'data-business-slug="'+feed.kb.slug+'"')
 
+    def test_business_card_offers_delete_and_it_removes_feed_rows_and_tracker(self):
+        """业务数据卡片带删除入口；删除级联清掉采集库、自动更新任务与追踪记录。"""
+        response=self.action({'action':'create','name':'待删除运营库','kb_name':'待删除运营库','mode':'push'})
+        feed=KnowledgeFeed.objects.get(pk=response.json()['feed']['id'])
+        run,fresh=claim(feed.pk,trigger='push',payload=batch());execute(run.pk)
+        self.assertEqual(TrackerRow.objects.filter(feed_id=feed.pk).count(),1)
+        page=self.client.get(reverse('kb:manage_list'))
+        self.assertContains(page,'action="/kb/manage/'+feed.kb.slug+'/delete/"')
+        result=self.client.post(reverse('kb:manage_delete',args=[feed.kb.slug]))
+        self.assertEqual(result.status_code,302)
+        self.assertFalse(KnowledgeBase.objects.filter(pk=feed.kb_id).exists())
+        self.assertFalse(KnowledgeFeed.objects.filter(pk=feed.pk).exists())
+        self.assertEqual(TrackerRow.objects.filter(feed_id=feed.pk).count(),0)
+
     def test_user_can_override_agent_write_mode_on_approval(self):
         job=ConnectorDraft.objects.create(user=self.user,prompt='运营时间 '+spec()['url'],status='ready',spec=spec(write_mode='upsert'))
         with patch('kb.collector_api.start_feed'):

@@ -716,9 +716,15 @@ def _html_table_to_text(table_html: str) -> str:
     用二维网格 + rowspan/colspan 下沉算法正确还原合并单元格：一个 rowspan=3 的单元格
     会向下方 2 行同一列「下沉」其值，使每行自描述（优于留空，便于嵌入/检索）。
     全宽分隔行（单格 colspan 跨所有列，如「主要受力结构部件」）只输出其文本，作表内小标题。
+    OCR 表偶见越过表尾的 rowspan（如 2 行表标 rowspan=17），网格算法会拒绝；
+    此时退化为按单元格出现顺序平铺（文本一字不丢），标签/跨度本身损坏仍照常报错。
     """
-    from .table_structure import table_text
-    return table_text(table_html)
+    from .table_structure import parse_table, table_text
+    try:
+        return table_text(table_html)
+    except ValueError:
+        rows = parse_table(table_html)  # 标签或跨度值损坏时这里仍抛出，不静默
+    return '\n'.join(' | '.join(c['text'] for c in cells if c['text']) for cells in rows)
 
 
 def _md_for_embedding(md: str) -> str:
@@ -800,8 +806,12 @@ def _section_aware_chunk(text: str, source_name: str) -> list[LCDocument]:
 # Embedding（复用父项目客户端）
 # ------------------------------------------------------------------
 def is_wemm(model: str) -> bool:
-    """模型名含 wemm → 走自托管 WeMM 服务的 /embed 协议（非 OpenAI 兼容）。"""
+    """识别 WeMM；EmbeddingGemma 使用独立的输入格式。"""
     return "wemm" in (model or "").lower()
+
+
+def is_embeddinggemma(model: str) -> bool:
+    return "embeddinggemma" in (model or "").lower()
 
 
 # WeMM 官方评测口径：查询侧加 Instruct 前缀。但 A/B 实测（2026-09-07，
@@ -819,8 +829,21 @@ def _embed_input_version(modality: str) -> str:
     查询侧格式调整不作数；此版本变化才意味着旧语料向量需要重嵌。
     modality: text=纯文本块，media=图文交错块（图片）。
     """
-    model = embedding_settings()["model"]
-    return f"{'wemm' if is_wemm(model) else 'openai'}-{modality}-user-v1"
+    e = embedding_settings()
+    if _native_embedding_class(e["model"], e["base_url"]) is EmbeddingGemmaEmbeddings:
+        return f"embeddinggemma-{modality}-document-v1"
+    # Preserve existing stamps for WeMM and OpenAI-compatible endpoints.
+    family = "wemm" if is_wemm(e["model"]) or is_embeddinggemma(e["model"]) else "openai"
+    return f"{family}-{modality}-user-v1"
+
+
+def _embedding_fingerprint(e: dict) -> str:
+    identity = (e["model"], e["dimensions"], e["base_url"])
+    if _native_embedding_class(e["model"], e["base_url"]) is EmbeddingGemmaEmbeddings:
+        # The old Gemma adapter indexed plain, unprompted text. Reject those
+        # collections until rebuilt, even when URL/model/dimensions are unchanged.
+        identity += ("embeddinggemma-document-v1",)
+    return hashlib.sha256(repr(identity).encode()).hexdigest()
 
 
 class WeMMEmbeddings:
@@ -898,12 +921,60 @@ class WeMMEmbeddings:
         return out
 
 
+class EmbeddingGemmaEmbeddings(WeMMEmbeddings):
+    """本地 EmbeddingGemma 2：复用 /embed 传输，独立处理任务前缀和图文格式。"""
+
+    def __init__(self, base_url: str, dimensions: int | None = None):
+        super().__init__(base_url, dimensions)
+        if self.dimensions is not None and self.dimensions not in (128, 256, 512, 768):
+            raise ValueError("EmbeddingGemma 2 维度仅支持 128/256/512/768")
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._embed_raw([{"text": text, "prompt_name": "Document"} for text in texts])
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed_raw([{"text": text, "prompt_name": "SearchQuery"}])[0]
+
+    def embed_contents(self, inputs: list[list[dict]]) -> list[list[float]]:
+        items = []
+        for parts in inputs:
+            text, images = [], []
+            for part in parts:
+                if part["type"] == "text":
+                    text.append(part["text"])
+                elif part["type"] == "image":
+                    text.append("<|image|>")
+                    images.append(part["image"])
+                else:
+                    raise ValueError(f"EmbeddingGemma 不支持此内容类型：{part['type']}")
+            if not text:
+                raise ValueError("EmbeddingGemma 图文输入不能为空")
+            # The service forwards content dictionaries directly to encode(),
+            # without applying prompt_name. Format the document text here once.
+            content: dict[str, Any] = {"text": "title: none | text: " + "\n".join(text)}
+            if images:
+                content["image"] = images
+            items.append({"content": content})
+        return self._embed_raw(items)
+
+
+def _native_embedding_class(model: str, base_url: str):
+    if (base_url or "").rstrip("/").endswith("/v1"):
+        return None
+    if is_embeddinggemma(model):
+        return EmbeddingGemmaEmbeddings
+    if is_wemm(model):
+        return WeMMEmbeddings
+    return None
+
+
 def _embeddings():
     e = embedding_settings()
-    if is_wemm(e["model"]) and not e["base_url"].rstrip("/").endswith("/v1"):
+    native_class = _native_embedding_class(e["model"], e["base_url"])
+    if native_class is not None:
         if not e["base_url"]:
-            raise ValueError("WeMM 向量服务未配置 Base URL。")
-        return WeMMEmbeddings(base_url=e["base_url"], dimensions=e["dimensions"])
+            raise ValueError("向量服务未配置 Base URL。")
+        return native_class(base_url=e["base_url"], dimensions=e["dimensions"])
 
     from langchain_openai import OpenAIEmbeddings
 
@@ -912,7 +983,7 @@ def _embeddings():
     if not 1 <= batch_size <= 32:
         raise ValueError('EMBEDDING_BATCH_SIZE 必须在 1–32 范围内')
     request_timeout = 45
-    if is_wemm(e["model"]):
+    if is_wemm(e["model"]) or is_embeddinggemma(e["model"]):
         batch_size = min(batch_size, int(getattr(settings, "WEMM_BATCH_SIZE", 4)))
         request_timeout = float(getattr(settings, "WEMM_REQUEST_TIMEOUT", 180))
         if not 1 <= batch_size <= 32 or request_timeout <= 0:
@@ -1326,7 +1397,7 @@ def run_indexing(md_content: str, kb_slug: str, source_name: str, doc_id=None,
         from .index_batches import write_batches
         ef = vs._embedding_function
         e = embedding_settings()
-        fingerprint = hashlib.sha256(repr((e["model"], e["dimensions"], e["base_url"])).encode()).hexdigest()
+        fingerprint = _embedding_fingerprint(e)
         batch_size = getattr(ef, "chunk_size", getattr(ef, "_BATCH", 4))
         metadata = vs._collection.metadata or {}
         previous = metadata.get("embedding_fingerprint")

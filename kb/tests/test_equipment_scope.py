@@ -33,6 +33,7 @@ class EquipmentScopeTests(TestCase):
             self.assertIn('不存在',tools['kb_search']('检查',kb_slug='other'))
             self.assertIn('不存在',tools['kb_fetch_doc'](kb_slug='other'))
             self.assertIn('不存在',tools['tracker_lookup'](kb_slug='other'))
+            self.assertIn('不存在',tools['tracker_preview'](kb_slug='other'))
             search.assert_not_called();fetch.assert_not_called()
 
     def test_folder_search_passes_only_its_children(self):
@@ -81,5 +82,5 @@ class ScopeConversationTests(TransactionTestCase):
             self.assertEqual(slug,'small')
             # 作用域改为建议式：点名文件夹仍重绑会话默认范围，但不再硬锁工具可见库
             self.assertIsNone(cfg['allowed_kb_slugs'])
-        self.assertEqual(configs[0][1]['published_history'],[])
+        self.assertIn('old wrong content',repr(configs[0][1]['published_history']))
         conv.refresh_from_db();self.assertEqual(conv.kb_id,folder.pk)

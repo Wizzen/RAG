@@ -13,24 +13,35 @@ from kb.models import Document, KnowledgeBase
 
 
 class PublicationStreamTests(SimpleTestCase):
-    def test_graph_tool_forces_private_draft_even_when_enhance_off(self):
+    def test_graph_lookup_respects_the_selected_verification_mode(self):
         class FakeAgent:
             async def astream_events(self, *args, **kwargs):
                 yield {'event': 'on_tool_start', 'name': 'kb_graph_search', 'data': {}}
                 yield {'event': 'on_chat_model_start', 'data': {}}
-                yield {'event': 'on_chat_model_stream', 'data': {'chunk': SimpleNamespace(content='PRIVATE GRAPH FACT')}}
+                yield {'event': 'on_chat_model_stream', 'data': {'chunk': SimpleNamespace(content='CONFIRMED GRAPH FACT')}}
                 yield {'event': 'on_chat_model_end', 'data': {'output': SimpleNamespace(
-                    content='PRIVATE GRAPH FACT', tool_calls=[], response_metadata={'finish_reason': 'stop'})}}
+                    content='CONFIRMED GRAPH FACT', tool_calls=[], response_metadata={'finish_reason': 'stop'})}}
         def build(*args, **kwargs):
             kwargs['evidence'].append({'kind': 'graph', 'text': 'source'})
             return FakeAgent()
-        async def collect():
+        async def collect(enhance):
             return [ev async for ev in run_agent_stream('E-1?', 'graph', 'graph',
-                {'llm': {'qa_enhance': False}, 'top_k': 5, 'user_id': 1})]
-        with patch('kb.agent._build_agent', side_effect=build), patch('kb.publication.validate_sources', return_value=False):
-            events = asyncio.run(collect())
-        self.assertNotIn('PRIVATE GRAPH FACT', repr(events))
-        self.assertTrue(any(kind == 'verify' and not body['ok'] for kind, body in events))
+                {'llm': {'qa_enhance': enhance}, 'top_k': 5, 'user_id': 1})]
+        for enhance in (False, True):
+            with self.subTest(enhance=enhance), patch('kb.agent._build_agent', side_effect=build), patch(
+                'kb.publication.validate_sources', return_value=False,
+            ) as source_check, patch('kb.qa_steps.verify_answer',new_callable=AsyncMock) as verify, patch(
+                'kb.qa_steps.plan_query',new_callable=AsyncMock,return_value=(None,{'input_tokens':0,'output_tokens':0}),
+            ):
+                events = asyncio.run(collect(enhance))
+            if enhance:
+                self.assertNotIn('CONFIRMED GRAPH FACT', repr(events))
+                self.assertTrue(any(kind == 'verify' and not body['ok'] for kind, body in events))
+            else:
+                self.assertTrue(any(kind == 'token' and body['text']=='CONFIRMED GRAPH FACT' for kind,body in events))
+                self.assertFalse(any(kind == 'verify' for kind,body in events))
+                source_check.assert_not_called()
+            verify.assert_not_called()
 
     async def collect(self, verdict='pass', *, enhance=True, truncated=False, revoked=False, question='value?'):
         class FakeAgent:

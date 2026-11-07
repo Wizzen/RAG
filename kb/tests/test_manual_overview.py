@@ -64,17 +64,17 @@ class ManualOverviewTests(TestCase):
         self.assertIsNone(_route_kb_by_question('漂流手册有什么',self.user))
 
     def test_preloaded_summary_uses_selected_library_and_collects_evidence(self):
-        citations,evidence=[],[]
+        citations,evidence,state=[],[],{}
         rows=[{'section':'第1章概述','text':'混凝土水道','chunk_id':'c1'},
               {'section':'第13章应急预案','text':'应急流程','chunk_id':'c13'}]
         with patch('langchain.agents.create_agent') as create, patch('kb.agent._get_llm'), \
              patch('kb.keyword_index.get_chunks',return_value=rows) as fetch, \
              patch('kb.provenance.annotate_results'):
             _build_agent('raft','turn',{},5,None,citations=citations,evidence=evidence,
-                         allowed_kb_slugs=['raft'],overview=True)
+                         allowed_kb_slugs=['raft'],overview=True,retrieval_state=state)
         fetch.assert_called_once_with('raft',self.doc.original_name)
-        prompt=create.call_args.kwargs['system_prompt']
-        self.assertEqual(create.call_args.kwargs['tools'],[])
+        prompt=state['input_context']
+        self.assertTrue(create.call_args.kwargs['tools'])
         self.assertIn('第13章应急预案',prompt)
         self.assertIn('不得把分别适用于不同对象的上限',prompt)
         self.assertEqual({e['kb_slug'] for e in evidence},{'raft'})

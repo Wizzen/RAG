@@ -71,7 +71,9 @@ class KnowledgeGraphTests(TestCase):
         self.assertEqual(len(evidence), 2)
         self.assertEqual(len(citations), 2)
         self.assertIn('不存在', tools['kb_graph_search']('E-1', kb_slug=self.child.slug))
-        self.assertIn('request_verified_export', tools['write_analysis']('print(1)'))
+        with patch('kb.analysis_runs.register') as register:
+            self.assertIn('check_analysis', tools['write_analysis']('print(1)'))
+        register.assert_called_once()
 
     def test_fact_snapshot_rejects_changed_source_scope_and_tampered_text(self):
         from kb.knowledge_graph import lookup_facts

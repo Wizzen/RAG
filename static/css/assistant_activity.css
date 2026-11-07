@@ -1,0 +1,27 @@
+/* The same spacing, states and completion motion as the automatic-task builder. */
+.rag-activity{container-type:inline-size;min-width:0;margin:0 0 14px;color:var(--text);font:12px/1.6 var(--fb)}
+.rag-activity-status{display:flex;align-items:center;gap:8px;min-width:0;padding:2px 0 10px;color:var(--dim)}
+.rag-activity-icon,.rag-tool-icon{display:grid;place-items:center;width:18px;height:18px;flex:none;border-radius:50%;font:600 15px var(--fm);color:var(--ok)}
+.rag-activity-icon svg,.rag-tool-icon svg{width:18px;height:18px}
+.rag-activity[data-state=running] .rag-activity-icon,.rag-tool.is-running .rag-tool-icon{border:2px solid var(--rule);border-top-color:var(--brand);animation:rag-activity-orbit .9s linear infinite}
+.rag-activity[data-state=done] .rag-activity-icon,.rag-tool.is-done .rag-tool-icon{background:var(--ok-soft)}
+.rag-activity[data-state=error] .rag-activity-icon,.rag-tool.is-error .rag-tool-icon{color:var(--danger);background:var(--err-soft)}
+.rag-activity[data-state=stopped] .rag-activity-icon,.rag-tool.is-warning .rag-tool-icon{color:var(--warn);background:var(--warn-soft)}
+.rag-activity-label{min-width:0;flex:1;overflow-wrap:anywhere}.rag-activity-time{font:11px var(--fm);white-space:nowrap;color:var(--mute)}
+.rag-activity-note{font:12px/1.7 var(--fb);color:var(--dim);margin:0 0 10px;overflow-wrap:anywhere}
+.rag-work{margin:0;border:1px solid var(--rule-soft);border-radius:12px;background:var(--surface);font-size:12px;overflow:hidden}
+.rag-work>summary{padding:11px 13px;color:var(--dim);cursor:pointer;list-style:none;user-select:none}
+.rag-work>summary::-webkit-details-marker{display:none}.rag-work>summary::before{content:'▸';display:inline-block;margin-right:7px;transition:transform .15s}
+.rag-work[open]>summary::before{transform:rotate(90deg)}.rag-work>summary:focus-visible{outline:2px solid var(--brand);outline-offset:-3px}
+.rag-tool-list{padding:0 10px 8px}.rag-work[open] .rag-tool-list{border-top:1px solid var(--rule-soft)}
+.rag-tool{display:grid;grid-template-columns:22px minmax(100px,auto) minmax(0,1fr) auto;align-items:center;gap:8px;padding:11px 4px;border-top:1px solid var(--rule-soft);transition:background .2s}
+.rag-tool:first-child{border-top:0}.rag-tool-name{font:11px/1.6 var(--fb);font-weight:600;color:var(--text);overflow-wrap:anywhere}
+.rag-tool-note{font:11px/1.6 var(--fb);color:var(--dim);min-width:0;overflow-wrap:anywhere}.rag-tool-time{color:var(--dim);font:11px var(--fm);white-space:nowrap}
+.rag-tool.is-running .rag-tool-time{color:var(--brand)}.rag-tool.is-error .rag-tool-name,.rag-tool.is-error .rag-tool-note{color:var(--danger)}
+.rag-tool.is-fresh{animation:rag-tool-complete .6s ease-out}.rag-tool.is-fresh.is-done path{stroke-dasharray:22;animation:rag-tool-check .4s ease-out}
+.rag-activity [hidden]{display:none!important}
+@keyframes rag-activity-orbit{to{transform:rotate(360deg)}}
+@keyframes rag-tool-complete{from{background:var(--brand-soft)}to{background:transparent}}
+@keyframes rag-tool-check{from{stroke-dashoffset:22}to{stroke-dashoffset:0}}
+@container(max-width:480px){.rag-tool{grid-template-columns:20px minmax(0,1fr) auto}.rag-tool-icon{grid-column:1;grid-row:1}.rag-tool-name{grid-column:2;grid-row:1}.rag-tool-time{grid-column:3;grid-row:1}.rag-tool-note{grid-column:2 / -1;grid-row:2}}
+@media(prefers-reduced-motion:reduce){.rag-activity *,.rag-activity *::before{animation:none!important;transition:none!important}}

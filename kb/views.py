@@ -758,6 +758,7 @@ def tracker_view(request, slug):
         "kb": kb,
         "tracker": tr,
         "rows": rows,
+        "show_analysis": kb.category == "business" or any(r["is_feed"] for r in rows),
         "fields_text": "\n".join(f["label"] for f in tr.fields),
         "completed_n": docs_qs.filter(status=Document.Status.COMPLETED).count(),
         "missing_n": docs_qs.filter(status=Document.Status.COMPLETED)
@@ -1003,6 +1004,7 @@ def document_slices(request, doc_id):
         raise Http404("文档不存在")
 
     highlights = [h.strip()[:160] for h in request.GET.getlist("h") if len(h.strip()) >= 3][:12]
+    selected_ids = {cid for cid in request.GET.getlist('chunk')[:16] if 0<len(cid)<=500}
     full_doc_url = reverse("kb:document_html", args=[doc.id])
     if highlights:
         full_doc_url += "?" + urlencode({"h": highlights}, doseq=True)
@@ -1011,7 +1013,9 @@ def document_slices(request, doc_id):
         return redirect(full_doc_url)
 
     chunks = keyword_index.get_chunks(doc.kb.slug, doc.original_name)
-    if not chunks or not highlights:
+    if selected_ids and not selected_ids.issubset({row.get('chunk_id') for row in chunks}):
+        return HttpResponse('所选引用片段已变化或不属于此文档，请重新检索。',status=410)
+    if not chunks or not highlights and not selected_ids:
         return _fallback()
 
     # 命中判定：短语（小写比较）出现在切片正文即算命中；命中数多者优先，
@@ -1019,17 +1023,21 @@ def document_slices(request, doc_id):
     lows = [h.lower() for h in highlights]
     scored: list[tuple[int, int, dict, list[str]]] = []
     for idx, ch in enumerate(chunks):
+        if selected_ids and ch.get('chunk_id') not in selected_ids:
+            continue
         text_l = ch["text"].lower()
         hits = [h for h, lh in zip(highlights, lows) if lh in text_l]
-        if hits:
+        if hits or selected_ids:
             scored.append((len(hits), idx, ch, hits))
     if not scored:
         return _fallback()
-    scored.sort(key=lambda x: (-x[0], x[1]))
+    scored.sort(key=(lambda x:x[1]) if selected_ids else (lambda x:(-x[0],x[1])))
 
     # 单趟标记：所有短语合成一个交替正则（长短语优先，避免短词先吃掉长词），
     # 在「已转义」的文本上一次性替换，杜绝 <mark> 嵌套。
     def _marked(esc_text: str, phrases: list[str]) -> str:
+        if not phrases:
+            return esc_text
         alts = [re_mod.escape(html_mod.escape(p)) for p in sorted(set(phrases), key=len, reverse=True)]
         pat = re_mod.compile("|".join(alts), re_mod.IGNORECASE)
         return pat.sub(lambda m: '<mark class="cite-hit">' + m.group(0) + "</mark>", esc_text)
@@ -1237,14 +1245,12 @@ async def chat_stream(request):
         reconcile(list(conv.messages.filter(completion_status__in=ACTIVE)))
         if conv.messages.filter(completion_status__in=ACTIVE).exists():
             return conv, None, False, "answer active"
-        # Enhanced turns rebuild memory from published messages, never failed checkpoints.
         from .publication import visible_citations
         current_llm = llm_settings()
-        # Keep recent completed turns only; never replay accumulated tool outputs
-        # or resume a cancelled LangGraph checkpoint on the next question.
-        from .history import recent_history
-        published_history = recent_history(
-            list(conv.messages.order_by("-created_at")[:24])[::-1],
+        from .history import load_context, recent_history
+        conversation_context = load_context(conv, request.user)
+        published_history = [] if conversation_context else recent_history(
+            conv.messages.order_by("created_at", "pk"),
             enhanced=current_llm.get("qa_enhance", False),
             visible=lambda citations: visible_citations(citations, request.user),
         )
@@ -1252,16 +1258,15 @@ async def chat_stream(request):
         Message.objects.create(conversation=conv, role=Message.Role.USER, content=message)
         conv.save(update_fields=["updated_at"])  # 刷新排序
         answer = Message.objects.create(conversation=conv, role=Message.Role.AI, content="", completion_status="queued")
-        # 作用域改为【建议而非硬锁】：不再限制工具可见/可检索的库，
-        # 仅通过 prompt 的默认范围引导；用户点名新文档时切换话题（丢弃旧上下文）。
+        # Named documents update the default search target without erasing the chat.
         allowed_slugs = None
-        if _route_kb_by_question(message, request.user):
-            published_history = []
         cfg = {
+            "conversation_id": str(conv.pk),
             "allowed_kb_slugs": allowed_slugs,
             "answer_id": answer.pk,
             "llm": current_llm,
             "published_history": published_history,
+            "conversation_context": conversation_context,
             "user_id": request.user.id,
             "top_k": retrieval_settings()["top_k"],
             "department": user_dept,
@@ -1298,13 +1303,18 @@ async def chat_stream(request):
         finalized = False
         async def save_snapshot():
             text = "".join(ai_chunks).strip()
-            # Enhanced mode only emits text after verification; never persist a private draft.
-            await sync_to_async(Message.objects.filter(pk=agent_config["answer_id"]).update)(
-                content=text, citations=turn_citations,
-                failure_reason="" if complete else failure_reason[:500],
-                completion_status=("complete" if complete else "incomplete") if finalized else "running",
-                verified=bool(complete and agent_config["llm"].get("qa_enhance") and turn_verify and turn_verify.get("ok")),
-            )
+            @transaction.atomic
+            def persist():
+                Message.objects.filter(pk=agent_config["answer_id"]).update(
+                    content=text, citations=turn_citations,
+                    failure_reason="" if complete else failure_reason[:500],
+                    completion_status=("complete" if complete else "incomplete") if finalized else "running",
+                    verified=bool(complete and agent_config["llm"].get("qa_enhance") and turn_verify and turn_verify.get("ok")),
+                )
+                if complete and agent_config.get("next_context"):
+                    Conversation.objects.filter(pk=conv.pk, user_id=request.user.pk).update(
+                        agent_context=agent_config["next_context"])
+            await sync_to_async(persist)()
         effective_kb_slug = agent_config.get("effective_kb_slug") or conv.kb.slug
         try:
             from contextlib import aclosing
@@ -1319,7 +1329,7 @@ async def chat_stream(request):
                         ai_chunks.append(payload.get("text", ""))
                     elif event_type == "citations":
                         from .publication import citation_key
-                        merged = {citation_key(c): c for c in turn_citations}
+                        merged = {} if payload.get('replace') else {citation_key(c): c for c in turn_citations}
                         merged.update({citation_key(c): c for c in (payload.get("citations") or [])})
                         turn_citations[:] = list(merged.values())
                     elif event_type == "verify":
@@ -1330,10 +1340,20 @@ async def chat_stream(request):
                     yield f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
             finalized = True
             complete = not failed and bool("".join(ai_chunks).strip())
+            verification_failed = turn_verify is not None and not turn_verify.get("ok")
+            # An explicit verified-export request can enable verification during
+            # a normal turn. Its outcome matters even when the site flag is off.
+            if verification_failed:
+                complete = False
             if agent_config["llm"].get("qa_enhance") and not (turn_verify and turn_verify.get("ok")):
                 complete = False
             if not complete and not failure_reason:
-                failure_reason = "答案未通过核对。" if agent_config["llm"].get("qa_enhance") else "模型结束了请求，但没有返回答案正文。"
+                if verification_failed:
+                    failure_reason = "答案未通过来源核对，草稿未发布。请明确资料范围或补充所需条件后重试。"
+                elif agent_config["llm"].get("qa_enhance"):
+                    failure_reason = "答案核对未完成，草稿未发布。请重试。"
+                else:
+                    failure_reason = "模型结束了请求，但没有返回答案正文。"
             await save_snapshot()
             if not complete and not failed:
                 yield f"event: error\ndata: {json.dumps({'message': failure_reason}, ensure_ascii=False)}\n\n"
@@ -1473,7 +1493,7 @@ def _semantic_matches(user, query: str, k: int = 8) -> list[dict]:
 
     from . import access as kb_access
     from .models import DEPARTMENT_GENERAL
-    from .retriever import search_folder
+    from .retriever import _image_distance, search_folder
 
     user_dept = kb_access.user_department(user)
     slugs = list(
@@ -1509,8 +1529,11 @@ def _semantic_matches(user, query: str, k: int = 8) -> list[dict]:
         # WeMM 图文存在模态鸿沟（余弦距离常在 1.2~1.7），把相似度区间
         # [-1,1] 线性归一到 [0,1]（= 1-d/2）：保序、非零有区分度，跨批可比
         score = r.get("rerank_score")
-        if score is None and r.get("type") == "image" and r.get("distance") is not None:
-            score = round(max(0.0, min(1.0, 1.0 - float(r["distance"]) / 2.0)), 4)
+        if r.get("type") == "image":
+            distance = _image_distance(r.get('distance'))
+            if distance is None:
+                continue
+            score = round(max(0.0, min(1.0, 1.0 - distance / 2.0)), 4)
         out.append({
             "doc_id": r["doc_id"],
             "source": r.get("source") or "未知来源",
@@ -1557,7 +1580,9 @@ def search_view(request):
     # 语义命中拆两栏展示：文本块（含 rerank 相关度）与图片块（多模态召回道）
     sem_all = _semantic_matches(request.user, q) if q else []
     semantic_matches = [m for m in sem_all if not m.get("is_image")]
-    image_matches = [m for m in sem_all if m.get("is_image")]
+    from .retriever import IMAGE_RESULT_LIMIT
+    image_matches = sorted((m for m in sem_all if m.get("is_image")),
+                           key=lambda m: m['score'], reverse=True)[:IMAGE_RESULT_LIMIT]
     datasets = (
         StructuredDataset.objects.filter(active=True)
         .select_related("imported_by").order_by("kind", "-created_at")
@@ -2042,33 +2067,34 @@ def settings_test(request):
 
     def _ping_embedding(base_url, api_key, model):
         """Create one real embedding so URL/model compatibility is verified."""
-        from .pipeline import WeMMEmbeddings, is_wemm
+        from .pipeline import _native_embedding_class
 
         try:
             if not base_url:
                 return {"ok": False, "status": None, "detail": "请填写向量模型 Base URL。"}
             if not model:
                 return {"ok": False, "status": None, "detail": "请填写向量模型名称。"}
-            if is_wemm(model) and not base_url.rstrip("/").endswith("/v1"):
-                # 自托管 WeMM 服务：/embed 协议，空闲自动卸载，冷加载需等模型上卡
-                vec = WeMMEmbeddings(base_url=base_url).embed_query("连接测试")
-                return {"ok": True, "status": 200,
-                        "detail": f"真实向量生成成功（模型：{model}，维度：{len(vec)}）"}
-            r = httpx.post(
-                base_url.rstrip("/") + "/embeddings",
-                headers=_headers(api_key),
-                json={"model": model, "input": ["连接测试"], **({"dimensions": cfg_mod.embedding_settings()["dimensions"]} if cfg_mod.embedding_settings().get("dimensions") else {})}, timeout=60,
-            )
-            r.raise_for_status()
-            data = r.json().get("data") or []
-            vector = data[0].get("embedding") if data else None
-            import math
             expected = cfg_mod.embedding_settings().get("dimensions")
+            native_class = _native_embedding_class(model, base_url)
+            if native_class is not None:
+                vector = native_class(base_url=base_url, dimensions=expected).embed_query("连接测试")
+                status = 200
+            else:
+                r = httpx.post(
+                    base_url.rstrip("/") + "/embeddings",
+                    headers=_headers(api_key),
+                    json={"model": model, "input": ["连接测试"], **({"dimensions": expected} if expected else {})}, timeout=60,
+                )
+                r.raise_for_status()
+                data = r.json().get("data") or []
+                vector = data[0].get("embedding") if data else None
+                status = r.status_code
+            import math
             if not isinstance(vector, list) or not vector or any(isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) for x in vector) or not any(vector):
-                return {"ok": False, "status": r.status_code, "detail": "服务没有返回向量。"}
+                return {"ok": False, "status": status, "detail": "服务没有返回向量。"}
             if expected and len(vector) != expected:
-                return {"ok": True, "warning": True, "status": r.status_code, "detail": f"向量服务调用成功；索引兼容性警告：配置 {expected} 维，实际 {len(vector)} 维。当前模型不能直接用于旧索引，须按此模型重建索引或恢复原嵌入模型。"}
-            return {"ok": True, "status": r.status_code,
+                return {"ok": True, "warning": True, "status": status, "detail": f"向量服务调用成功；索引兼容性警告：配置 {expected} 维，实际 {len(vector)} 维。当前模型不能直接用于旧索引，须按此模型重建索引或恢复原嵌入模型。"}
+            return {"ok": True, "status": status,
                     "detail": f"真实向量生成成功（模型：{model}，维度：{len(vector)}）"}
         except Exception as e:
             status = getattr(getattr(e, "response", None), "status_code", None)

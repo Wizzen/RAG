@@ -25,7 +25,7 @@ export function mountAssistant({getProject,getSelection,locate}) {
   function close(){panel.hidden=true;launcher.setAttribute('aria-expanded','false');launcher.focus();}
   function message(role,content,caption=''){
     const card=document.createElement('article');card.className='vt-ai-message '+role;
-    const heading=document.createElement('strong');heading.textContent=role==='user'?'你':'车辆 AI';card.append(heading);
+    const heading=document.createElement('strong');heading.textContent=role==='user'?'你':'EnGenie';card.append(heading);
     if(caption){const meta=document.createElement('small');meta.textContent=caption;card.append(meta);}
     const body=document.createElement('div');body.className='vt-ai-text';body.textContent=content;card.append(body);
     byId('messages').append(card);card.scrollIntoView({block:'nearest'});return card;

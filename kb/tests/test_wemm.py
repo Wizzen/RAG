@@ -54,6 +54,14 @@ class WeMMQueryFormatTests(TestCase):
 
 
 class EmbeddingInputVersionTests(TestCase):
+    def setUp(self):
+        config = patch("kb.pipeline.embedding_settings", return_value={
+            "model": "WeMM-Embedding-4B", "base_url": "http://localhost:8300",
+            "dimensions": 2560, "api_key": "",
+        })
+        config.start()
+        self.addCleanup(config.stop)
+
     @classmethod
     def setUpTestData(cls):
         cls.staff = get_user_model().objects.create_user(
@@ -72,13 +80,11 @@ class EmbeddingInputVersionTests(TestCase):
 
     def test_text_chunks_record_input_version(self):
         chunks = _section_aware_chunk("## 检修规范\n\n每日检查轴承。", "手册.pdf")
-        self.assertRegex(chunks[0].metadata["embedding_input_version"],
-                         r"^(wemm|openai)-text-user-v1$")
+        self.assertEqual(chunks[0].metadata["embedding_input_version"], "wemm-text-user-v1")
 
     def test_image_chunks_record_input_version(self):
         d = doc_image_dir(self.doc.id)
         d.mkdir(parents=True, exist_ok=True)
         (d / (H("a") + ".jpg")).write_bytes(b"x" * 4096)
         chunk = _image_chunks(self.doc.md_content, "图册.pdf", self.doc.id)[0][0]
-        self.assertRegex(chunk.metadata["embedding_input_version"],
-                         r"^(wemm|openai)-media-user-v1$")
+        self.assertEqual(chunk.metadata["embedding_input_version"], "wemm-media-user-v1")

@@ -29,7 +29,20 @@ class FallbackTests(SimpleTestCase):
               '__fos_collected_at':'2026-10-31T23:30:00+00:00'}
         fields=validate_batch(build_batch(config,data))['items'][0]['fields']
         self.assertEqual(fields['日期'],'2026-11-01');self.assertEqual(fields['采集时间'],'2026-11-01T07:30:00+08:00')
-        self.assertEqual(check_spec(SimpleNamespace(api_url=config['url'],prompt=config['url'],header_env={}),config),config)
+        checked=check_spec(SimpleNamespace(api_url=config['url'],prompt=config['url'],header_env={}),config)
+        self.assertEqual(checked['body_fields'][:-1],config['body_fields'])
+        self.assertEqual(checked['body_fields'][-1],{'label':'采集日期','source':'today'})
+        self.assertEqual(build_batch(checked,data)['items'][0]['fields']['采集日期'],'2026-11-01')
+
+    def test_collection_date_is_injected_when_model_omits_it_or_maps_it_to_the_website(self):
+        config=web_spec();job=SimpleNamespace(api_url=config['url'],prompt=config['url'],header_env={})
+        data={'records':[{'id':'ride','name':'Ride','start':'09:00','end':'18:00','date':'1900-01-01',
+                          'source_url':config['url']}], '__fos_collected_at':'2026-10-31T23:30:00+00:00'}
+        for fields in (config['body_fields'],config['body_fields']+[{'label':'采集日期','path':'date'}]):
+            preview=sample_preview(job,{**config,'body_fields':fields},data)
+            self.assertEqual(preview['preview'][0]['fields']['采集日期'],'2026-11-01')
+            self.assertEqual([row['label'] for row in preview['field_coverage']].count('采集日期'),1)
+        self.assertNotIn('采集日期',[field['label'] for field in config['body_fields']])
 
     def test_changed_format_preserves_raw_content_and_does_not_invent_duration(self):
         config=web_spec();config.pop('on_error')
@@ -110,7 +123,8 @@ class DialogueContinuityTests(TestCase):
         self.assertEqual(self.browser.call.call_args_list[-1].args[0],'snapshot');self.browser.close.assert_not_called()
 
     def test_after_confirm_body_only_edit_reuses_validated_capture_and_same_feed(self):
-        parent=self.job();data={'records':[{'id':'ride','name':'Ride','start':'09:00','end':'21:00','source_url':web_spec()['url']}]}
+        # 新建草稿默认开放内网（allow_private 计入取数指纹），与默认开放的后续轮次一致才能复用已验证批次。
+        parent=self.job(allow_private=True);data={'records':[{'id':'ride','name':'Ride','start':'09:00','end':'21:00','source_url':web_spec()['url']}]}
         with patch('kb.connector_browser.collect',return_value=data):
             parent,_=self.execute(parent,[call('browser_open',{'url':web_spec()['url']}),call('test_browser_connector',{'spec':web_spec()},'preview')])
         self.assertEqual(parent.status,'ready',parent.error)

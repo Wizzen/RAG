@@ -1,5 +1,7 @@
-import {FORMAT, FILE_LIMIT, normalizeManifest, componentOrder, openModelStore, readModels, saveModel} from './equipment-model.mjs';
-import {createDocumentExplorer} from './vehicle-tracker-documents.mjs';
+const version = new URL(import.meta.url).search;
+const [{FORMAT, FILE_LIMIT, normalizeManifest, componentOrder, openModelStore, readModels, saveModel},
+  {createDocumentExplorer}] = await Promise.all(
+  ['./equipment-model.mjs', './vehicle-tracker-documents.mjs'].map(path => import(path + version)));
 
 const $ = id => document.getElementById(id);
 const registry = JSON.parse($('equipment-registry').textContent);
@@ -39,7 +41,7 @@ function modelLink(source, id) {
 
 function card(model, subtitle, link, action) {
   const node = element('a', '');
-  node.className = 'eq-card';
+  node.className = 'kb-card eq-card';
   node.href = link;
   node.append(element('span', subtitle), element('h3', model.name),
     element('p', model.description || '可在模型中查看部件结构、说明与追踪记录。'),

@@ -179,7 +179,7 @@ class SemanticSearchSectionTests(TestCase):
         return [
             {"doc_id": "d1", "source": "DR报告.pdf", "section": "结构",
              "text": "【结构】主要结构型式 1.立柱", "via": "vec+rr",
-             "rerank_score": 0.97, "type": "image", "image": "a" * 64 + ".jpg"},
+             "distance": 0.4, "type": "image", "image": "a" * 64 + ".jpg"},
             {"doc_id": "d2", "source": "手册.pdf", "section": "",
              "text": "轨道布置说明", "via": "vec"},
         ]

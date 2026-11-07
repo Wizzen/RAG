@@ -31,7 +31,7 @@ class FeedBusy(ValueError):pass
 def authorize(feed):
     user=feed.created_by
     if not user or not user.is_active or not access.can_manage_kb(user,feed.kb):raise ValueError('数据源创建者已无管理权限，更新已停止。')
-    if (feed.allow_private or (feed.header_env and not feed.credential_id)) and not access.is_global_admin(user):raise ValueError('内网 API 和环境变量认证必须由仍有效的全局管理员管理。')
+    if (feed.header_env and not feed.credential_id) and not access.is_global_admin(user):raise ValueError('环境变量认证必须由仍有效的全局管理员管理。')
 
 
 def rotate_token(feed):

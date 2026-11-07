@@ -12,6 +12,8 @@ def citation_key(citation):
     """文档和图谱引用使用独立身份，多个结构化来源不能因缺少 doc_id 被折叠。"""
     if citation.get('kind') == 'graph':
         return ('graph', str(citation.get('relation_id')), citation.get('fact_digest'))
+    if citation.get('kind') == 'tracker':
+        return ('tracker', citation.get('result_digest'))
     return ('document', citation.get('doc_id'))
 
 
@@ -55,6 +57,11 @@ def validate_sources(evidence, user_id):
     if user is None or not evidence:
         return False
     for ev in evidence:
+        if ev.get('kind') == 'tracker':
+            from .tracker_query import validate_snapshot
+            if not validate_snapshot(ev, user):
+                return False
+            continue
         if ev.get('kind') == 'graph':
             from .knowledge_graph import validate_fact
             if not validate_fact(ev, user):
@@ -77,6 +84,14 @@ def visible_citations(citations, user):
     from django.core.exceptions import ValidationError
     from .keyword_index import get_chunks
     for citation in citations:
+        if citation.get('kind') == 'tracker':
+            from .tracker_query import validate_snapshot
+            snapshot = citation.get('tracker_snapshot')
+            if (not isinstance(snapshot,dict) or citation.get('result_digest')!=snapshot.get('result_digest')
+                    or citation.get('kb_slug')!=snapshot.get('query',{}).get('kb_slug')
+                    or not validate_snapshot(snapshot,user)):
+                return False
+            continue
         if citation.get('kind') == 'graph':
             from .knowledge_graph import validate_fact
             snapshot = citation.get('graph_snapshot')
@@ -94,9 +109,10 @@ def visible_citations(citations, user):
             return False
         if citation.get('document_digest') and digest(doc.md_content) != citation['document_digest']:
             return False
-        if citation.get('chunks'):
+        if citation.get('chunks') or citation.get('selected_chunk_ids'):
             live_ids = {row['chunk_id'] for row in get_chunks(doc.kb.slug, doc.original_name)}
-            if any(chunk.get('chunk_id') not in live_ids for chunk in citation['chunks']):
+            if (any(chunk.get('chunk_id') not in live_ids for chunk in citation.get('chunks',[]))
+                    or any(cid not in live_ids for cid in citation.get('selected_chunk_ids',[]))):
                 return False
     return True
 

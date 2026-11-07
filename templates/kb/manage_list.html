@@ -7,12 +7,14 @@
     <p class="page-desc">管理各部门的手册库与业务数据；上传后自动解析、分块并建立索引。</p>
   </div>
   <div class="page-actions">
-    <a class="btn outline" href="{% url 'kb:feeds' %}">自动更新知识库</a>
+    <a class="btn outline" href="{% url 'kb:feeds' %}">自主数据引擎</a>
     <button class="btn primary" type="button" id="openKbCreate">＋ 新建手册库</button>
   </div>
 </header>
 
-<div class="section-bar">
+{% include "kb/_kb_connections.html" %}
+
+<div class="section-bar" data-kb-category>
   <div><h2>手册库</h2><p>PDF / MD / TXT / 图片（JPG·PNG·WebP）· xlsx / csv 自动识别为业务数据</p></div>
 </div>
 
@@ -43,7 +45,7 @@
   </form>
 </dialog>
 
-<div class="kb-grid">
+<div class="kb-grid" data-kb-category>
   {% for kb in kbs %}
   <div class="kb-card" data-slug="{{ kb.slug }}">
     <div class="pbody">
@@ -60,6 +62,7 @@
       <div class="kb-actions" data-actions>
         <a class="btn sm primary" href="/kb/manage/{{ kb.slug }}/">管理 / 上传</a>
         <a class="btn sm outline" href="/kb/ask/?kb={{ kb.slug }}">检索</a>
+        <button class="btn sm outline" type="button" data-kb-connect="{{ kb.slug }}">关联</button>
         <button class="btn sm outline" type="button" data-rn-toggle
                 data-slug="{{ kb.slug }}" data-name="{{ kb.name }}" data-dept="{{ kb.department }}">改名</button>
         <form method="post" action="/kb/manage/{{ kb.slug }}/delete/" style="display:inline"
@@ -95,11 +98,11 @@
   </form>
 </dialog>
 
-<div class="section-bar dataset-bar">
+<div class="section-bar dataset-bar" data-kb-category>
   <div><h2>业务数据</h2><p>自动采集的数据与导入的 xlsx / csv 在这里管理。</p></div>
   <span class="count-chip">{{ business_kbs|length }} 个采集库{% if is_global_admin %} · {{ datasets|length }} 个导入表{% endif %}</span>
 </div>
-<div>
+<div data-kb-category>
   {% if datasets and is_global_admin or business_kbs %}
   <div class="dataset-grid">
     {% for kb in business_kbs %}
@@ -109,7 +112,14 @@
       <small>{{ kb.business_row_count }} 条记录</small>
       <div class="kb-actions">
         <a class="btn sm primary" href="{% url 'kb:tracker' kb.slug %}">查看追踪表</a>
+        <button class="btn sm outline" type="button" data-kb-connect="{{ kb.slug }}">关联</button>
         <a class="btn sm outline" href="{% url 'kb:feeds' %}?kb={{ kb.slug }}">管理自动更新</a>
+        <form method="post" action="{% url 'kb:manage_delete' kb.slug %}" style="display:inline"
+              data-confirm-title="删除采集库"
+              data-confirm="确定删除「{{ kb.name }}」？{{ kb.business_row_count }} 条记录、追踪表及关联的自动更新任务将一并删除，不可恢复。">
+          {% csrf_token %}
+          <button class="btn sm danger" type="submit">删除</button>
+        </form>
       </div>
     </article>
     {% endfor %}
@@ -174,6 +184,7 @@ function getCSRFToken(){
       const doc = new DOMParser().parseFromString(page, 'text/html');
       const fresh = doc.querySelector('.kb-grid');
       if (fresh) document.querySelector('.kb-grid').innerHTML = fresh.innerHTML;
+      document.dispatchEvent(new CustomEvent('kb-libraries-changed'));
       if (window.fosToast) fosToast(data.message, 'ok');
     } catch(ex) {
       err.textContent = '请求失败：' + ex; err.hidden = false;
@@ -240,6 +251,7 @@ function getCSRFToken(){
       }
       dlg.close();
       if (window.fosToast) fosToast('已保存', 'ok');
+      document.dispatchEvent(new CustomEvent('kb-libraries-changed'));
     } catch (e2) {
       err.textContent = e2.message || '保存失败'; err.hidden = false;
     } finally {

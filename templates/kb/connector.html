@@ -1,45 +1,39 @@
 {% extends "kb/_base.html" %}{% load static %}
-{% block title %}AI 采集助手 · SHDR RAG{% endblock %}
+{% block title %}EnGenie · 自动更新 · SHDR RAG{% endblock %}
 {% block content %}
 <div id="connectorPage" data-create-url="{% url 'kb:connector_create' %}" data-resume-url="{% url 'kb:connector_resume' %}" data-clear-context-url="{% url 'kb:connector_clear_context' %}" data-feed-id="{{ editing_feed.pk|default:'' }}" data-test-auth-url="{% url 'kb:connector_test_auth' %}" data-forget-url="{% url 'kb:connector_forget' %}">
   <header class="cx-header">
-    <div class="cx-heading"><a class="page-back" href="{% url 'kb:feeds' %}">自动更新知识库</a><h1>{% if editing_feed %}修改：{{ editing_feed.name }}{% else %}AI 采集助手{% endif %}</h1><p>{% if editing_feed %}对话随此任务保存。告诉 AI 想改什么，查看样例并确认后更新原脚本。{% else %}描述网页或接口 → 查看真实样例 → 对话调整 → 确认后自动更新到追踪表{% endif %}</p></div>
+    <div class="cx-heading"><a class="page-back" href="{% url 'kb:feeds' %}">自主数据引擎</a><h1>EnGenie · {% if editing_feed %}{{ editing_feed.name }}{% else %}自动任务{% endif %}</h1><p>{% if editing_feed %}对话随此任务保存。告诉 EnGenie 想调整什么，查看新样例并确认后更新任务。{% else %}告诉我数据在哪，剩下的我们一起完成。{% endif %}</p></div>
     <div class="cx-header-actions">
       <button type="button" class="btn outline" id="connectorClearContext" title="清空历史对话和工具上下文，保留已批准脚本、凭据、定时任务和业务数据" {% if not editing_feed %}hidden{% endif %}>清空上下文</button>
       <button type="button" class="btn outline" id="connectorNew">新任务</button>
     </div>
   </header>
   <section class="cx-shell">
-    <template id="connectorAvatarTemplate">{% include 'kb/_collector_avatar.html' %}</template>
+    <template id="connectorAvatarTemplate">{% include 'kb/_assistant_avatar.html' %}</template>
     <div class="cx-messages" id="connectorMessages" aria-live="polite">
       <div class="cx-welcome" id="connectorWelcome">
-        <div class="cx-welcome-icon" aria-hidden="true">{% include 'kb/_collector_avatar.html' %}</div>
-        <h2>你好，我是数据采集助手</h2>
-        <p>给我一个网页或 API 地址，说清楚要什么数据、多久更新一次。我会打开真实页面试采并展示样例；你确认后按计划自动更新到知识库的追踪表。有疑问我会直接在对话里问你。</p>
+        <div class="cx-welcome-icon" aria-hidden="true">{% include 'kb/_assistant_avatar.html' %}</div>
+        <span class="cx-welcome-kicker">自动采集 · 定时更新</span>
+        <h2>你好，我是 EnGenie</h2>
+        <p>发来数据页面或接口地址，告诉我要采集什么、多久更新一次。<br>我会先试采并展示结果，等你确认后再启动自动更新。</p>
         <div class="cx-prompts">
-          <button type="button" class="cx-prompt" data-prompt="打开上海迪士尼乐园官网的项目页，逐个进入详情，采集项目名称、今天的运营开始和结束时间，并计算持续时长（关闭时间−开启时间），每天早上8点更新。">采集乐园项目开放时间 + 持续时长</button>
-          <button type="button" class="cx-prompt" data-prompt="这是一个设备状态接口：https://example.com/status 。采集设备编号、温度和报警明细，每小时更新。">从 API 采集设备状态报表</button>
+          <button type="button" class="cx-prompt" data-prompt="打开上海迪士尼乐园官网的项目页，逐个进入详情，采集项目名称、今天的运营开始和结束时间，并计算持续时长（关闭时间−开启时间），每天早上8点更新。"><span class="cx-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4m8-4v4M4 11h16m-12 5h3m2 0h3"/></svg></span><span class="cx-prompt-copy"><strong>每天更新开放时间</strong><small>采集项目名称、开放时间与持续时长</small></span><span class="cx-prompt-arrow" aria-hidden="true">↗</span></button>
+          <button type="button" class="cx-prompt" data-prompt="这是一个设备状态接口：https://example.com/status 。采集设备编号、温度和报警明细，每小时更新。"><span class="cx-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M7 16v-5m5 5V5m5 11V8"/></svg></span><span class="cx-prompt-copy"><strong>定时同步设备状态</strong><small>保留设备编号、温度与报警明细</small></span><span class="cx-prompt-arrow" aria-hidden="true">↗</span></button>
         </div>
       </div>
     </div>
     <div class="cx-composer">
-      {% if is_global_admin %}<details class="cx-setup" id="connectorPrivatePanel">
-        <summary>内网配置（仅全局管理员）</summary>
-        <div class="cx-setup-form">
-          <label><input type="checkbox" id="connectorPrivate"> 允许访问内网或本机 API</label>
-          <p class="cx-setup-note">用于 10.x、192.168.x、172.16-31.x、127.0.0.1 等内网接口。开关属于当前对话，确认启用后随定时任务一并保存；链路本地、组播和未指定地址始终禁止。</p>
-        </div>
-      </details>{% endif %}
       <form id="composerForm" class="cx-composer-box">
         {% csrf_token %}
-        <textarea id="connectorPrompt" rows="1" maxlength="10000" placeholder="描述要采集的数据，或回答 AI 的问题…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <textarea id="connectorPrompt" rows="1" maxlength="10000" placeholder="告诉 EnGenie 要采集什么、多久更新一次…"></textarea>
         <button type="submit" class="cx-send" id="connectorSend" aria-label="发送" title="发送" data-state="idle"><span class="cx-send-icon" aria-hidden="true"></span><span class="cx-sr-only">发送</span></button>
       </form>
-      <p class="cx-hint" id="connectorHint">任务由真实浏览器与工具执行；预览确认后才会入库并启动定时更新。</p>
+      <p class="cx-hint" id="connectorHint">先查看样例，再确认启用 · Enter 发送，Shift+Enter 换行</p>
     </div>
   </section>
 </div>
 <link rel="stylesheet" href="{% static 'css/feeds.css' %}">
-<link rel="stylesheet" href="{% static 'css/connector_chat.css' %}?v=7">
+<link rel="stylesheet" href="{% static 'css/connector_chat.css' %}?v=9">
 {% endblock %}
-{% block scripts %}<script src="{% static 'js/vendor/marked.min.js' %}" defer></script><script src="{% static 'js/vendor/purify.min.js' %}" defer></script><script src="{% static 'js/connector.js' %}?v=12" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'js/vendor/marked.min.js' %}" defer></script><script src="{% static 'js/vendor/purify.min.js' %}" defer></script><script src="{% static 'js/connector.js' %}?v=15" defer></script>{% endblock %}

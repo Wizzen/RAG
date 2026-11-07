@@ -193,7 +193,7 @@ def create(request):
         kb = get_object_or_404(libraries,slug=data['kb']) if data.get('kb') else None
         credential,headers=_credentials(request,data,url)
         job = collector_api.create_draft(user=request.user,requirement=data.get('prompt',''),api_url=url,
-            credential=credential,header_env=headers,allow_private=data.get('allow_private',False),
+            credential=credential,header_env=headers,allow_private=data.get('allow_private',True),
             sample=data.get('sample'),kb=kb,created_via='web')
         return JsonResponse({'ok':True,'job':_json(job)},status=202)
     except RequestDataTooBig: return JsonResponse({'ok':False,'error':'请求内容过大。'},status=413)
@@ -265,7 +265,7 @@ def enable(request,job_id):
         job=_job(request,job_id)
         data=json.loads(request.body or b'{}')
         feed=collector_api.approve(user=request.user,job=job,write_mode=data.get('write_mode'),
-            department=data.get('department'))
+            department=data.get('department'),selected_fields=data.get('selected_fields'))
         return JsonResponse({'ok':True,'feed_id':str(feed.pk),'url':reverse('kb:feeds')+'?kb='+feed.kb.slug})
     except (ValueError,TypeError,AttributeError) as exc: return JsonResponse({'ok':False,'error':str(exc)},status=400)
 
@@ -305,8 +305,8 @@ def test_auth(request):
     try:
         from .feed_http import read_url
         data=json.loads(request.body);url=data.get('api_url','');validate_url(url)
-        private=data.get('allow_private',False)
-        if not isinstance(private,bool) or (private and not access.is_global_admin(request.user)):raise ValueError('内网服务须由全局管理员启用。')
+        private=data.get('allow_private',True)
+        if not isinstance(private,bool):raise ValueError('内网开关格式无效。')
         auth=data.get('authentication',{'type':'none'})
         if isinstance(auth,dict) and auth.get('type')=='saved':headers=request_headers(_job(request,data.get('credential_job')),url)
         else:_,headers,_=parse_auth(auth)
@@ -341,7 +341,7 @@ def refine(request,job_id):
             if 'authentication' in data:
                 extra['credential'],extra['header_env']=_credentials(request,{**data,'credential_job':str(previous.pk)},url)
         job=collector_api.refine_draft(user=request.user,job=previous,requirement=data.get('feedback',''),
-            allow_private=data.get('allow_private'),**extra)
+            allow_private=data.get('allow_private',True),**extra)
         return JsonResponse({'ok':True,'job':_json(job)},status=202)
     except (ValueError,TypeError,AttributeError) as exc:return JsonResponse({'ok':False,'error':str(exc)},status=400)
 

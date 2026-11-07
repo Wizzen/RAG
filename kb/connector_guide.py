@@ -7,7 +7,7 @@ TOOL_GUIDE = r'''
 先观察一个真实列表、一个真实详情，确认字段，再调用本工具。它接收完整 spec 对象，不是浏览器动作片段。
 必填 name、url、source_type="browser"、records_path="records"、id_paths、body_fields、browser.output。
 1. url 是实际浏览器起始地址。单页应用的 #/spot/list?... 必须原样保留，不能删掉hash，也不能猜造 /spot/list HTTP路径，否则会404。
-2. 日期(今天)、采集日期、采集时间都来自系统时钟，不是官网字段。正文直接写 {"label":"采集日期","source":"today"} 或 {"label":"采集时间","source":"now"}。所有模式都支持，按 timezone=Asia/Shanghai 生成，不需要用户再确认，不搜索网页日期。
+2. 始终在body_fields保留 {"label":"采集日期","source":"today"}，用户确认时该字段必选。它来自采集器系统时钟，按任务timezone（默认Asia/Shanghai）生成，不是官网字段，不需要用户再确认，不搜索网页日期。另需精确采集时间时可用 {"label":"采集时间","source":"now"}。API、DOM和network所有模式都支持。
    如果日期还要用于 id_paths，另在 output.fields 中加 date:{source:"today"}，就会注入每条记录。
 3. network 模式读取浏览器实际捕获的JSON数组，path相对JSON根；保留数组对象原有字段。output.fields 可用 path 映射JSON字段，或用 source 注入系统日期/时间。
    network 支持 detail:{url_field:"详情链接字段",fields:{...}}，会逐条打开真实详情再合并。不是只返回列表！不要因为需要详情或日期就放弃network改猜DOM。

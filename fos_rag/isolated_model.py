@@ -44,6 +44,8 @@ def read_model_config():
 def child_environment():
     """Environment for isolated helpers: same interpreter libraries and installed packages, nothing else."""
     environment = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH") if key in os.environ}
+    # Worker JSON uses UTF-8 regardless of the Windows console's legacy encoding.
+    environment.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     # Deployments may run the bundled interpreter with packages supplied via PYTHONPATH rather than a venv.
     packages = [entry for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep) if entry]
     packages += [entry for entry in sys.path if entry and Path(entry).name in ("site-packages", "dist-packages")]
@@ -56,7 +58,7 @@ def call_model(config, messages):
     environment = child_environment()
     try:
         result = subprocess.run(
-            [sys.executable, "-s", "-P", str(Path(__file__).with_name("isolated_model_worker.py"))],
+            [sys.executable, "-X", "utf8", "-s", "-P", str(Path(__file__).with_name("isolated_model_worker.py"))],
             input=json.dumps({"config": config, "messages": messages}, ensure_ascii=False),
             text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             timeout=165, env=environment, check=False,

@@ -3,15 +3,20 @@
 {% block content %}
 <header class="page-head">
   <div class="page-head-main">
-    <a class="page-back" href="/kb/manage/{{ kb.slug }}/">{{ kb.name }}</a>
-    <h1>{{ kb.name }} <span class="dept-badge">追踪表</span></h1>
+    {% if show_analysis %}<a class="page-back" href="{% url 'kb:manage_list' %}">业务数据</a>{% else %}<a class="page-back" href="/kb/manage/{{ kb.slug }}/">{{ kb.name }}</a>{% endif %}
+    <h1>{{ kb.name }} <span class="dept-badge">{% if show_analysis %}业务数据{% else %}追踪表{% endif %}</span></h1>
   </div>
 </header>
 
+{% if show_analysis %}
+{% include "kb/_tracker_analysis.html" %}
+<details class="trk-raw" id="trkRawRecords">
+  <summary>原始记录 <span>全部 {{ rows|length }} 条采集记录 · 展开查看明细</span></summary>
+{% endif %}
 <div class="section-bar">
   <div>
     <h2>追踪记录</h2>
-    <p>{% if tracker.enabled %}已启用 · 新文档入库后自动登记{% else %}未启用{% endif %}
+    <p>{% if show_analysis %}全量采集记录 · 分析筛选不改变原始数据{% elif tracker.enabled %}已启用 · 新文档入库后自动登记{% else %}未启用{% endif %}
        · {{ rows|length }} 条
        {% if missing_n %}· {{ missing_n }} 份已完成文档待补录{% endif %}</p>
   </div>
@@ -44,7 +49,7 @@
   <tbody>
     {% for r in rows %}
     <tr class="trk-row" data-status="{{ r.status }}" title="点击展开 / 收起完整字段值">
-      <td class="c-doc" title="{{ r.doc_name }}">{{ r.doc_name }}</td>
+      <td class="c-doc" title="{{ r.doc_name }}">{{ r.doc_name }}{% if r.is_feed and r.status == 'done' %}<button type="button" class="trk-analyze" data-row-id="{{ r.id }}">趋势分析 ↗</button>{% endif %}</td>
       {% for p in r.pairs %}
       <td class="c-val{% if p.changed %} chg{% endif %}" title="{{ p.label }}：{{ p.value }}">{{ p.value }}</td>
       {% endfor %}
@@ -107,6 +112,7 @@
 </div>
 {% endif %}
 
+{% if show_analysis %}</details>{% endif %}
 {% if tracker.enabled %}
 <div class="section-bar">
   <div><h2>抽取配置</h2><p>字段即表格列名；抽取由站点 LLM 完成，失败可重试</p></div>

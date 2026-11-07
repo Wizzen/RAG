@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+import mimetypes
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -111,6 +112,9 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
+
+# Windows can register .mjs as text/plain, which browsers reject for modules.
+mimetypes.add_type("application/javascript", ".mjs")
 
 # 用户上传文件
 MEDIA_URL = "/media/"

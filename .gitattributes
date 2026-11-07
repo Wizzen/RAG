@@ -1,0 +1,2 @@
+# Preserve the published bytes of bundled JavaScript modules on Windows.
+static/**/vendor/**/*.mjs text eol=lf

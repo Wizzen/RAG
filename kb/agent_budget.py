@@ -5,8 +5,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 class RetrievalBudget(AgentMiddleware):
     """Limit tool rounds per current user turn; history does not consume the budget."""
-    def __init__(self, max_rounds=5):
+    def __init__(self, max_rounds=5, selection=None):
         self.max_rounds = max_rounds
+        self.selection = selection
 
     def prepare(self, request):
         rounds = 0
@@ -24,10 +25,22 @@ class RetrievalBudget(AgentMiddleware):
                     key = (call['name'], json.dumps(call.get('args', {}), sort_keys=True, ensure_ascii=False))
                     repeated = repeated or key in seen
                     seen.add(key)
+        original = request.system_message.content if request.system_message else ''
+        if self.selection is not None and (self.selection.pending or (
+                (rounds>=self.max_rounds or repeated) and self.selection.state.get('used')
+                and not self.selection.state.get('finalized'))):
+            def name(tool):
+                if isinstance(tool,dict):return tool.get('name') or tool.get('function',{}).get('name')
+                return getattr(tool,'name',getattr(tool,'__name__',''))
+            tools = [tool for tool in request.tools if name(tool)=='kb_select_evidence']
+            if tools:
+                return request.override(tools=tools,
+                    tool_choice={'type':'function','function':{'name':'kb_select_evidence'}},
+                    system_message=SystemMessage(content=str(original)+'\n先确认最终采用的已读证据编号，再回答。'
+                        '只允许选择已读编号；不足时选空数组后澄清，不把候选短预览当作事实。'))
         if rounds < self.max_rounds and not repeated:
             return request
-        original = request.system_message.content if request.system_message else ''
-        instruction = ('\n检索阶段已结束。只能使用本轮工具返回的原文证据或已核对的图谱事实回答当前问题；'
+        instruction = ('\n本轮工具调用预算已用完。根据会话中已有的原文证据、追踪表查询/统计结果或已核对的图谱事实回答当前问题；'
                        '禁止继续调用工具、补写不存在的数据或把旧答案当事实。'
                        '若当前对象不明确，直接请求用户确认；若资料不足，明确列出缺失项。'
                        '不要声称已完成完整比较，除非各方资料都支持；请用简洁中文给出最终回答。')

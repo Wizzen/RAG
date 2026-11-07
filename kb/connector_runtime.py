@@ -19,6 +19,12 @@ MISSING=object()
 _SCALE={'seconds':1,'minutes':60,'hours':3600,'days':86400}
 
 
+def with_collection_date(spec):
+    """Generated connectors always use the collector's local date, never a website field."""
+    fields=[field for field in spec['body_fields'] if field['label']!='采集日期']
+    return {**spec,'body_fields':fields+[{'label':'采集日期','source':'today'}]}
+
+
 def lookup(data,path,default=MISSING):
     if path=='':return data
     parts=[part.replace('~1','/').replace('~0','~') for part in path[1:].split('/')] if path.startswith('/') else path.split('.')
@@ -102,7 +108,7 @@ def validate_spec(spec):
     if 'single_record' in spec and not isinstance(spec['single_record'],bool):raise ValueError('single_record 必须是布尔值。')
     ids=spec.get('id_paths');fields=spec.get('body_fields')
     if not isinstance(ids,list) or not 1<=len(ids)<=4 or any(not isinstance(path,str) or not path for path in ids):raise ValueError('id_paths 必须明确指定1至4个稳定 ID 字段。')
-    if not isinstance(fields,list) or not 1<=len(fields)<=30:raise ValueError('请指定1至30个需要采集的正文字段。')
+    if not isinstance(fields,list) or not 1<=len(fields)<=31:raise ValueError('请指定1至30个业务字段及采集日期。')
     for field in fields:
         if not isinstance(field,dict) or not field.keys()<={'label','path','unit','format','required','columns','computed','required_unless','source'} or not isinstance(field.get('label'),str) or not field['label']:raise ValueError('正文字段必须包含 label，并指定 path、source 或 computed。')
         rule=field.get('required_unless')
@@ -127,6 +133,7 @@ def validate_spec(spec):
             columns=field.get('columns')
             if not isinstance(columns,list) or not 1<=len(columns)<=15 or any(not isinstance(c,dict) or set(c)!={'label','path'} or not isinstance(c['label'],str) or not isinstance(c['path'],str) for c in columns):raise ValueError('表格字段必须指定 columns 的 label/path。')
     query=spec.get('query',{});headers=spec.get('header_env',{})
+    if sum(field['label']!='采集日期' for field in fields)>30:raise ValueError('业务字段最多30个，另保留采集日期。')
     if not isinstance(query,dict) or len(query)>20 or any(not isinstance(k,str) or not isinstance(v,(str,int,float,bool)) for k,v in query.items()):raise ValueError('query 仅支持最多20个简单查询参数。')
     if not isinstance(headers,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not re.fullmatch('FOS_FEED_[A-Z0-9_]+',v) for k,v in headers.items()):raise ValueError('请求头只能引用 FOS_FEED_ 环境变量。')
     for key in ('metadata_paths',):

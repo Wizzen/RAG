@@ -519,6 +519,7 @@ def run_action(action, params, *, export=False):
             env=env,
             input=json.dumps({"action": action, "params": values, **({"export": True} if export else {})}),
             text=True,
+            encoding="utf-8",
             capture_output=True,
             timeout=125,
             check=False,

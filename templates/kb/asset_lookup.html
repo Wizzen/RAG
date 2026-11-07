@@ -19,8 +19,8 @@
 </form>
 
 {% if q and lookup %}
-  <div class="result-summary {% if lookup.records or lookup.manual_matches or semantic_matches %}has-result{% else %}no-result{% endif %}">
-    <strong>{% if lookup.records or lookup.manual_matches or semantic_matches %}已找到「{{ q }}」的综合结果{% else %}未找到「{{ q }}」{% endif %}</strong>
+  <div class="result-summary {% if lookup.records or lookup.manual_matches or semantic_matches or image_matches %}has-result{% else %}no-result{% endif %}">
+    <strong>{% if lookup.records or lookup.manual_matches or semantic_matches or image_matches %}已找到「{{ q }}」的综合结果{% else %}未找到「{{ q }}」{% endif %}</strong>
     <span class="sum-chips">
       <span class="sum-chip{% if not lookup.direct_count %} zero{% endif %}" title="在导入的业务表格（图纸号 / 部件号 / G-code / 设备 / APEX）里，搜索词直接匹配到的行">业务表 {{ lookup.direct_count }}</span>
       <span class="sum-chip{% if not lookup.records %} zero{% endif %}" title="沿 图纸号↔部件↔设备↔APEX↔停机记录 的关系链扩展出的相关行（含上面的直接命中）">含关联 {{ lookup.records|length }}</span>
@@ -121,7 +121,7 @@
       {% for m in semantic_matches %}
       <article class="manual-card">
         <div><strong>{{ m.source }}</strong>{% if m.page %} <span class="sem-page">P{{ m.page|cut:"第 "|cut:" "|cut:"页" }}</span>{% endif %}
-          <span class="match-meta">{% if m.section %}{{ m.section }} · {% endif %}{{ m.via }}{% if m.score %}<span class="rel-badge" title="重排序模型给出的匹配度"><span class="rel-bar" style="width:{% widthratio m.score 1 100 %}%"></span><i>{% widthratio m.score 1 100 %}%</i></span>{% endif %}</span>
+          <span class="match-meta">{% if m.section %}{{ m.section }} · {% endif %}{{ m.via }}{% if m.score != None %}<span class="rel-badge" title="重排序模型给出的匹配度"><span class="rel-bar" style="width:{% widthratio m.score 1 100 %}%"></span><i>{% widthratio m.score 1 100 %}%</i></span>{% endif %}</span>
         </div>
         <p>{{ m.text|truncatechars:180 }}</p>
         <div class="hit-chips">
@@ -145,7 +145,7 @@
           <img src="{{ m.images.0 }}" alt="图片命中：{{ m.section|default:m.source }}" loading="lazy">
           <span class="img-cap">{{ m.section|default:m.source|truncatechars:14 }}</span>
         </a>
-        {% if m.score %}<span class="rel-badge img-rel" title="图文向量相似度（与文本栏的重排序匹配度口径不同）"><span class="rel-bar" style="width:{% widthratio m.score 1 100 %}%"></span><i>{% widthratio m.score 1 100 %}%</i></span>{% endif %}
+        {% if m.score != None %}<span class="rel-badge img-rel" title="图文向量相似度（与文本栏的重排序匹配度口径不同）"><span class="rel-bar" style="width:{% widthratio m.score 1 100 %}%"></span><i>{% widthratio m.score 1 100 %}%</i></span>{% endif %}
         {% if m.chunk_id %}<button type="button" class="img-ev-btn ev-open" data-chunk="{{ m.chunk_id }}" title="在原 PDF 中定位此图">📍 定位</button>{% endif %}
       </div>
       {% endfor %}

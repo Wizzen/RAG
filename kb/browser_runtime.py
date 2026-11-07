@@ -251,7 +251,7 @@ class BrowserSession:
             if cached:
                 self.cache_hits+=1;status,headers,body=cached;await route.fulfill(status=status,headers=headers,body=body);return
             self.requests+=1
-            if self.requests>MAX_REQUESTS or self.bytes>MAX_BYTES:raise ValueError('网页请求量超过本次采集上限。')
+            if self.requests>MAX_REQUESTS or self.bytes>MAX_BYTES:raise ValueError('网页请求量超过本次采集上限。请减少整页导航与逐条详情访问，优先network或html渲染取数，并用max_pages缩小范围；图片等静态资源已自动拦截，无需处理。')
             status,headers,body,cookies=await asyncio.to_thread(self.fetcher,request.url,request.method,values,request.post_data_buffer,
                 private_origins=self.private_origins,allow_private=self.allow_private)
             self.bytes+=len(body)

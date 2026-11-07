@@ -52,17 +52,23 @@ html:has(#ops-ai-drawer[open]) { overflow: hidden; }
   overflow: hidden;
 }
 .ops-assistant.is-wide { width: min(1560px, calc(100vw - 28px)); }
-.ops-assistant[open] { display: flex; flex-direction: column; animation: ops-assistant-in .2s ease-out; }
+.ops-assistant[open] { display: flex; flex-direction: column; transform-origin:bottom right; animation: ops-assistant-in .32s cubic-bezier(.2,.85,.25,1); }
 .ops-assistant::backdrop { background: #101c3038; }
 @keyframes ops-assistant-in {
-  from { transform: translateX(16px); opacity: .3; }
-  to { transform: translateX(0); opacity: 1; }
+  from { transform: translateY(18px) scale(.98); opacity: 0; }
+  to { transform: none; opacity: 1; }
 }
 .ops-assistant-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 14px 18px 14px 22px; border-bottom: 1px solid var(--rule-soft); }
 .ops-assistant-avatar { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 14px; background: var(--brand-soft); color: var(--brand); }
 .ops-assistant-avatar svg { width: 30px; height: 30px; }
 .ops-assistant-head small { color: var(--dim); font: 650 10px/1.4 var(--fb); letter-spacing: .13em; }
 .ops-assistant-head h2 { margin: 2px 0 0; font-size: 19px; line-height: 1.25; letter-spacing: -.03em; }
+.ops-assistant-head{color:#f7faff;background:radial-gradient(ellipse at 90% 100%,#18506a 0%,transparent 65%),linear-gradient(110deg,#101b2d,#172c46 60%,#173a52);border-bottom-color:#ffffff18}
+.ops-assistant-head h2{color:inherit}.ops-assistant-head small{color:#b7d5e9}
+.ops-assistant-head .ops-assistant-avatar{background:#ffffff0d;color:#a5e2e4;border:1px solid #ffffff18}
+.ops-assistant-head .ops-assistant-tool,.ops-assistant-head .ops-assistant-close{color:#ccdae6;background:transparent;border:1px solid #ffffff20}
+.ops-assistant-head .ops-assistant-tool:is(:hover,[aria-expanded="true"]),.ops-assistant-head .ops-assistant-close:hover{color:white;background:#ffffff14;border-color:#ffffff30}
+.ops-assistant-head button:focus-visible{outline-color:#a5e2e4}
 .ops-assistant-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .ops-assistant-tool {
   display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 12px;

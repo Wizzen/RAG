@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from pathlib import Path
 from typing import Any
@@ -302,8 +303,22 @@ def is_kb_ready(kb_slug: str) -> bool:
         return False
 
 
+IMAGE_RESULT_LIMIT = 8
+IMAGE_MAX_DISTANCE = 1.45
+
+
+def _image_distance(value, max_distance: float = IMAGE_MAX_DISTANCE) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        distance = float(value)
+    except (TypeError, ValueError):
+        return None
+    return distance if math.isfinite(distance) and 0 <= distance <= max_distance else None
+
+
 def _image_lane(slugs: list[str], query_embedding: list[float] | None,
-                limit: int = 8, max_distance: float = 1.45) -> list[dict[str, Any]]:
+                limit: int = IMAGE_RESULT_LIMIT, max_distance: float = IMAGE_MAX_DISTANCE) -> list[dict[str, Any]]:
     """图片块专用召回道（WeMM 多模态块，type=image）。
 
     实测多模态块与文本查询存在固有模态鸿沟（同查询下文本块余弦≈0.5、
@@ -334,7 +349,8 @@ def _image_lane(slugs: list[str], query_embedding: list[float] | None,
             cids = (res.get("ids") or [[]])[0] or []
             for d, m, dist, cid in zip(docs, metas, dists, cids):
                 m = m or {}
-                if not m.get("image"):
+                distance = _image_distance(dist, max_distance)
+                if not m.get("image") or distance is None:
                     continue
                 item = {
                     "text": (d or "").strip() or "文档插图",
@@ -343,28 +359,38 @@ def _image_lane(slugs: list[str], query_embedding: list[float] | None,
                     "score": 0.0, "via": "img",
                     "type": "image", "image": m["image"],
                     "chunk_id": cid or "",
+                    "kb_slug": slug,
                     # 原始余弦距离（0=完全相同，2=相反）：供前端换算图文相似度
-                    "distance": round(float(dist), 4) if dist is not None else None,
+                    "distance": distance,
                 }
                 if isinstance(m.get("page"), int):
                     item["page_block"] = True  # 整页视觉块（视觉文档模式）
-                ranked.append((float(dist or 1.0), item))
+                ranked.append((distance, item))
         except Exception:
             logging.getLogger(__name__).warning(
                 "图片召回道失败（跳过该库）kb=%s", slug, exc_info=True)
     ranked.sort(key=lambda t: t[0])
-    out = [item for dist, item in ranked[:limit] if dist <= max_distance]
+    out = []
+    seen = set()
+    for _distance, item in ranked:
+        identity = (item['kb_slug'], item['source'], item['image'])
+        if identity in seen:
+            continue
+        seen.add(identity)
+        out.append(item)
+        if len(out) >= limit:
+            break
     # doc_id 映射（与 search() 同款：来源出处链接需要 doc_id）
     if out:
         try:
             from .models import Document
             name_to_id = {
-                d["original_name"]: str(d["id"])
+                (d["kb__slug"], d["original_name"]): str(d["id"])
                 for d in Document.objects.filter(
-                    kb__slug__in=slugs).values("original_name", "id")
+                    kb__slug__in=slugs).values("kb__slug", "original_name", "id")
             }
             for r in out:
-                r["doc_id"] = name_to_id.get(r["source"], "")
+                r["doc_id"] = name_to_id.get((r['kb_slug'], r["source"]), "")
                 # 图片块 id 规则 img-<doc_id>-<hash>（入库时生成）；老向量库
                 # 查询未带 id 的在这里按同一规则补
                 if r.get("type") == "image" and not r.get("chunk_id"):
@@ -409,7 +435,12 @@ def search_folder(child_slugs: list[str], query: str, k: int | None = None,
             logging.getLogger(__name__).exception("子库检索失败（跳过）kb=%s", slug)
             continue
 
-    # 跨库去重：同一块（含图片块）只保留一次，RRF 分累加后统一排序
+    if include_images:
+        # The image panel has a separate distance-scored lane. Generic vector
+        # recall has no distances and must not bypass that lane's cutoff or cap.
+        all_results = [r for r in all_results if r.get('type') != 'image']
+
+    # 跨库去重：同一块只保留一次，RRF 分累加后统一排序
     fused: dict[str, dict[str, Any]] = {}
     for r in all_results:
         key = _result_key(r)
@@ -447,13 +478,7 @@ def search_folder(child_slugs: list[str], query: str, k: int | None = None,
 
     # ---- 图片专用召回道（精排后并入：rerank 只看文本，图片必被弃）----
     if include_images:
-        seen = {_fuse_key(r.get("text", "") + (r.get("image") or "")) for r in results}
-        for it in _image_lane(child_slugs, q_emb):
-            key = _fuse_key(it.get("text", "") + (it.get("image") or ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            results.append(it)
+        results.extend(_image_lane(child_slugs, q_emb))
     return results
 
 

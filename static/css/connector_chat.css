@@ -49,6 +49,11 @@
 .cx-shot img{display:block;width:100%;height:auto}
 .cx-preview{border:1px solid #dfe7da;border-radius:12px;padding:14px 16px;margin-top:6px;background:#fff}
 .cx-preview h3{margin:0 0 4px;font-size:15px}
+.cx-field-selection{min-width:0;margin:12px 0;padding:10px 12px;border:1px solid var(--rule-soft);border-radius:10px}
+.cx-field-selection legend{padding:0 4px;font-size:13px;color:var(--text)}
+.cx-field-choices{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.cx-field-choice{display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--rule-soft);border-radius:8px;font-size:12px;cursor:pointer;background:var(--surface)}
+.cx-field-choice input{accent-color:var(--ok);margin:0}
 .cx-meta{margin:0 0 8px;font-size:12px;color:#7c8a7f}
 .cx-coverage{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
 .cx-badge{padding:1px 8px;border:1px solid;border-radius:10px;font-size:11px}
@@ -114,3 +119,20 @@
 /* 内网开关面板（AI 采集助手输入框上方，仅全局管理员可见） */
 .cx-composer>.cx-setup{border-color:var(--rule-soft)}.cx-composer>.cx-setup summary{color:var(--dim)}.cx-composer>.cx-setup summary:hover{color:var(--brand)}
 .cx-setup-form label{color:var(--text)}.cx-setup-note{color:var(--dim)}.cx-setup-form input[type=checkbox]{accent-color:var(--brand)}
+.cx-welcome{gap:0;padding:28px 0 20px;min-height:min(430px,60vh)}
+.cx-welcome-icon{width:70px;height:70px;padding:14px;margin-bottom:17px;color:var(--brand);background:var(--surface-2);border:1px solid var(--rule);border-radius:22px;box-shadow:var(--shadow-sm)}
+.cx-welcome-icon svg{width:40px;height:40px;flex:none}
+.cx-welcome-kicker{color:var(--mute);font-size:10px;letter-spacing:.1em;margin-bottom:6px}
+.cx-welcome h2{font:650 24px/1.5 var(--fb);letter-spacing:-.045em;margin:0 0 10px}
+.cx-welcome p{font:12px/1.9 var(--fb);color:var(--dim);margin:0;max-width:440px}
+.cx-avatar{width:34px;height:34px;background:var(--brand-soft);color:var(--brand);border:1px solid var(--rule);border-radius:11px}
+.cx-avatar svg{width:23px;height:23px}.cx-avatar.is-live{box-shadow:0 0 0 3px var(--brand-soft)}
+.cx-turn-head{flex-wrap:wrap}.cx-turn-name{font:600 11px var(--fb);color:var(--text)}.cx-turn-status{font-size:11px;min-width:0}
+.cx-prompts{max-width:440px;gap:8px;margin-top:24px}
+.cx-prompt{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;transition:background .16s,border-color .16s,transform .16s}
+.cx-prompt:hover{transform:translateX(2px);background:var(--surface-2);border-color:var(--brand)}
+.cx-prompt-copy{flex:1;min-width:0}.cx-prompt strong,.cx-prompt small{display:block}.cx-prompt strong{font:600 12px var(--fb);color:var(--text)}.cx-prompt small{font:10px/1.6 var(--fb);color:var(--dim);margin-top:3px}
+.cx-prompt-icon{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--brand-soft);color:var(--brand);flex:none}
+.cx-prompt-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.cx-prompt-arrow{font-size:15px;color:var(--mute)}
+@media(max-width:620px){.cx-welcome{padding-top:20px}.cx-welcome h2{font-size:22px}.cx-welcome p{max-width:310px}.cx-prompt{padding:11px 12px}.cx-turn-status{flex:1}}
+@media(prefers-reduced-motion:reduce){.cx-prompt{transition:none}.cx-prompt:hover{transform:none}}

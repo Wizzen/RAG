@@ -236,17 +236,17 @@ class ConnectorViewsTests(TestCase):
             self.assertEqual(self.create().status_code,400);self.assertEqual(start.call_count,1)
         self.assertEqual(KnowledgeFeed.objects.count(),0)
 
-    def test_private_switch_requires_global_admin_and_follows_the_conversation(self):
-        """内网地址默认关闭；开启只能由全局管理员完成，并随后续反馈与定时任务延续。"""
+    def test_private_open_by_default_and_follows_the_conversation(self):
+        """内网访问默认开放：页面不再有开关，显式关闭仍有效并随后续反馈延续。"""
         with patch('kb.collector_api.start_async'):
-            created = self.create(allow_private=True)
+            created = self.create()
             self.assertEqual(created.status_code, 202, created.content)
             job = ConnectorDraft.objects.get(pk=created.json()['job']['id'])
             self.assertTrue(job.allow_private)
         ConnectorDraft.objects.filter(pk=job.pk).update(status='needs_info')
         with patch('kb.collector_api.start_async'):
             reply = self.client.post(reverse('kb:connector_refine', args=[job.pk]),
-                json.dumps({'feedback': '已授权，请重新读取内网接口文档'}), content_type='application/json')
+                json.dumps({'feedback': '请重新读取内网接口文档'}), content_type='application/json')
             self.assertEqual(reply.status_code, 202, reply.content)
             child = ConnectorDraft.objects.get(pk=reply.json()['job']['id'])
             self.assertTrue(child.allow_private)
@@ -260,21 +260,15 @@ class ConnectorViewsTests(TestCase):
         dept = get_user_model().objects.create_user('dept-builder')
         UserProfile.objects.update_or_create(user=dept, defaults={'department': '机械', 'role': UserProfile.Role.DEPT_ADMIN})
         self.client.force_login(dept)
-        self.assertEqual(self.create(allow_private=True).status_code, 400)
         with patch('kb.collector_api.start_async'):
-            own = self.create()
+            own = self.create(allow_private=True)
             self.assertEqual(own.status_code, 202, own.content)
-            own_id = own.json()['job']['id']
-        ConnectorDraft.objects.filter(pk=own_id).update(status='needs_info')
-        with patch('kb.collector_api.start_async'):
-            self.assertEqual(self.client.post(reverse('kb:connector_refine', args=[own_id]),
-                json.dumps({'feedback': '开启内网后重试', 'allow_private': True}),
-                content_type='application/json').status_code, 400)
+            self.assertTrue(own.json()['job']['allow_private'])   # 部门管理员同样自动开放，无需额外授权
         page = self.client.get(reverse('kb:connector_builder'))
         self.assertEqual(page.status_code, 200)
         self.assertNotContains(page, 'connectorPrivate')
         self.client.force_login(self.user)
-        self.assertContains(self.client.get(reverse('kb:connector_builder')), 'connectorPrivate')
+        self.assertNotContains(self.client.get(reverse('kb:connector_builder')), 'connectorPrivate')
 
     def test_thread_returns_conversation_chain_and_builder_page_renders_chat(self):
         root=ConnectorDraft.objects.create(user=self.user,prompt='原始采集需求',status='failed')

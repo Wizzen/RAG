@@ -14,9 +14,9 @@ from django.utils import timezone
 
 from kb import collector_api
 from kb.feed_credentials import parse_auth
-from kb.models import ConnectorDraft, KnowledgeBase, KnowledgeFeed
+from kb.models import ConnectorDraft, KnowledgeBase, KnowledgeFeed, TrackerRow
 
-from .test_connector import spec
+from .test_connector import spec, sample
 
 SECRET = "meapi_AbCdEf1234567890_-xYz"
 
@@ -68,11 +68,12 @@ class CollectorDraftTests(TestCase):
         self.assertIn("[REDACTED]", job.prompt)   # 模型看不到明文，只能用已绑定的凭据取数
         self.assertEqual(self.start.call_args.args, (job.pk,))
 
-    def test_intranet_source_requires_global_admin(self):
-        with self.assertRaises(ValueError):
-            self.create(self.dept, allow_private=True)
+    def test_intranet_source_open_by_default(self):
+        job = self.create(self.dept)
+        self.assertTrue(job.allow_private)                     # 新任务默认开放内网，不再仅限全局管理员
+        ConnectorDraft.objects.filter(pk=job.pk).update(status="ready")  # 同账号同时只允许一个生成中任务
         self.assertTrue(self.create(self.admin, allow_private=True).allow_private)
-        self.assertFalse(self.create(self.dept).allow_private)
+        self.assertFalse(self.create(self.dept, allow_private=False).allow_private)  # 显式关闭仍有效
 
     def test_department_manager_can_attach_page_credential(self):
         """凭据自带的绑定引用不是「服务器环境变量」，部门管理员可以使用。"""
@@ -136,6 +137,38 @@ class CollectorApproveTests(TestCase):
         self.assertEqual(self.publish.call_count, 0)
         self.assertGreater(feed.next_run_at, timezone.now() - timezone.timedelta(hours=1))
 
+    def test_confirmation_projects_selected_fields_and_preserves_calculation_inputs(self):
+        from kb.connector_runtime import build_batch
+        job = self.ready_job(job_spec=spec(body_fields=[{'label':'温度','path':'temperature'},
+            {'label':'双倍温度','computed':{'op':'multiply','args':[{'field':'temperature'},2]}}]))
+        self.client.force_login(self.admin)
+        from django.urls import reverse
+        response = self.client.post(reverse('kb:connector_enable', args=[job.pk]),
+            json.dumps({'selected_fields':['双倍温度']}), content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        feed = KnowledgeFeed.objects.get(pk=response.json()['feed_id'])
+        self.assertEqual([f['label'] for f in feed.adapter_spec['body_fields']], ['双倍温度','采集日期'])
+        self.assertEqual(feed.adapter_spec['id_paths'], job.spec['id_paths'])
+        fields = build_batch(feed.adapter_spec, sample())['items'][0]['fields']
+        self.assertEqual(fields['双倍温度'], 50)
+        self.assertNotIn('温度', fields)
+        self.assertRegex(fields['采集日期'], r'^\d{4}-\d{2}-\d{2}$')
+
+    def test_empty_selection_keeps_date_and_invalid_selection_rolls_back(self):
+        for selection in ('温度', ['不存在'], [None]):
+            job = self.ready_job()
+            with self.assertRaises(ValueError):
+                collector_api.approve(user=self.admin, job=job, selected_fields=selection, run_now=False)
+            job.refresh_from_db()
+            self.assertEqual(job.status, 'ready')
+        self.assertEqual(KnowledgeFeed.objects.count(), 0)
+        feed = collector_api.approve(user=self.admin, job=self.ready_job(), selected_fields=[], run_now=False)
+        self.assertEqual(feed.adapter_spec['body_fields'], [{'label':'采集日期','source':'today'}])
+
+    def test_no_selection_preserves_all_fields_plus_collection_date(self):
+        feed = collector_api.approve(user=self.admin, job=self.ready_job(), run_now=False)
+        self.assertEqual([f['label'] for f in feed.adapter_spec['body_fields']], ['温度','报警','采集日期'])
+
 
 class CollectorRefineTests(TestCase):
     def setUp(self):
@@ -154,13 +187,13 @@ class CollectorRefineTests(TestCase):
         self.assertEqual(child.created_via, "cli")
         self.assertEqual(ConnectorDraft.objects.get(pk=parent.pk).status, "revised")
 
-    def test_refine_cannot_open_intranet_for_non_admin(self):
+    def test_refine_can_open_intranet_for_non_admin(self):
         from accounts.models import UserProfile
         dept = get_user_model().objects.create_user("refine-dept")
         UserProfile.objects.update_or_create(user=dept, defaults={"department": "机械", "role": UserProfile.Role.DEPT_ADMIN})
         parent = ConnectorDraft.objects.create(user=dept, prompt="API https://api.example.test/reports", status="needs_info")
-        with self.assertRaises(ValueError):
-            collector_api.refine_draft(user=dept, job=parent, requirement="开启内网", allow_private=True)
+        child = collector_api.refine_draft(user=dept, job=parent, requirement="开启内网", allow_private=True)
+        self.assertTrue(child.allow_private)
 
 
 class BuildFeedCommandTests(TestCase):
@@ -178,7 +211,7 @@ class BuildFeedCommandTests(TestCase):
         with patch.dict("os.environ", {"FOS_TEST_TOKEN": SECRET}):
             out, _, _ = self.run_command("每天13点拉 https://api.example.test/reports 采集每车里程",
                                          "--url", "https://api.example.test/reports", "--token-env", "FOS_TEST_TOKEN",
-                                         "--private", "--wait", "0", "--json")
+                                         "--wait", "0", "--json")
         state = json.loads(out)
         job = ConnectorDraft.objects.get(pk=state["id"])
         self.assertEqual(job.created_via, "cli")
@@ -196,10 +229,36 @@ class BuildFeedCommandTests(TestCase):
         job = ConnectorDraft.objects.create(user=self.admin, prompt="API https://api.example.test/reports",
             api_url="https://api.example.test/reports", status="ready", spec=spec(), preview={"valid": True, "items": 2},
             created_via="cli")
-        out, _, _ = self.run_command("--job", str(job.pk), "--approve")
+        with patch('kb.feed_http.read_url', return_value=(200, {'content-type':'application/json'}, json.dumps(sample()).encode())):
+            out, _, _ = self.run_command("--job", str(job.pk), "--approve")
         self.assertEqual(KnowledgeFeed.objects.count(), 1)
         self.assertIn("已启用定时数据源", out)
         self.assertEqual(KnowledgeFeed.objects.get().cron, "0 8 * * *")
+        self.publish.assert_not_called()
+        self.assertEqual(KnowledgeFeed.objects.get().runs.get().status, 'completed')
+        self.assertEqual(TrackerRow.objects.count(), 1)
+        self.assertIn('采集日期', TrackerRow.objects.get().values)
+
+    def test_cli_first_import_failure_exits_unsuccessfully_and_releases_lease(self):
+        job = ConnectorDraft.objects.create(user=self.admin, prompt='API https://api.example.test/reports',
+            api_url=spec()['url'], status='ready', spec=spec(), preview={'valid':True})
+        with patch('kb.feed_http.read_url', side_effect=ValueError('合成接口不可用')):
+            with self.assertRaisesMessage(CommandError, '首次入库未完成'):
+                self.run_command('--job', str(job.pk), '--approve')
+        feed = KnowledgeFeed.objects.get()
+        self.assertEqual(feed.runs.get().status, 'failed')
+        self.assertEqual(feed.lease_token, '')
+        self.assertTrue(feed.enabled)
+        self.publish.assert_not_called()
+
+    def test_cli_can_schedule_without_first_import(self):
+        job = ConnectorDraft.objects.create(user=self.admin, prompt='API https://api.example.test/reports',
+            api_url=spec()['url'], status='ready', spec=spec(), preview={'valid':True})
+        with patch('kb.collector_api.execute_feed') as execute:
+            self.run_command('--job', str(job.pk), '--approve', '--no-first-run')
+        execute.assert_not_called()
+        self.publish.assert_not_called()
+        self.assertEqual(KnowledgeFeed.objects.get().runs.count(), 0)
 
     def test_cli_reports_needs_info_and_exits_with_code(self):
         ConnectorDraft.objects.create(user=self.admin, prompt="API https://api.example.test/reports", status="ready",

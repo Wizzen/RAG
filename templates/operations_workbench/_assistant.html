@@ -1,13 +1,13 @@
-<button id="ops-ai-launcher" class="ops-ai-launcher" type="button" aria-label="打开运维 AI"
+<button id="ops-ai-launcher" class="ops-ai-launcher" type="button" aria-label="打开 EnGenie 运维助手"
         aria-haspopup="dialog" aria-controls="ops-ai-drawer" aria-expanded="false">
   {% include 'kb/_assistant_avatar.html' %}
-  <span>运维 AI</span>
+  <span>EnGenie · 运维分析</span>
 </button>
 
 <dialog id="ops-ai-drawer" class="ops-assistant is-wide" aria-labelledby="ops-ai-title">
   <header class="ops-assistant-head">
     <span class="ops-assistant-avatar">{% include 'kb/_assistant_avatar.html' %}</span>
-    <div><small lang="en">OPERATIONS AI</small><h2 id="ops-ai-title">运维 AI</h2></div>
+    <div><small>运维数据助手</small><h2 id="ops-ai-title">EnGenie</h2></div>
     <div class="ops-assistant-tools">
       <button id="ops-ai-new" class="ops-assistant-tool" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>新对话</span>
@@ -18,13 +18,13 @@
       <button id="ops-ai-size" class="ops-assistant-tool" type="button" aria-pressed="true" aria-label="切换为侧边栏">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></svg><span>侧边栏</span>
       </button>
-      <button id="ops-ai-close" class="ops-assistant-close" type="button" aria-label="收起运维 AI" autofocus>
+      <button id="ops-ai-close" class="ops-assistant-close" type="button" aria-label="收起 EnGenie 运维助手" autofocus>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
       </button>
     </div>
   </header>
   <div class="ops-assistant-layout">
-    <aside id="ops-ai-history" class="ops-ai-history" aria-label="运维 AI 历史对话">
+    <aside id="ops-ai-history" class="ops-ai-history" aria-label="EnGenie 运维历史对话">
       <div class="ops-ai-history-head">
         <h3>历史对话</h3>
         <button id="ops-ai-clear" class="ops-link" type="button">清空</button>

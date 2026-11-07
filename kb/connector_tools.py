@@ -9,7 +9,7 @@ from urllib.parse import urlencode,urlsplit,urljoin,parse_qs
 
 from .feed_http import read_url
 from .feed_protocol import validate_batch
-from .connector_runtime import build_batch,validate_spec,lookup,field_value,field_exempt
+from .connector_runtime import build_batch,validate_spec,lookup,field_value,field_exempt,with_collection_date
 
 SENSITIVE={'authorization','password','passwd','api_key','apikey','secret','access_token','refresh_token','token','cookie'}
 
@@ -105,11 +105,11 @@ def check_spec(job,spec):
     from .feed_http import validate_headers
     from .feed_cron import CronSchedule
     validate_headers(spec.get('header_env',{}));CronSchedule(spec.get('cron','0 * * * *'),spec.get('timezone','Asia/Shanghai'))
-    return spec
+    return validate_spec(with_collection_date(spec))
 
 
 def sample_preview(job,spec,sample):
-    check_spec(job,spec)
+    spec=check_spec(job,spec)
     if sample is None:raise ValueError('尚无响应样例，请使用 probe_api 或请用户提供脱敏 JSON。')
     payload=validate_batch(build_batch(spec,sample))
     if not payload['items']:raise ValueError('样例没有记录，无法验证稳定 ID 和必需字段；请提供非空样例。')

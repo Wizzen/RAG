@@ -2,7 +2,7 @@
 from django.contrib.auth.decorators import login_required
 from django.urls import path
 
-from . import graph_views, hierarchy_views, feed_views, connector_views, views
+from . import graph_views, hierarchy_views, feed_views, connector_views, tracker_analysis_views, kb_link_views, views
 
 app_name = "kb"
 
@@ -36,8 +36,10 @@ urlpatterns = [
     path("graph/relation/<int:relation_id>/", graph_views.graph_relation, name="graph_relation"),
     # 管理页面（仅 staff）
     path("manage/", views.manage_list, name="manage_list"),
+    path("manage/connections/state/", kb_link_views.connections, name="kb_connections"),
     path("manage/<slug:slug>/", views.manage_detail, name="manage_detail"),
     path("manage/<slug:slug>/tracker/", views.tracker_view, name="tracker"),
+    path("manage/<slug:slug>/tracker/analysis/", tracker_analysis_views.tracker_analysis, name="tracker_analysis"),
     path("manage/<slug:slug>/delete/", views.manage_delete, name="manage_delete"),
     path("manage/<slug:slug>/rename/", views.kb_rename, name="kb_rename"),
     path("manage/<slug:slug>/doc/<uuid:doc_id>/desc/", views.doc_desc_update, name="doc_desc_update"),
