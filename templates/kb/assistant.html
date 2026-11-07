@@ -2,7 +2,7 @@
 {% block title %}EnGenie · SHDR RAG{% endblock %}
 {% block content %}
 <section class="assistant-entry">
-  <div class="assistant-entry-icon">{% include 'kb/_assistant_avatar.html' %}</div>
+  <div class="assistant-entry-icon">{% include 'kb/_assistant_avatar.html' with avatar_pose='welcome' %}</div>
   <h1>EnGenie，工程知识助手</h1>
   <p>查找工程资料、对比参数与要求，或分析追踪表数据。浏览工作台时，随时从右下角继续对话。</p>
   <button type="button" class="btn primary" data-rag-chat-open>继续对话</button>

@@ -1,12 +1,12 @@
 {% load static %}
 <div class="rag-assistant" id="ragAssistant" data-user="{{ user.pk }}" data-chat-url="{% url 'kb:ask' %}" data-auto-open="{{ assistant_auto_open|yesno:'true,false' }}" data-thread="{{ assistant_thread|default:'' }}">
   <button type="button" id="ragChatLauncher" class="rag-chat-launcher" aria-label="打开 EnGenie 工程助手" aria-controls="ragChatPanel" aria-haspopup="dialog" aria-expanded="false" title="EnGenie · 工程知识助手">
-    {% include 'kb/_assistant_avatar.html' %}<span class="rag-chat-badge" id="ragChatBadge" hidden></span><span class="rag-chat-launcher-label"><strong>EnGenie</strong><small id="ragChatLauncherStatus">随时提问</small></span><svg class="rag-chat-launcher-arrow" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7 5 5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    {% include 'kb/_assistant_avatar.html' with avatar_pose='launcher' %}<span class="rag-chat-badge" id="ragChatBadge" hidden></span><span class="rag-chat-launcher-label"><strong>EnGenie</strong><small id="ragChatLauncherStatus">随时提问</small></span><svg class="rag-chat-launcher-arrow" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7 5 5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </button>
   <div class="rag-chat-backdrop" id="ragChatBackdrop" hidden></div>
   <section class="rag-chat-panel" id="ragChatPanel" role="dialog" aria-labelledby="ragChatTitle" aria-modal="false" hidden>
     <header class="rag-chat-header">
-      <div class="rag-chat-heading"><span class="rag-chat-avatar">{% include 'kb/_assistant_avatar.html' %}</span><div><span class="rag-chat-eyebrow">工程知识助手</span><h2 id="ragChatTitle">EnGenie</h2><p id="ragChatSubtitle">知识检索 · 原文溯源 · 数据分析</p></div></div>
+      <div class="rag-chat-heading"><span class="rag-chat-avatar">{% include 'kb/_assistant_avatar.html' with avatar_pose='welcome' %}</span><div><span class="rag-chat-eyebrow">工程知识助手</span><h2 id="ragChatTitle">EnGenie</h2><p id="ragChatSubtitle">知识检索 · 原文溯源 · 数据分析</p></div></div>
       <div class="rag-chat-actions">
         <button type="button" class="rag-chat-icon-button" id="ragChatNew" aria-label="新建对话" title="新建对话"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button>
         <button type="button" class="rag-chat-icon-button" id="ragChatExpand" aria-label="展开聊天面板" title="展开聊天面板" aria-pressed="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3H3v4M13 3h4v4M3 13v4h4M17 13v4h-4"/></svg></button>
@@ -18,4 +18,4 @@
   <span class="rag-chat-sr-only" id="ragChatLive" role="status" aria-live="polite"></span>
 </div>
 <link rel="stylesheet" href="{% static 'css/assistant_widget.css' %}?v=20261107">
-<script src="{% static 'js/assistant_widget.js' %}?v=20261107" defer></script>
+<script src="{% static 'js/assistant_widget.js' %}?v=20261107-arrival" defer></script>

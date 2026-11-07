@@ -136,3 +136,7 @@
 .cx-prompt-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.cx-prompt-arrow{font-size:15px;color:var(--mute)}
 @media(max-width:620px){.cx-welcome{padding-top:20px}.cx-welcome h2{font-size:22px}.cx-welcome p{max-width:310px}.cx-prompt{padding:11px 12px}.cx-turn-status{flex:1}}
 @media(prefers-reduced-motion:reduce){.cx-prompt{transition:none}.cx-prompt:hover{transform:none}}
+
+.cx-welcome-icon{width:150px;height:150px;padding:0;background:none;border:0;border-radius:0;box-shadow:none}.cx-welcome-icon svg{width:100%;height:100%;animation:engenie-builder-float 4s ease-in-out infinite}@keyframes engenie-builder-float{50%{transform:translateY(-5px) rotate(2deg)}}@media(prefers-reduced-motion:reduce){.cx-welcome-icon svg{animation:none}}
+/* 夜间对话窗口底色 = 到场 GIF 背景色（#010614），GIF 方块边界在暗色下不可见 */
+html[data-theme="dark"] .cx-shell{background:#010614}

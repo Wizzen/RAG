@@ -13,7 +13,7 @@
     <template id="connectorAvatarTemplate">{% include 'kb/_assistant_avatar.html' %}</template>
     <div class="cx-messages" id="connectorMessages" aria-live="polite">
       <div class="cx-welcome" id="connectorWelcome">
-        <div class="cx-welcome-icon" aria-hidden="true">{% include 'kb/_assistant_avatar.html' %}</div>
+        <div class="cx-welcome-icon" aria-hidden="true">{% include 'kb/_assistant_avatar.html' with avatar_pose='welcome' %}</div>
         <span class="cx-welcome-kicker">自动采集 · 定时更新</span>
         <h2>你好，我是 EnGenie</h2>
         <p>发来数据页面或接口地址，告诉我要采集什么、多久更新一次。<br>我会先试采并展示结果，等你确认后再启动自动更新。</p>
@@ -34,6 +34,6 @@
   </section>
 </div>
 <link rel="stylesheet" href="{% static 'css/feeds.css' %}">
-<link rel="stylesheet" href="{% static 'css/connector_chat.css' %}?v=9">
+<link rel="stylesheet" href="{% static 'css/connector_chat.css' %}?v=13">
 {% endblock %}
 {% block scripts %}<script src="{% static 'js/vendor/marked.min.js' %}" defer></script><script src="{% static 'js/vendor/purify.min.js' %}" defer></script><script src="{% static 'js/connector.js' %}?v=15" defer></script>{% endblock %}

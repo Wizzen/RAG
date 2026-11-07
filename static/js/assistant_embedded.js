@@ -40,6 +40,7 @@
  window.addEventListener('message',event=>{
   if(event.origin!==location.origin||event.source!==parent)return;const data=event.data||{};
   if(data.type==='rag-chat:theme'&&['light','dark'].includes(data.theme))document.documentElement.dataset.theme=data.theme;
+  else if(data.type==='rag-chat:opened')window.fosGenieArrival?.replay();
   else if(data.type==='rag-chat:mode')modal=data.modal===true;
   else if(data.type==='rag-chat:evidence-local'&&typeof data.chunkId==='string')localEvidence(data.chunkId,{chunks:data.chunks||[]});
   else if(data.type==='rag-chat:new')window.FosAsk.newConversation();

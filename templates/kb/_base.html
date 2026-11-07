@@ -35,6 +35,8 @@
     --green:var(--ok);--red:var(--danger);--amber:var(--warn);
   }
 </style>
+<link rel="stylesheet" href="{% static 'css/genie_arrival.css' %}?v=1">
+<script src="{% static 'js/genie_arrival.js' %}?v=1" defer></script>
 {% block extra_head %}{% endblock %}
 </head>
 <body{% if chat_embedded %} class="rag-chat-embedded"{% endif %}>

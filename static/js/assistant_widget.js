@@ -44,6 +44,7 @@
   if(thread)pendingThread=thread;
   const changed=value!==opened;opened=value;
   if(changed)revealPanel(value);
+  if(changed&&value){window.fosGenieArrival?.replay(panel);tell({type:'rag-chat:opened'});}
   launcher.hidden=value;launcher.setAttribute('aria-expanded',String(value));
   if(value){unread=false;ensureFrame();if(ready&&pendingThread){tell({type:'rag-chat:thread',thread:pendingThread});pendingThread='';}if(mobile())close.focus();else tell({type:'rag-chat:focus'});}
   else launcher.focus();layout();signal();

@@ -13,13 +13,11 @@
 {{ pyodide_index_url|json_script:"pyodideIndexURL" }}
 <template id="engGenieAvatarTemplate">{% include 'kb/_assistant_avatar.html' %}</template>
 {% if chat_embedded %}
-<link rel="stylesheet" href="{% static 'css/assistant_embedded.css' %}?v=20261107">
+<link rel="stylesheet" href="{% static 'css/assistant_embedded.css' %}?v=20261107e">
 <template id="ragChatWelcomeTemplate"><div class="rag-chat-welcome">
-  <div class="rag-chat-welcome-icon">{% include 'kb/_assistant_avatar.html' %}</div><span class="rag-welcome-kicker">工程知识 · 有据可查</span><h2>你好，我是 EnGenie</h2>
-  <p>查找工程资料，理清参数与条件，<br>让每个答案都能回到原文。</p>
+  <div class="rag-chat-welcome-icon">{% include 'kb/_assistant_avatar.html' with avatar_pose='welcome' %}</div><h2>你好，我是 EnGenie<br>需要我帮您查阅资料吗</h2>
   <div class="rag-chat-prompts">
     <button type="button" data-rag-prompt="帮我查找资料中的判断条件，并给出原文依据"><span class="rag-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zm0 0v6h6M8 13h8M8 17h5"/></svg></span><span><strong>查找原文依据</strong><small>定位要求与判断条件</small></span><span class="rag-prompt-arrow" aria-hidden="true">↗</span></button>
-    <button type="button" data-rag-prompt="帮我对比资料中不同等级的要求和参数"><span class="rag-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7M15 7h5M4 17h3M11 17h9"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></span><span><strong>对比参数与等级</strong><small>理清取值、差异与适用范围</small></span><span class="rag-prompt-arrow" aria-hidden="true">↗</span></button>
     <button type="button" data-rag-prompt="帮我查看知识库中的追踪表，并分析其中的数据"><span class="rag-prompt-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M7 16v-5M12 16V5M17 16V8"/></svg></span><span><strong>分析追踪表</strong><small>筛选历史、统计趋势与变化</small></span><span class="rag-prompt-arrow" aria-hidden="true">↗</span></button>
   </div>
 </div></template>
@@ -1080,5 +1078,5 @@ except ImportError:
   }
 })();
 </script>
-{% if chat_embedded %}<script src="{% static 'js/assistant_embedded.js' %}?v=20261107" data-user="{{ user.pk }}" defer></script>{% endif %}
+{% if chat_embedded %}<script src="{% static 'js/assistant_embedded.js' %}?v=20261107-arrival" data-user="{{ user.pk }}" defer></script>{% endif %}
 {% endblock %}
