@@ -21,7 +21,7 @@ export function mountAssistant({getProject,getSelection,locate}) {
     const id=getSelection(),part=PART_MAP.get(id);
     byId('context').textContent=part?`${project.parts[id]?.name||part.name} · ${id}`:'请先选择部件';
   }
-  function open(){panel.hidden=false;launcher.setAttribute('aria-expanded','true');refresh();byId('question').focus();}
+  function open(){panel.hidden=false;window.fosGenieArrival?.replay(panel);launcher.setAttribute('aria-expanded','true');refresh();byId('question').focus();}
   function close(){panel.hidden=true;launcher.setAttribute('aria-expanded','false');launcher.focus();}
   function message(role,content,caption=''){
     const card=document.createElement('article');card.className='vt-ai-message '+role;

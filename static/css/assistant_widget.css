@@ -31,7 +31,7 @@
 .rag-chat-panel.is-expanded{inset:24px;margin:auto;width:min(1120px,calc(100vw - 48px));height:calc(100dvh - 48px)}
 .rag-chat-header{
   display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;
-  padding:18px 18px 17px 20px;border-bottom:1px solid #ffffff12;color:#f7faff;
+  padding:13px 18px 12px 20px;border-bottom:1px solid #ffffff12;color:#f7faff;
   background:radial-gradient(ellipse at 90% 100%,#18506a 0%,transparent 65%),linear-gradient(110deg,#101b2d,#172c46 60%,#173a52);
 }
 .rag-chat-heading{display:flex;align-items:center;gap:12px;min-width:0}
@@ -39,8 +39,9 @@
 .rag-chat-eyebrow{display:block;font-size:10px;font-weight:500;letter-spacing:.08em;color:#b7d5e9;line-height:1.4}
 .rag-chat-heading h2{margin:2px 0 0;color:inherit;font:650 23px/1.25 var(--fb,system-ui,sans-serif);letter-spacing:-.04em}
 .rag-chat-heading p{margin:4px 0 0;font-size:10px;line-height:1.5;color:#ccdae6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px}
-.rag-chat-avatar{display:grid;place-items:center;flex-shrink:0;width:45px;height:45px;color:#a5e2e4;background:#ffffff0d;border:1px solid #ffffff18;border-radius:14px}
-.rag-chat-avatar svg{width:34px;height:34px}
+/* 头像无底格（与 welcome 大图同风格）：图标放大但不再撑高标题栏 */
+.rag-chat-avatar{display:grid;place-items:center;flex-shrink:0;width:56px;height:56px;background:none;border:0;border-radius:0}
+.rag-chat-avatar svg{width:56px;height:56px}
 .rag-chat-actions{display:flex;gap:4px}
 .rag-chat-icon-button{display:grid;place-items:center;width:33px;height:33px;padding:8px;border:1px solid #ffffff18;border-radius:10px;background:transparent;color:#ccdae6;transition:background .15s,color .15s}
 .rag-chat-icon-button:hover{background:#ffffff14;color:#fff}
@@ -69,8 +70,8 @@ body.rag-chat-modal-open{overflow:hidden}
     height:calc(var(--rag-chat-viewport-height,100dvh) - max(8px,env(safe-area-inset-top)) - max(8px,env(safe-area-inset-bottom)));border-radius:20px;
   }
   .rag-chat-header{padding:14px 12px;gap:6px}.rag-chat-icon-button{width:40px;height:40px;padding:10px}
-  #ragChatExpand{display:none}.rag-chat-heading{gap:9px}.rag-chat-avatar{width:38px;height:38px;border-radius:12px}
-  .rag-chat-avatar svg{width:29px;height:29px}.rag-chat-heading h2{font-size:20px}.rag-chat-heading p{max-width:170px;font-size:9px}
+  #ragChatExpand{display:none}.rag-chat-heading{gap:9px}.rag-chat-avatar{width:44px;height:44px}
+  .rag-chat-avatar svg{width:44px;height:44px}.rag-chat-heading h2{font-size:20px}.rag-chat-heading p{max-width:170px;font-size:9px}
   .assistant-entry{margin:35px auto}.assistant-entry h1{font-size:22px}
 }
 @media(prefers-reduced-motion:reduce){

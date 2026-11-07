@@ -2,3 +2,12 @@
 [data-genie-arrival].is-arriving{animation:none!important}
 @keyframes genie-idle-float{50%{transform:translateY(-5px) rotate(2deg)}}
 @media(prefers-reduced-motion:reduce){[data-genie-arrival]{animation:none!important}}
+
+[data-genie-arrival].is-arriving [data-genie-idle]{visibility:hidden}
+
+/* 吉祥物图片版头像统一径向羽化：PNG/GIF 自带方形底色，羽化后在任何页面底色下都不露硬边界。
+   作用在 svg 上 → 常驻 PNG 与到场 GIF 同时被羽化；线稿版（avatar_class）不受影响。 */
+[data-genie-arrival],.genie-photo{
+  -webkit-mask-image:radial-gradient(closest-side ellipse,#000 78%,transparent 99%);
+  mask-image:radial-gradient(closest-side ellipse,#000 78%,transparent 99%)
+}

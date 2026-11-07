@@ -7,11 +7,10 @@
   justify-content: center;
   align-items: center;
   gap: 8px;
-  width: 54px;
-  height: 54px;
-  padding: 7px;
+  min-height: 56px;
+  padding: 8px 13px;
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: 17px;
   background: var(--surface);
   color: var(--text);
   box-shadow: 0 6px 26px -6px #15284540, 0 1px 4px #15284512;
@@ -19,13 +18,12 @@
   cursor: pointer;
   transition: transform .16s ease, box-shadow .16s ease;
 }
-.ops-ai-launcher svg { width: 36px; height: 36px; color: var(--brand); }
-.ops-ai-launcher span {
-  position: absolute; right: calc(100% + 8px); padding: 7px 11px; pointer-events: none; white-space: nowrap;
-  border: 1px solid var(--rule); border-radius: 10px; color: var(--text); background: var(--surface);
-  font-size: 12px; box-shadow: var(--shadow-sm); opacity: 0;
-}
-.ops-ai-launcher:is(:hover, :focus-visible) span { opacity: 1; }
+/* 与全站聊天组件的收起态一致：头像 + EnGenie 标签 + 箭头 */
+.ops-ai-launcher .genie-photo { width: 36px; height: 36px; flex: none; }
+.ops-ai-launcher-label { display: grid; gap: 2px; text-align: left; line-height: 1.25; }
+.ops-ai-launcher-label strong { font-size: 15px; font-weight: 700; letter-spacing: -.025em; color: var(--text); }
+.ops-ai-launcher-label small { font-size: 10px; font-weight: 450; color: var(--dim); }
+.ops-ai-launcher-arrow { width: 15px; height: 15px; margin-left: 2px; flex: none; fill: none; stroke: var(--dim); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .ops-ai-launcher:hover { transform: translateY(-2px); box-shadow: 0 7px 28px -6px #15284550; }
 .ops-ai-launcher[aria-expanded="true"] { visibility: hidden; }
 .ops-ai-launcher.is-busy::after {
@@ -59,8 +57,8 @@ html:has(#ops-ai-drawer[open]) { overflow: hidden; }
   to { transform: none; opacity: 1; }
 }
 .ops-assistant-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 14px 18px 14px 22px; border-bottom: 1px solid var(--rule-soft); }
-.ops-assistant-avatar { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 14px; background: var(--brand-soft); color: var(--brand); }
-.ops-assistant-avatar svg { width: 30px; height: 30px; }
+.ops-assistant-avatar { flex: none; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 15px; background: var(--brand-soft); color: var(--brand); }
+.ops-assistant-avatar svg { width: 36px; height: 36px; }
 .ops-assistant-head small { color: var(--dim); font: 650 10px/1.4 var(--fb); letter-spacing: .13em; }
 .ops-assistant-head h2 { margin: 2px 0 0; font-size: 19px; line-height: 1.25; letter-spacing: -.03em; }
 .ops-assistant-head{color:#f7faff;background:radial-gradient(ellipse at 90% 100%,#18506a 0%,transparent 65%),linear-gradient(110deg,#101b2d,#172c46 60%,#173a52);border-bottom-color:#ffffff18}
@@ -71,9 +69,9 @@ html:has(#ops-ai-drawer[open]) { overflow: hidden; }
 .ops-assistant-head button:focus-visible{outline-color:#a5e2e4}
 .ops-assistant-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .ops-assistant-tool {
-  display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 12px;
-  border: 1px solid var(--rule); border-radius: 99px; background: var(--surface); color: var(--dim);
-  font: 600 13px/1.2 var(--fb); cursor: pointer;
+  display: grid; place-items: center; width: 34px; height: 34px; padding: 0;
+  border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); color: var(--dim);
+  cursor: pointer;
 }
 .ops-assistant-tool:hover, .ops-assistant-tool[aria-expanded="true"] { color: var(--text); background: var(--surface-2); border-color: var(--rule-strong); }
 .ops-assistant-close {
@@ -109,13 +107,19 @@ html:has(#ops-ai-drawer[open]) { overflow: hidden; }
 .ops-ai-session:is(:hover, :focus-within) .ops-ai-session-delete { opacity: 1; }
 .ops-ai-session-delete:hover { color: var(--danger); }
 .ops-ai-history-empty { padding: 12px 4px; color: var(--dim); font-size: 13px; }
+/* 夜间对话底色 = 到场 GIF 背景色，与聊天/采集窗口一致，吉祥物方块边界不可见 */
+html[data-theme="dark"] .ops-assistant { background: #010614; }
 
 .ops-ai-chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .ops-ai-thread { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 22px clamp(18px, 3vw, 40px) 28px; scroll-padding-top: 14px; }
 .ops-assistant.is-wide .ops-ai-thread > * { max-width: 1040px; margin-inline: auto; }
-.ops-ai-welcome { padding-top: 6vh; }
-.ops-assistant-intro { margin: 0 0 16px; font-size: 14px; line-height: 1.65; color: var(--dim); }
-.ops-assistant-examples { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ops-ai-welcome { padding-top: 4vh; display: flex; flex-direction: column; align-items: center; text-align: center; }
+/* 与聊天/采集两个窗口同一套 hero 版式：150px 吉祥物 + 两行标题，无底卡 */
+.ops-ai-hero { width: 150px; height: 150px; padding: 0; background: none; border: 0; border-radius: 0; box-shadow: none; }
+.ops-ai-hero svg { width: 100%; height: 100%; }
+.ops-ai-welcome-title { margin: 4px 0 8px; font: 650 24px/1.5 var(--fb); letter-spacing: -.045em; color: var(--text); }
+.ops-assistant-intro { margin: 0 0 16px; font-size: 13px; line-height: 1.7; color: var(--dim); max-width: 440px; }
+.ops-assistant-examples { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
 .ops-assistant-examples button {
   min-height: 34px; padding: 6px 13px; font: 500 13px/1.4 var(--fb); color: var(--dim); background: var(--surface);
   border: 1px solid var(--rule); border-radius: 99px; cursor: pointer;
@@ -202,9 +206,9 @@ html:has(#ops-ai-drawer[open]) { overflow: hidden; }
 }
 @media (max-width: 1080px) {
   /* The compact shell has a sticky top bar with space beside its wordmark. */
-  .ops-ai-launcher { top: 6px; right: max(16px, env(safe-area-inset-right)); bottom: auto; width: auto; height: 44px; padding: 5px 12px 5px 8px; box-shadow: 0 2px 8px #15284510; }
-  .ops-ai-launcher span { position: static; padding: 0; border: 0; background: none; box-shadow: none; font-size: 14px; opacity: 1; }
-  .ops-ai-launcher svg { width: 29px; height: 29px; }
+  .ops-ai-launcher { top: 6px; right: max(16px, env(safe-area-inset-right)); bottom: auto; min-height: 48px; padding: 5px 12px; box-shadow: 0 2px 8px #15284510; }
+  .ops-ai-launcher .genie-photo { width: 30px; height: 30px; }
+  .ops-ai-launcher-arrow { display: none; }
 }
 @media (max-width: 620px) {
   .ops-assistant {

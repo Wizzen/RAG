@@ -1382,7 +1382,7 @@ function setWide(wide) {
   $('ai-drawer').classList.toggle('is-wide', wide);
   $('ai-size').setAttribute('aria-pressed', String(wide));
   $('ai-size').setAttribute('aria-label', wide ? '切换为侧边栏' : '展开为大窗口');
-  $('ai-size').querySelector('span').textContent = wide ? '侧边栏' : '大窗口';
+  $('ai-size').setAttribute('title', wide ? '侧边栏' : '大窗口');
   showHistory(wide);
   if (!wide) closePane();
   try { localStorage.setItem(WIDE_KEY, wide ? '1' : '0'); } catch { /* preference only */ }
@@ -1415,6 +1415,7 @@ for (const trigger of aiTriggers) {
     if (aiDrawer.open) return;
     aiOpener = trigger;
     aiDrawer.showModal();
+    window.fosGenieArrival?.replay(aiDrawer);
     for (const entry of aiTriggers) entry.setAttribute('aria-expanded', 'true');
     sizeAiDrawer();
     if (!window.matchMedia('(max-width: 620px)').matches) $('question').focus({preventScroll: true});

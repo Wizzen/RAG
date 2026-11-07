@@ -1,22 +1,23 @@
 <button id="ops-ai-launcher" class="ops-ai-launcher" type="button" aria-label="打开 EnGenie 运维助手"
         aria-haspopup="dialog" aria-controls="ops-ai-drawer" aria-expanded="false">
   {% include 'kb/_assistant_avatar.html' with avatar_pose='launcher' %}
-  <span>EnGenie · 运维分析</span>
+  <span class="ops-ai-launcher-label"><strong>EnGenie</strong><small>运维分析</small></span>
+  <svg class="ops-ai-launcher-arrow" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7 5 5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
 </button>
 
 <dialog id="ops-ai-drawer" class="ops-assistant is-wide" aria-labelledby="ops-ai-title">
   <header class="ops-assistant-head">
-    <span class="ops-assistant-avatar">{% include 'kb/_assistant_avatar.html' %}</span>
+    <span class="ops-assistant-avatar">{% include 'kb/_assistant_avatar.html' with avatar_pose='welcome' avatar_force_dark=True %}</span>
     <div><small>运维数据助手</small><h2 id="ops-ai-title">EnGenie</h2></div>
     <div class="ops-assistant-tools">
-      <button id="ops-ai-new" class="ops-assistant-tool" type="button">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>新对话</span>
+      <button id="ops-ai-new" class="ops-assistant-tool" type="button" aria-label="新建对话" title="新对话">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       </button>
-      <button id="ops-ai-history-toggle" class="ops-assistant-tool" type="button" aria-controls="ops-ai-history" aria-expanded="false">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.1 8a8.8 8.8 0 1 1-.8 5.9M3.3 4.5V9h4.5M12 7.5v5l3.5 2"/></svg><span>历史</span>
+      <button id="ops-ai-history-toggle" class="ops-assistant-tool" type="button" aria-controls="ops-ai-history" aria-expanded="false" aria-label="历史对话" title="历史">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.1 8a8.8 8.8 0 1 1-.8 5.9M3.3 4.5V9h4.5M12 7.5v5l3.5 2"/></svg>
       </button>
-      <button id="ops-ai-size" class="ops-assistant-tool" type="button" aria-pressed="true" aria-label="切换为侧边栏">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></svg><span>侧边栏</span>
+      <button id="ops-ai-size" class="ops-assistant-tool" type="button" aria-pressed="true" aria-label="切换为侧边栏" title="侧边栏">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></svg>
       </button>
       <button id="ops-ai-close" class="ops-assistant-close" type="button" aria-label="收起 EnGenie 运维助手" autofocus>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
@@ -36,6 +37,8 @@
     <section class="ops-ai-chat" aria-label="当前对话">
       <div id="ops-ai-thread" class="ops-ai-thread" aria-live="polite">
         <div id="ops-ai-welcome" class="ops-ai-welcome">
+          <div class="ops-ai-hero" aria-hidden="true">{% include 'kb/_assistant_avatar.html' with avatar_pose='welcome' %}</div>
+          <h2 class="ops-ai-welcome-title">你好，我是 EnGenie<br>需要我帮您分析运维数据吗</h2>
           <p class="ops-assistant-intro">查询工单、设备日志和停机事件。回答中的工单号可直接点击查看详情，每次回答下方可查看查询依据。</p>
           <div class="ops-assistant-examples" role="group" aria-label="问题示例">
             <button type="button" data-example="查询最近 7 天的停机事件，按停机时长汇总。">停机概览</button>

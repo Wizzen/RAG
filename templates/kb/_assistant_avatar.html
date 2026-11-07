@@ -11,7 +11,7 @@
   </g>
 </svg>
 {% elif avatar_pose == 'welcome' %}
-<svg viewBox="0 0 40 40" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" data-genie-arrival data-duration="2560" data-light-intro="{% static 'img/engenie-arrival-light.gif' %}" data-dark-intro="{% static 'img/engenie-arrival-dark.gif' %}" data-light-still="{% static 'img/engenie-idle-light.png' %}" data-dark-still="{% static 'img/engenie-idle-dark.png' %}"><image data-genie-idle href="{% static 'img/engenie-idle-light.png' %}" width="40" height="40"/></svg>
+<svg viewBox="0 0 40 40" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" data-genie-arrival data-duration="2560"{% if avatar_force_dark %} data-genie-theme="dark"{% endif %} data-light-intro="{% static 'img/engenie-arrival-light.gif' %}" data-dark-intro="{% static 'img/engenie-arrival-dark.gif' %}" data-light-still="{% static 'img/engenie-idle-light.png' %}" data-dark-still="{% static 'img/engenie-idle-dark.png' %}"><image data-genie-idle href="{% if avatar_force_dark %}{% static 'img/engenie-idle-dark.png' %}{% else %}{% static 'img/engenie-idle-light.png' %}{% endif %}" width="40" height="40"/></svg>
 {% else %}
-<svg viewBox="0 0 40 40" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><image href="{% if avatar_pose == 'launcher' %}{% static 'img/engenie-look-up.png' %}{% elif avatar_pose == 'welcome' %}{% static 'img/engenie-front.png' %}{% else %}{% static 'img/engenie-genie.png' %}{% endif %}?v=1" width="40" height="40"/></svg>
+<svg class="genie-photo" viewBox="0 0 40 40" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><image href="{% if avatar_pose == 'launcher' %}{% static 'img/engenie-look-up.png' %}{% elif avatar_pose == 'welcome' %}{% static 'img/engenie-front.png' %}{% else %}{% static 'img/engenie-genie.png' %}{% endif %}?v=1" width="40" height="40"/></svg>
 {% endif %}
